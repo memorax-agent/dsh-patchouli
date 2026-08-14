@@ -19,7 +19,8 @@ Version 1 contains:
 
 - generic entity create, read, update, and delete methods;
 - an open `meta` envelope plus strict CRUD business data;
-- configuration-selected preconditions, consistency, and causal metadata;
+- configuration-selected preconditions, consistency, causal metadata, and an
+  optional conflict-strategy request;
 - resumable change subscriptions through opaque cursors;
 - cluster and node identity in the connection handshake.
 
@@ -85,7 +86,9 @@ may accept several heads without changing the CRUD `data` schema.
 Clients must not parse version or causal tokens. When configured, causal input
 and output live in `meta` alongside channel, transaction, plugin-route, and
 other deployment-specific identities. The controller retains causal progress
-for configured identities; CRUD requests do not select a consistency mode.
+for configured identities; CRUD requests do not select a consistency mode. A
+configured metadata field may request `merge`, `mvcc`, or `reject` conflict
+handling. Its absence uses the backend-configured default.
 
 ## Reactive delivery
 

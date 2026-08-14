@@ -154,14 +154,39 @@ pub enum IdempotencyPolicy {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConflictPolicy {
-    pub strategy: ConflictStrategy,
+    pub default_strategy: ConflictStrategy,
+    pub strategy_from: String,
     pub base_versions: String,
+    pub merge: Vec<ConflictMergeRule>,
+    pub otherwise: ConflictFallback,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictStrategy {
+    Merge,
+    Mvcc,
+    Reject,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConflictMergeRule {
+    pub path: String,
+    pub strategy: ConflictMergeStrategy,
+    pub group_by: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ConflictStrategy {
-    PreserveHeads,
+pub enum ConflictMergeStrategy {
+    Automerge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictFallback {
+    Mvcc,
     Reject,
 }
 
@@ -368,11 +393,7 @@ fn validate_behavior(
             scope_by,
         )?;
     }
-    validate_aliases(
-        &format!("{root}.conflict.base_versions"),
-        std::slice::from_ref(&behavior.conflict.base_versions),
-        fields,
-    )?;
+    validate_conflict(&format!("{root}.conflict"), &behavior.conflict, fields)?;
 
     if let PublicationPolicy::Batch {
         key_by,
@@ -418,6 +439,68 @@ fn validate_behavior(
     }
 
     Ok(())
+}
+
+fn validate_conflict(
+    root: &str,
+    conflict: &ConflictPolicy,
+    fields: &BTreeMap<String, MetaField>,
+) -> Result<(), ConfigError> {
+    validate_aliases(
+        &format!("{root}.strategy_from"),
+        std::slice::from_ref(&conflict.strategy_from),
+        fields,
+    )?;
+    validate_aliases(
+        &format!("{root}.base_versions"),
+        std::slice::from_ref(&conflict.base_versions),
+        fields,
+    )?;
+
+    let mut paths = BTreeSet::new();
+    for (index, rule) in conflict.merge.iter().enumerate() {
+        let rule_root = format!("{root}.merge[{index}]");
+        if !valid_json_pointer(&rule.path) {
+            return Err(invalid(
+                format!("{rule_root}.path"),
+                "path must be a non-root RFC 6901 JSON Pointer relative to the entity value",
+            ));
+        }
+        if paths.iter().any(|existing: &String| {
+            nested_json_pointer(existing, &rule.path) || nested_json_pointer(&rule.path, existing)
+        }) {
+            return Err(invalid(
+                format!("{rule_root}.path"),
+                "merge paths must not duplicate or contain one another",
+            ));
+        }
+        paths.insert(rule.path.clone());
+
+        let mut group_paths = BTreeSet::new();
+        for pointer in &rule.group_by {
+            if !valid_json_pointer(pointer) {
+                return Err(invalid(
+                    format!("{rule_root}.group_by"),
+                    "group paths must be non-root RFC 6901 JSON Pointers relative to the merged value",
+                ));
+            }
+            if !group_paths.insert(pointer) {
+                return Err(invalid(
+                    format!("{rule_root}.group_by"),
+                    format!("duplicate group path {pointer:?}"),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn nested_json_pointer(parent: &str, child: &str) -> bool {
+    parent == child
+        || child
+            .strip_prefix(parent)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn validate_consistency(

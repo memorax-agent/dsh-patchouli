@@ -4,8 +4,9 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    AcquireRequirement, BackendConfig, Behavior, CommitOrderingPolicy, ConsistencySource,
-    IdempotencyPolicy, PublicationPolicy, SessionGuarantee, SnapshotPolicy,
+    AcquireRequirement, BackendConfig, Behavior, CommitOrderingPolicy, ConflictFallback,
+    ConflictMergeRule, ConflictStrategy, ConsistencySource, IdempotencyPolicy, PublicationPolicy,
+    SessionGuarantee, SnapshotPolicy,
 };
 
 #[derive(Clone, Debug)]
@@ -19,6 +20,7 @@ pub struct PolicySelection {
     pub fields: BTreeMap<String, Value>,
     pub scope: BTreeMap<String, Value>,
     pub consistency: ConsistencyPlan,
+    pub conflict: ConflictPlan,
     pub idempotency_key: Option<ControlKey>,
     pub publication_key: Option<ControlKey>,
     pub behavior: Behavior,
@@ -50,6 +52,15 @@ pub struct CausalConsistencyPlan {
 pub struct SessionConsistencyPlan {
     pub key: ControlKey,
     pub guarantees: BTreeSet<SessionGuarantee>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConflictPlan {
+    pub strategy: ConflictStrategy,
+    pub base_versions_field: String,
+    pub base_versions: Option<Value>,
+    pub merge: Vec<ConflictMergeRule>,
+    pub otherwise: ConflictFallback,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -105,6 +116,7 @@ impl PolicySelector {
 
         let scope = select_key(entity_type, &fields, &self.config.entity_identity.scope_by)?;
         let consistency = build_consistency_plan(entity_type, &fields, &scope, behavior)?;
+        let conflict = build_conflict_plan(&fields, behavior)?;
         let idempotency_key = match &behavior.idempotency {
             IdempotencyPolicy::Disabled => None,
             IdempotencyPolicy::Keyed { key_by } => {
@@ -123,11 +135,37 @@ impl PolicySelector {
             fields,
             scope,
             consistency,
+            conflict,
             idempotency_key,
             publication_key,
             behavior: behavior.clone(),
         })
     }
+}
+
+fn build_conflict_plan(
+    fields: &BTreeMap<String, Value>,
+    behavior: &Behavior,
+) -> Result<ConflictPlan, PolicyError> {
+    let policy = &behavior.conflict;
+    let strategy = fields
+        .get(&policy.strategy_from)
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|error| PolicyError::InvalidField {
+                field: policy.strategy_from.clone(),
+                message: error.to_string(),
+            })
+        })
+        .transpose()?
+        .unwrap_or(policy.default_strategy);
+
+    Ok(ConflictPlan {
+        strategy,
+        base_versions_field: policy.base_versions.clone(),
+        base_versions: fields.get(&policy.base_versions).cloned(),
+        merge: policy.merge.clone(),
+        otherwise: policy.otherwise,
+    })
 }
 
 fn build_consistency_plan(

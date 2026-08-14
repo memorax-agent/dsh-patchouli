@@ -10,11 +10,12 @@ on Windows. Storage methods currently return an explicit
 
 The current layer contains `BackendEngine`, the backend-service CRUD contract,
 wire-compatible request and response types, the configuration model, and the
-reactive change-stream contract. Engine startup retains a validated immutable
-policy and a healthy injected provider. The next storage layer will use
-`PolicySelector` to derive scoped snapshot, acquisition, session, commit-order,
-idempotency, and publication plans before invoking provider transaction
-primitives.
+reactive change-stream contract. `PolicySelector` already derives scoped
+consistency and effective conflict plans, including request-level conflict
+overrides. The conflict resolver implements Automerge for configured JSON
+fields and MVCC variants for other data. Engine startup retains a validated
+immutable policy and a healthy injected provider. CRUD execution still needs
+to invoke these plans through provider transaction primitives.
 
 Entity kinds remain opaque to the CRUD protocol. The backend additionally
 publishes the first harness-neutral fact vocabulary: typed `knowledge` and

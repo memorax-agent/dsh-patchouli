@@ -85,7 +85,7 @@ async fn defines_generic_entries_and_typed_fact_views() {
     let schema_version: u32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read schema version");
-    assert_eq!(schema_version, 2);
+    assert_eq!(schema_version, 3);
 
     insert_active_version(
         &connection,
@@ -173,6 +173,61 @@ async fn defines_generic_entries_and_typed_fact_views() {
             )
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn defines_crdt_change_graph_and_entity_frontiers() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("patchouli.db");
+    let provider = SqliteProvider::open(&path).await.expect("open SQLite");
+    provider.initialize().await.expect("initialize SQLite");
+    provider.shutdown().await.expect("shut down SQLite");
+
+    let connection = Connection::open(&path).expect("open database for inspection");
+    insert_active_version(&connection, "knowledge", "knowledge-crdt", "v1", KNOWLEDGE);
+    connection
+        .execute(
+            "INSERT INTO patchouli_crdt_change (change_hash, change_bytes)
+             VALUES ('root', x'01'), ('branch', x'02')",
+            [],
+        )
+        .expect("insert CRDT changes");
+    connection
+        .execute(
+            "INSERT INTO patchouli_crdt_change_parent (change_hash, parent_hash)
+             VALUES ('branch', 'root')",
+            [],
+        )
+        .expect("insert CRDT dependency");
+    connection
+        .execute(
+            "INSERT INTO patchouli_entity_crdt_head (
+                scope_json,
+                entity_type,
+                entity_id,
+                version,
+                field_path,
+                change_hash
+             ) VALUES (
+                '{\"channel_id\":\"channel-7\"}',
+                'knowledge',
+                'knowledge-crdt',
+                'v1',
+                '/content',
+                'branch'
+             )",
+            [],
+        )
+        .expect("attach CRDT frontier");
+
+    let frontier: (String, String) = connection
+        .query_row(
+            "SELECT field_path, change_hash FROM patchouli_entity_crdt_head",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read CRDT frontier");
+    assert_eq!(frontier, ("/content".to_owned(), "branch".to_owned()));
 }
 
 fn insert_active_version(

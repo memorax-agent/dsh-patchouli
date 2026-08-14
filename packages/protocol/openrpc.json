@@ -319,7 +319,7 @@
       "Meta": {
         "type": "object",
         "additionalProperties": true,
-        "description": "Controller metadata interpreted only by backend configuration."
+        "description": "Controller metadata interpreted only by backend configuration. A configured field may optionally request merge, mvcc, or reject conflict handling; when absent, backend configuration supplies the default."
       },
       "CapabilityList": {
         "type": "array",

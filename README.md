@@ -2,7 +2,7 @@
 
 Patchouli 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地知识依赖。目标是在不要求模型发起 Tool Call 的前提下，按当前任务检索相关知识，并通过 Harness 原生、可记录的上下文链路注入模型请求。
 
-> 当前状态：已经具备可加载的 Cordis 插件、Rust `BackendEngine`、本地 IPC、控制 CLI、SQLite provider 生命周期，以及 `Knowledge`/`KnowledgeRelation` v1 类型和数据库条目。macOS/Linux 使用 Unix socket，Windows 使用 named pipe。CRUD 已经完成前后端接线，但存储执行逻辑仍为明确的未实现占位；知识采集、索引和召回尚未实现。
+> 当前状态：已经具备可加载的 Cordis 插件、Rust `BackendEngine`、本地 IPC、控制 CLI、SQLite provider 生命周期、可配置的一致性/冲突计划，以及 `Knowledge`/`KnowledgeRelation` v1 类型和数据库条目。Knowledge 内容可使用 Automerge 合并，其他字段保留 MVCC 多版本。macOS/Linux 使用 Unix socket，Windows 使用 named pipe。CRUD 已经完成前后端接线，但尚未把存储执行逻辑接入上述计划；知识采集、索引和召回尚未实现。
 
 daemon 会独占数据库实例，记录运行代次和正常/异常关闭状态。正常停止会先停止接收连接、关闭现有 IPC 会话，再执行 SQLite WAL checkpoint、持久化干净关闭标记并释放数据库锁；异常退出后的下一次启动由 SQLite WAL 自动恢复已提交事务，并在状态接口中报告恢复事实。
 

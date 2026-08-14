@@ -12,7 +12,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio_rusqlite::{Connection, rusqlite};
 
-const STORAGE_SCHEMA_VERSION: i64 = 2;
+const STORAGE_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Error)]
 pub enum SqliteProviderError {
@@ -154,6 +154,49 @@ impl Provider for SqliteProvider {
                                     entity_id,
                                     version
                                 ) ON DELETE CASCADE
+                        ) STRICT, WITHOUT ROWID;
+
+                        CREATE TABLE IF NOT EXISTS patchouli_crdt_change (
+                            change_hash TEXT PRIMARY KEY CHECK (length(change_hash) > 0),
+                            change_bytes BLOB NOT NULL CHECK (length(change_bytes) > 0)
+                        ) STRICT, WITHOUT ROWID;
+
+                        CREATE TABLE IF NOT EXISTS patchouli_crdt_change_parent (
+                            change_hash TEXT NOT NULL,
+                            parent_hash TEXT NOT NULL,
+                            PRIMARY KEY (change_hash, parent_hash),
+                            FOREIGN KEY (change_hash)
+                                REFERENCES patchouli_crdt_change (change_hash) ON DELETE CASCADE,
+                            FOREIGN KEY (parent_hash)
+                                REFERENCES patchouli_crdt_change (change_hash) ON DELETE CASCADE,
+                            CHECK (change_hash != parent_hash)
+                        ) STRICT, WITHOUT ROWID;
+
+                        CREATE TABLE IF NOT EXISTS patchouli_entity_crdt_head (
+                            scope_json TEXT NOT NULL,
+                            entity_type TEXT NOT NULL,
+                            entity_id TEXT NOT NULL,
+                            version TEXT NOT NULL,
+                            field_path TEXT NOT NULL
+                                CHECK (length(field_path) > 1 AND substr(field_path, 1, 1) = '/'),
+                            change_hash TEXT NOT NULL,
+                            PRIMARY KEY (
+                                scope_json,
+                                entity_type,
+                                entity_id,
+                                version,
+                                field_path,
+                                change_hash
+                            ),
+                            FOREIGN KEY (scope_json, entity_type, entity_id, version)
+                                REFERENCES patchouli_entity_version (
+                                    scope_json,
+                                    entity_type,
+                                    entity_id,
+                                    version
+                                ) ON DELETE CASCADE,
+                            FOREIGN KEY (change_hash)
+                                REFERENCES patchouli_crdt_change (change_hash) ON DELETE RESTRICT
                         ) STRICT, WITHOUT ROWID;
 
                         CREATE VIEW IF NOT EXISTS patchouli_knowledge AS

@@ -1,4 +1,5 @@
 mod config;
+mod conflict;
 mod controller;
 mod engine;
 mod error;
@@ -55,12 +56,15 @@ pub mod methods {
 }
 pub use config::{
     AcquirePolicy, AcquireRequirement, BackendConfig, BatchCloseCondition, BatchExpiryPolicy,
-    Behavior, CommitConsistencyPolicy, CommitOrderingPolicy, ConfigError, ConflictPolicy,
-    ConflictStrategy, ConsistencyPolicy, ConsistencySource, EntityIdentityPolicy, EntityPolicy,
-    IdempotencyPolicy, MetaField, PolicyRule, PublicationPolicy, RuleMatch, SessionGuarantee,
-    SessionPolicy, SnapshotPolicy,
+    Behavior, CommitConsistencyPolicy, CommitOrderingPolicy, ConfigError, ConflictFallback,
+    ConflictMergeRule, ConflictMergeStrategy, ConflictPolicy, ConflictStrategy, ConsistencyPolicy,
+    ConsistencySource, EntityIdentityPolicy, EntityPolicy, IdempotencyPolicy, MetaField,
+    PolicyRule, PublicationPolicy, RuleMatch, SessionGuarantee, SessionPolicy, SnapshotPolicy,
+};
+pub use conflict::{
+    ConflictError, ConflictResolution, CrdtChange, CrdtDocument, MergedField, resolve_conflict,
 };
 pub use controller::{
-    CausalConsistencyPlan, ConsistencyPlan, ControlKey, PolicyError, PolicySelection,
+    CausalConsistencyPlan, ConflictPlan, ConsistencyPlan, ControlKey, PolicyError, PolicySelection,
     PolicySelector, SessionConsistencyPlan,
 };

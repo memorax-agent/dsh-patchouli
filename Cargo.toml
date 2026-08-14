@@ -15,6 +15,8 @@ repository = "https://github.com/memorax-agent/dsh-patchouli"
 
 [workspace.dependencies]
 async-trait = "0.1"
+automerge = "0.11"
+autosurgeon = "0.13"
 clap = { version = "4", features = ["derive"] }
 futures-core = "0.3"
 fs4 = "1.1"

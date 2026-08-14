@@ -6,6 +6,10 @@
       "pointer": "/channel_id",
       "schema": { "type": "string", "minLength": 1 }
     },
+    "conflict_strategy": {
+      "pointer": "/conflict_strategy",
+      "schema": { "type": "string", "enum": ["merge", "mvcc", "reject"] }
+    },
     "transaction_id": {
       "pointer": "/transaction_id",
       "schema": { "type": "string", "minLength": 1 }
@@ -88,8 +92,17 @@
               "key_by": ["transaction_id", "participant_id", "request_id"]
             },
             "conflict": {
-              "strategy": "preserve_heads",
-              "base_versions": "base_versions"
+              "default_strategy": "merge",
+              "strategy_from": "conflict_strategy",
+              "base_versions": "base_versions",
+              "merge": [
+                {
+                  "path": "/content",
+                  "strategy": "automerge",
+                  "group_by": ["/kind"]
+                }
+              ],
+              "otherwise": "mvcc"
             },
             "publication": {
               "mode": "batch",
@@ -131,8 +144,17 @@
           "mode": "disabled"
         },
         "conflict": {
-          "strategy": "reject",
-          "base_versions": "base_versions"
+          "default_strategy": "merge",
+          "strategy_from": "conflict_strategy",
+          "base_versions": "base_versions",
+          "merge": [
+            {
+              "path": "/content",
+              "strategy": "automerge",
+              "group_by": ["/kind"]
+            }
+          ],
+          "otherwise": "mvcc"
         },
         "publication": {
           "mode": "immediate"
@@ -183,8 +205,11 @@
               "key_by": ["transaction_id", "participant_id", "request_id"]
             },
             "conflict": {
-              "strategy": "preserve_heads",
-              "base_versions": "base_versions"
+              "default_strategy": "mvcc",
+              "strategy_from": "conflict_strategy",
+              "base_versions": "base_versions",
+              "merge": [],
+              "otherwise": "mvcc"
             },
             "publication": {
               "mode": "batch",
@@ -226,8 +251,11 @@
           "mode": "disabled"
         },
         "conflict": {
-          "strategy": "reject",
-          "base_versions": "base_versions"
+          "default_strategy": "mvcc",
+          "strategy_from": "conflict_strategy",
+          "base_versions": "base_versions",
+          "merge": [],
+          "otherwise": "mvcc"
         },
         "publication": {
           "mode": "immediate"

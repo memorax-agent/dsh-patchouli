@@ -75,9 +75,10 @@ Configuration MAY define:
 - separate consistency, idempotency, conflict, and publication keys and policies.
 
 Channel IDs, transaction IDs, timestamps, causal tokens, idempotency keys,
-deadlines, and plugin-route IDs remain ordinary configured metadata. They MUST
-NOT create new RPC methods or hard-coded protocol fields. Consistency selection
-is exclusively backend-controller policy.
+deadlines, plugin-route IDs, base versions, and conflict-strategy requests
+remain ordinary configured metadata. They MUST NOT create new RPC methods or
+hard-coded protocol fields. Consistency selection is exclusively
+backend-controller policy; only conflict handling has a request override.
 
 ## 4. Transaction and idempotency semantics
 
@@ -123,14 +124,22 @@ and requires batch publication with the same grouping fields.
 
 The selected conflict policy identifies a base-version metadata field. For
 update and delete that field MUST contain a non-empty set without duplicates.
-It declares the versions on which the candidate is based:
+It declares the versions on which the candidate is based. The policy also
+identifies an optional metadata field containing `merge`, `mvcc`, or `reject`;
+when absent, backend configuration supplies the strategy:
 
 - `reject` requires exact equality with the complete current head set and
   otherwise returns `VERSION_CONFLICT`;
-- `preserve_heads` may accept a candidate based on known older heads and expose
-  concurrent candidates as multiple heads;
+- `mvcc` accepts concurrent candidates as multiple heads;
+- `merge` applies backend-configured CRDT rules and uses the configured fallback
+  for fields or discriminator groups outside those rules;
 - unknown base versions return `VERSION_CONFLICT` and the current set;
 - an unknown entity identity returns `NOT_FOUND`.
+
+The shipped Knowledge policy applies Automerge to `/content`, groups it by the
+relative `/kind` discriminator, and applies MVCC to all other fields. A request
+still carries one complete JSON value. CRDT changes and frontiers are internal
+database state, not a second mutation format.
 
 A backend may contain multiple heads after replication. A read returns:
 
@@ -258,7 +267,7 @@ Read:
 Update:
 
 ```json
-{"jsonrpc":"2.0","id":4,"method":"patchouli.entity.update@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"update-42","base_versions":["v1"],"causal_token":"c1"},"data":{"ref":{"type":"note","id":"note-42"},"value":{"text":"hello again"}}}}
+{"jsonrpc":"2.0","id":4,"method":"patchouli.entity.update@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"update-42","base_versions":["v1"],"causal_token":"c1","conflict_strategy":"merge"},"data":{"ref":{"type":"note","id":"note-42"},"value":{"text":"hello again"}}}}
 ```
 
 ```json

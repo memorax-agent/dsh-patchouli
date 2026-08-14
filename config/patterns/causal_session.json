@@ -6,6 +6,10 @@
       "pointer": "/channel_id",
       "schema": { "type": "string", "minLength": 1 }
     },
+    "conflict_strategy": {
+      "pointer": "/conflict_strategy",
+      "schema": { "type": "string", "enum": ["merge", "mvcc", "reject"] }
+    },
     "participant_id": {
       "pointer": "/plugin_route_id",
       "schema": { "type": "string", "minLength": 1 }
@@ -65,8 +69,17 @@
           "mode": "disabled"
         },
         "conflict": {
-          "strategy": "preserve_heads",
-          "base_versions": "base_versions"
+          "default_strategy": "merge",
+          "strategy_from": "conflict_strategy",
+          "base_versions": "base_versions",
+          "merge": [
+            {
+              "path": "/content",
+              "strategy": "automerge",
+              "group_by": ["/kind"]
+            }
+          ],
+          "otherwise": "mvcc"
         },
         "publication": {
           "mode": "immediate"

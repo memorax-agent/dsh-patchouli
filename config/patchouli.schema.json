@@ -255,13 +255,48 @@
     "conflict": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["strategy", "base_versions"],
+      "required": [
+        "default_strategy",
+        "strategy_from",
+        "base_versions",
+        "merge",
+        "otherwise"
+      ],
       "properties": {
-        "strategy": {
+        "default_strategy": {
           "type": "string",
-          "enum": ["reject", "preserve_heads"]
+          "enum": ["merge", "mvcc", "reject"]
         },
-        "base_versions": { "$ref": "#/$defs/alias" }
+        "strategy_from": { "$ref": "#/$defs/alias" },
+        "base_versions": { "$ref": "#/$defs/alias" },
+        "merge": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/conflict_merge_rule" }
+        },
+        "otherwise": {
+          "type": "string",
+          "enum": ["mvcc", "reject"]
+        }
+      }
+    },
+    "conflict_merge_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "strategy", "group_by"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "strategy": { "const": "automerge" },
+        "group_by": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^/"
+          },
+          "uniqueItems": true
+        }
       }
     },
     "publication": {

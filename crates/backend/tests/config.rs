@@ -75,7 +75,9 @@ fn common_consistency_patterns_compile_to_the_expected_plans() {
         default.behavior.consistency.snapshot,
         SnapshotPolicy::Request
     );
-    assert_eq!(default.behavior.conflict.strategy, ConflictStrategy::Reject);
+    assert_eq!(default.conflict.strategy, ConflictStrategy::Merge);
+    assert_eq!(default.conflict.merge[0].path, "/content");
+    assert_eq!(default.conflict.merge[0].group_by, ["/kind"]);
     assert_eq!(default.behavior.publication, PublicationPolicy::Immediate);
 
     let eventual = PolicySelector::new(BackendConfig::from_json(EVENTUAL).unwrap())
@@ -90,10 +92,7 @@ fn common_consistency_patterns_compile_to_the_expected_plans() {
     assert!(eventual.consistency.causal.is_empty());
     assert_eq!(eventual.consistency.linearization_key, None);
     assert_eq!(eventual.consistency.commit_ordering_key, None);
-    assert_eq!(
-        eventual.behavior.conflict.strategy,
-        ConflictStrategy::PreserveHeads
-    );
+    assert_eq!(eventual.conflict.strategy, ConflictStrategy::Mvcc);
 
     let causal = PolicySelector::new(BackendConfig::from_json(CAUSAL_SESSION).unwrap())
         .select(
@@ -256,6 +255,27 @@ fn selector_derives_separate_scope_and_control_keys() {
 }
 
 #[test]
+fn request_conflict_strategy_overrides_the_configured_default() {
+    let selector = PolicySelector::new(BackendConfig::from_json(DEFAULT).unwrap());
+
+    let default = selector
+        .select("knowledge", &json!({ "channel_id": "channel-7" }))
+        .unwrap();
+    assert_eq!(default.conflict.strategy, ConflictStrategy::Merge);
+
+    let requested = selector
+        .select(
+            "knowledge",
+            &json!({
+                "channel_id": "channel-7",
+                "conflict_strategy": "reject"
+            }),
+        )
+        .unwrap();
+    assert_eq!(requested.conflict.strategy, ConflictStrategy::Reject);
+}
+
+#[test]
 fn request_consistency_has_no_shared_or_session_state() {
     let selector = PolicySelector::new(BackendConfig::from_json(EXAMPLE).unwrap());
     let meta = json!({ "channel_id": "channel-7" });
@@ -354,6 +374,27 @@ fn configuration_rejects_duplicate_session_identities() {
     let error = BackendConfig::from_json(&value.to_string()).unwrap_err();
     assert!(matches!(error, ConfigError::Invalid { .. }));
     assert!(error.to_string().contains("may be declared only once"));
+}
+
+#[test]
+fn configuration_rejects_overlapping_conflict_merge_paths() {
+    let mut value: serde_json::Value = serde_json::from_str(DEFAULT).unwrap();
+    value["entity_types"]["knowledge"]["fallback"]["conflict"]["merge"] = json!([
+        {
+            "path": "/content",
+            "strategy": "automerge",
+            "group_by": ["/kind"]
+        },
+        {
+            "path": "/content/text",
+            "strategy": "automerge",
+            "group_by": []
+        }
+    ]);
+
+    let error = BackendConfig::from_json(&value.to_string()).unwrap_err();
+    assert!(matches!(error, ConfigError::Invalid { .. }));
+    assert!(error.to_string().contains("must not duplicate or contain"));
 }
 
 #[test]

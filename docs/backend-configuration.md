@@ -10,6 +10,8 @@ Provider connection settings belong to daemon startup; for the initial SQLite
 adapter that setting is the database file path.
 
 The frontend plugin does not select consistency or maintain transaction state.
+It may request a conflict strategy through the configured metadata field; when
+that field is absent, the selected backend behavior supplies the default.
 The request path is:
 
 ```text
@@ -132,9 +134,15 @@ of phase-specific constraints rather than one level enum:
 - `idempotency.mode: disabled` creates no idempotency record or key.
 - `idempotency.mode: keyed` requires the complete `key_by` for a mutation and
   its stored result.
-- `conflict.strategy` selects rejection or preservation of concurrent heads.
+- `conflict.default_strategy` selects `merge`, `mvcc`, or `reject` when the
+  request does not override it.
+- `conflict.strategy_from` identifies the optional metadata field containing a
+  request override.
 - `conflict.base_versions` identifies the metadata field containing the
   candidate's base version set.
+- `conflict.merge` declares JSON Pointer fields reconciled with Automerge and
+  the relative discriminator fields that must match before merging.
+- `conflict.otherwise` chooses `mvcc` or `reject` outside a merge rule.
 - `publication.mode` is explicitly `immediate` or `batch`.
 
 A batch publication additionally declares its `key_by`, exactly one
@@ -168,7 +176,10 @@ shipped default:
 - one request snapshot acquired from the authority;
 - linearizable acquisition within the configured channel scope;
 - commits serialized within that same scope;
-- immediate publication and `reject` conflict handling;
+- immediate publication;
+- `merge` by default for Knowledge: Automerge at `/content`, grouped by
+  `/content/kind`, with MVCC for every other field;
+- `mvcc` by default for KnowledgeRelation;
 - no session, batch, replica, or idempotency state.
 
 Both ordering declarations use an empty `key_by` because `channel_id` is
@@ -179,8 +190,8 @@ channel, not a process-global lock.
 
 [`config/patterns/eventual.json`](../config/patterns/eventual.json)
 allows authority or replica snapshots, adds no freshness/session constraint,
-and adds no commit ordering. It uses `preserve_heads`, so independently
-accepted concurrent candidates remain visible for explicit resolution.
+and adds no commit ordering. It uses `mvcc`, so independently accepted
+concurrent candidates remain visible.
 
 ### Causal plugin session
 
@@ -211,3 +222,44 @@ transaction open between RPC calls. The closing mutation publishes all accepted
 candidates and their change records in one short transaction. A successful
 mutation response means durable acceptance; the change stream reports
 publication.
+
+## Conflict resolution
+
+The configured `strategy_from` alias keeps the physical request key
+deployment-specific. The shipped configurations bind it to
+`meta.conflict_strategy`. Omitting it uses `default_strategy`; supplying it
+overrides only conflict handling and does not change consistency, idempotency,
+scope, or publication.
+
+The default Knowledge merge rule is:
+
+```json
+{
+  "path": "/content",
+  "strategy": "automerge",
+  "group_by": ["/kind"]
+}
+```
+
+Clients continue to send complete JSON replacements. The backend diffs each
+replacement against its declared base before merging concurrent branches.
+Strings use collaborative text; maps and lists use Automerge objects and
+sequences. Lists are reconciled positionally in version 1; applications that
+need identity-aware list moves should model elements as a keyed map.
+
+When `base_versions` contains several heads, the backend first joins their
+stored Automerge frontiers and creates the candidate change on that combined
+frontier. The candidate therefore records every selected CRDT head as a parent
+without requiring a new RPC shape.
+
+The discriminator prevents text and structured content from being forced into
+one CRDT representation. With `otherwise: mvcc`, those values remain separate
+heads. All fields outside `/content` also remain MVCC. If two candidates merge
+to the same content but have different metadata, the backend retains two
+derived versions with the shared merged content. Identical resulting versions
+collapse to one.
+
+SQLite persists immutable materialized entity JSON together with Automerge
+changes, dependency edges, and the change frontier attached to each entity
+version and field path. Old versions remain readable; merging creates derived
+versions rather than mutating their materialized JSON.

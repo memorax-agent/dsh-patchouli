@@ -102,12 +102,16 @@ preserve an earlier relation's type or endpoints.
 
 ## SQLite entries
 
-SQLite storage schema version 2 defines two authority tables:
+SQLite storage schema version 3 defines two authority tables:
 
 - `patchouli_entity_version`: immutable active values and tombstones keyed by
   canonical `scope_json + entity_type + entity_id + version`;
 - `patchouli_entity_head`: the currently published head set, allowing one head
-  normally and multiple heads under `preserve_heads` conflict policy.
+  normally and multiple heads under the `mvcc` conflict strategy.
+
+It also defines `patchouli_crdt_change`, `patchouli_crdt_change_parent`, and
+`patchouli_entity_crdt_head` for Automerge changes, their dependency graph, and
+the per-version field frontier.
 
 Active rows require valid JSON; tombstones require a null value. The value is
 stored once. `patchouli_knowledge` and `patchouli_knowledge_relation` are read-only
@@ -115,5 +119,5 @@ views over active published heads. They expose typed columns such as knowledge
 content/profile and relation type plus complete `from`/`to` reference arrays
 without becoming a second semantic authority.
 
-Storage schema version 1 is obsolete and is rejected explicitly; no migration
-or compatibility path is maintained at this stage.
+Earlier storage schemas are obsolete and rejected explicitly; no migration or
+compatibility path is maintained at this stage.

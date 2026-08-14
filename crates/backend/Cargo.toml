@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
+automerge.workspace = true
+autosurgeon.workspace = true
 futures-core.workspace = true
 jsonschema.workspace = true
 patchouli-provider = { path = "../provider" }
