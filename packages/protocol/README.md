@@ -54,6 +54,11 @@ and every successful result uses `{ meta, data }`. `data` contains only the
 method's business fields. `meta` is an open JSON object whose recognized fields
 are selected by backend configuration.
 
+`meta.deadline_unix_ms` is reserved by the protocol as an optional unsigned
+Unix-millisecond acceptance deadline. Expiry before a database acceptance commit
+returns `DEADLINE_EXCEEDED` and rolls the operation back. Version 1 does not
+support request cancellation.
+
 Each create, update, or delete is accepted atomically by the Rust backend
 controller. Configuration determines whether the accepted version is published
 immediately or as part of a logical batch. Only published versions produce

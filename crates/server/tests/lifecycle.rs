@@ -155,6 +155,23 @@ async fn daemon_accepts_status_and_shutdown_over_local_ipc() {
     assert!(checkpoint.data.completed);
     assert_eq!(provider_state.checkpoints.load(Ordering::Relaxed), 1);
 
+    let deadline_error = client
+        .create(&RpcParams {
+            meta: std::collections::BTreeMap::from([
+                ("workspace_id".to_owned(), serde_json::json!("workspace-1")),
+                ("user_id".to_owned(), serde_json::json!("user-7")),
+                ("deadline_unix_ms".to_owned(), serde_json::json!(0)),
+            ]),
+            data: CreateEntityData {
+                entity_type: "knowledge".to_owned(),
+                id: Some("expired".to_owned()),
+                value: serde_json::from_str(KNOWLEDGE).expect("valid knowledge fixture"),
+            },
+        })
+        .await
+        .expect_err("expired request must be rejected before the provider");
+    assert!(matches!(deadline_error, IpcError::Rpc { code: -32007, .. }));
+
     let error = client
         .create(&RpcParams {
             meta: std::collections::BTreeMap::from([

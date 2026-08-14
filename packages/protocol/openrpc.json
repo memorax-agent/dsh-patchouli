@@ -136,7 +136,6 @@
         { "$ref": "#/components/errors/WorkUnitExpired" },
         { "$ref": "#/components/errors/IdempotencyConflict" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
-        { "$ref": "#/components/errors/Cancelled" },
         { "$ref": "#/components/errors/Overloaded" }
       ]
     },
@@ -161,7 +160,6 @@
         { "$ref": "#/components/errors/NotFound" },
         { "$ref": "#/components/errors/WorkUnitExpired" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
-        { "$ref": "#/components/errors/Cancelled" },
         { "$ref": "#/components/errors/Overloaded" }
       ]
     },
@@ -184,7 +182,6 @@
         { "$ref": "#/components/errors/Forbidden" },
         { "$ref": "#/components/errors/InvalidRequest" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
-        { "$ref": "#/components/errors/Cancelled" },
         { "$ref": "#/components/errors/Overloaded" }
       ]
     },
@@ -211,7 +208,6 @@
         { "$ref": "#/components/errors/WorkUnitExpired" },
         { "$ref": "#/components/errors/IdempotencyConflict" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
-        { "$ref": "#/components/errors/Cancelled" },
         { "$ref": "#/components/errors/Overloaded" }
       ]
     },
@@ -238,7 +234,6 @@
         { "$ref": "#/components/errors/WorkUnitExpired" },
         { "$ref": "#/components/errors/IdempotencyConflict" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
-        { "$ref": "#/components/errors/Cancelled" },
         { "$ref": "#/components/errors/Overloaded" }
       ]
     },
@@ -261,7 +256,6 @@
         { "$ref": "#/components/errors/Forbidden" },
         { "$ref": "#/components/errors/CursorExpired" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
-        { "$ref": "#/components/errors/Cancelled" },
         { "$ref": "#/components/errors/Overloaded" }
       ]
     },
@@ -354,8 +348,15 @@
       },
       "Meta": {
         "type": "object",
+        "properties": {
+          "deadline_unix_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional absolute Unix-millisecond deadline for database acceptance."
+          }
+        },
         "additionalProperties": true,
-        "description": "Controller metadata interpreted only by backend configuration. A configured field may optionally request merge, mvcc, or reject conflict handling; when absent, backend configuration supplies the default."
+        "description": "Controller metadata interpreted by backend configuration. meta.deadline_unix_ms is reserved as an optional unsigned Unix-millisecond acceptance deadline; configured fields may select consistency and conflict behavior."
       },
       "CapabilityList": {
         "type": "array",
@@ -765,13 +766,8 @@
       },
       "DeadlineExceeded": {
         "code": -32007,
-        "message": "The request deadline elapsed before completion.",
+        "message": "The request deadline elapsed before acceptance.",
         "data": { "reason": "DEADLINE_EXCEEDED" }
-      },
-      "Cancelled": {
-        "code": -32008,
-        "message": "The request was cancelled before completion.",
-        "data": { "reason": "CANCELLED" }
       },
       "Overloaded": {
         "code": -32009,

@@ -160,7 +160,6 @@ pub type ChangesEventParams = RpcParams<ChangesEventData>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProtocolErrorReason {
-    Cancelled,
     CursorExpired,
     DeadlineExceeded,
     Forbidden,
@@ -199,7 +198,6 @@ pub mod error_codes {
     pub const IDEMPOTENCY_CONFLICT: i32 = -32005;
     pub const UNSUPPORTED_CAPABILITY: i32 = -32006;
     pub const DEADLINE_EXCEEDED: i32 = -32007;
-    pub const CANCELLED: i32 = -32008;
     pub const OVERLOADED: i32 = -32009;
     pub const CURSOR_EXPIRED: i32 = -32010;
     pub const WORK_UNIT_EXPIRED: i32 = -32011;

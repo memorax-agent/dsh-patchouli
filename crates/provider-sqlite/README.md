@@ -10,11 +10,13 @@ listening. Manual checkpoints use complete WAL checkpointing. Graceful shutdown
 marks the generation clean, truncates the WAL, closes the connection, and
 releases the ownership lock.
 
-Storage schema version 9 contains generic immutable entity versions, published
-heads, a retained atomic change log, durable causal/session frontiers,
-idempotency records, Automerge change/frontier tables, and durable work
-units with one global baseline cursor, a fixed policy descriptor, per-entity
-conflict policies, captured base versions, and private staged heads. Marker
+Storage schema version 10 contains generic immutable entity versions, published
+heads, non-expiring head history, a separately retained atomic change log,
+durable causal/session frontiers, published and staged idempotency records,
+Automerge change/frontier tables, and durable work units with one scope-local
+baseline cursor, a fixed policy descriptor, per-entity
+conflict policies, captured base versions, private staged heads, and a durable
+sealed closing state. Marker
 close either publishes unchanged baselines immediately or returns the complete
 drift set for engine resolution; the resulting compare-and-swap publishes the
 whole unit in one SQLite transaction. Expired open units are swept on startup,

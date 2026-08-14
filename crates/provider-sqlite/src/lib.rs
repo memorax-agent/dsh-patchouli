@@ -17,11 +17,11 @@ use patchouli_provider::{
     WorkUnitReadOutcome,
 };
 use thiserror::Error;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tokio_rusqlite::rusqlite::OptionalExtension;
 use tokio_rusqlite::{Connection, rusqlite};
 
-const STORAGE_SCHEMA_VERSION: i64 = 9;
+const STORAGE_SCHEMA_VERSION: i64 = 10;
 
 #[derive(Debug, Error)]
 pub enum SqliteProviderError {
@@ -38,6 +38,7 @@ pub enum SqliteProviderError {
 pub struct SqliteProvider {
     connection: Mutex<Option<Connection>>,
     lock: Mutex<Option<File>>,
+    changes: watch::Sender<u64>,
 }
 
 impl SqliteProvider {
@@ -73,9 +74,11 @@ impl SqliteProvider {
             })
             .await?;
 
+        let (changes, _) = watch::channel(0);
         Ok(Self {
             connection: Mutex::new(Some(connection)),
             lock: Mutex::new(Some(lock)),
+            changes,
         })
     }
 
@@ -86,6 +89,10 @@ impl SqliteProvider {
             .as_ref()
             .cloned()
             .ok_or_else(|| ProviderError::new("SQLite provider is shut down"))
+    }
+
+    fn signal_changes(&self) {
+        self.changes.send_modify(|generation| *generation += 1);
     }
 }
 
@@ -151,8 +158,10 @@ impl Provider for SqliteProvider {
                                     json_valid(identity_json)
                                     AND json_type(identity_json) = 'object'
                                 ),
+                            scope_json TEXT NOT NULL
+                                CHECK (json_valid(scope_json) AND json_type(scope_json) = 'object'),
                             state TEXT NOT NULL
-                                CHECK (state IN ('open', 'committed', 'expired')),
+                                CHECK (state IN ('open', 'closing', 'committed', 'expired')),
                             policy_json TEXT NOT NULL CHECK (json_valid(policy_json)),
                             expiry_action TEXT NOT NULL CHECK (expiry_action = 'discard'),
                             opened_at_unix_ms INTEGER NOT NULL
@@ -162,8 +171,8 @@ impl Provider for SqliteProvider {
                             baseline_cursor INTEGER NOT NULL CHECK (baseline_cursor >= 0),
                             closed_at_unix_ms INTEGER,
                             CHECK (
-                                (state = 'open' AND closed_at_unix_ms IS NULL)
-                                OR (state != 'open' AND closed_at_unix_ms IS NOT NULL)
+                                (state IN ('open', 'closing') AND closed_at_unix_ms IS NULL)
+                                OR (state IN ('committed', 'expired') AND closed_at_unix_ms IS NOT NULL)
                             )
                         ) STRICT, WITHOUT ROWID;
 
@@ -290,6 +299,19 @@ impl Provider for SqliteProvider {
                                 ) ON DELETE CASCADE
                         ) STRICT, WITHOUT ROWID;
 
+                        CREATE TABLE IF NOT EXISTS patchouli_entity_head_history (
+                            scope_json TEXT NOT NULL,
+                            entity_type TEXT NOT NULL,
+                            entity_id TEXT NOT NULL,
+                            cursor INTEGER NOT NULL CHECK (cursor > 0),
+                            head_versions_json TEXT NOT NULL CHECK (
+                                json_valid(head_versions_json)
+                                AND json_type(head_versions_json) = 'array'
+                                AND json_array_length(head_versions_json) > 0
+                            ),
+                            PRIMARY KEY (scope_json, entity_type, entity_id, cursor)
+                        ) STRICT, WITHOUT ROWID;
+
                         CREATE TABLE IF NOT EXISTS patchouli_crdt_change (
                             change_hash TEXT PRIMARY KEY CHECK (length(change_hash) > 0),
                             change_bytes BLOB NOT NULL CHECK (length(change_bytes) > 0)
@@ -356,6 +378,11 @@ impl Provider for SqliteProvider {
                                 CHECK (recorded_at_unix_ms >= 0)
                         ) STRICT;
 
+                        CREATE TABLE IF NOT EXISTS patchouli_change_retention (
+                            scope_json TEXT PRIMARY KEY,
+                            pruned_through_cursor INTEGER NOT NULL CHECK (pruned_through_cursor > 0)
+                        ) STRICT, WITHOUT ROWID;
+
                         CREATE TABLE IF NOT EXISTS patchouli_session_frontier (
                             scope_json TEXT NOT NULL CHECK (
                                 json_valid(scope_json) AND json_type(scope_json) = 'object'
@@ -389,6 +416,16 @@ impl Provider for SqliteProvider {
                             request_json TEXT NOT NULL CHECK (json_valid(request_json)),
                             result_json TEXT NOT NULL CHECK (json_valid(result_json)),
                             expires_at_unix_ms INTEGER NOT NULL CHECK (expires_at_unix_ms >= 0)
+                        ) STRICT, WITHOUT ROWID;
+
+                        CREATE TABLE IF NOT EXISTS patchouli_work_unit_idempotency (
+                            identity_json TEXT PRIMARY KEY CHECK (json_valid(identity_json)),
+                            work_unit_json TEXT NOT NULL,
+                            request_json TEXT NOT NULL CHECK (json_valid(request_json)),
+                            result_json TEXT NOT NULL CHECK (json_valid(result_json)),
+                            expires_at_unix_ms INTEGER NOT NULL CHECK (expires_at_unix_ms >= 0),
+                            FOREIGN KEY (work_unit_json)
+                                REFERENCES patchouli_work_unit (identity_json) ON DELETE CASCADE
                         ) STRICT, WITHOUT ROWID;
 
                         CREATE VIEW IF NOT EXISTS patchouli_knowledge AS
@@ -509,6 +546,42 @@ impl Provider for SqliteProvider {
             .map_err(|error| ProviderError::new(format!("SQLite change read failed: {error}")))
     }
 
+    async fn wait_for_changes(
+        &self,
+        scope_json: &str,
+        after_cursor: u64,
+    ) -> Result<(), ProviderError> {
+        let mut changes = self.changes.subscribe();
+        let scope_json = scope_json.to_owned();
+        loop {
+            let connection = self.connection().await?;
+            let scope = scope_json.clone();
+            let current = connection
+                .call(move |connection| -> Result<u64, ProviderError> {
+                    connection
+                        .query_row(
+                            "SELECT cursor FROM patchouli_scope_frontier WHERE scope_json = ?1",
+                            [scope],
+                            |row| row.get(0),
+                        )
+                        .optional()
+                        .map(|cursor| cursor.unwrap_or(0))
+                        .map_err(database_error)
+                })
+                .await
+                .map_err(|error| {
+                    ProviderError::new(format!("SQLite change wait failed: {error}"))
+                })?;
+            if current > after_cursor {
+                return Ok(());
+            }
+            changes
+                .changed()
+                .await
+                .map_err(|_| ProviderError::new("SQLite change notifications are unavailable"))?;
+        }
+    }
+
     async fn retrieve_entities(
         &self,
         query: RetrieveQuery,
@@ -525,13 +598,17 @@ impl Provider for SqliteProvider {
         commit: EntityCommit,
     ) -> Result<EntityCommitOutcome, ProviderError> {
         let connection = self.connection().await?;
-        connection
+        let outcome = connection
             .call(move |connection| {
                 sweep_expired_work_units(connection)?;
                 commit_entity_transaction(connection, commit)
             })
             .await
-            .map_err(|error| ProviderError::new(format!("SQLite entity commit failed: {error}")))
+            .map_err(|error| sqlite_call_error("entity commit", error))?;
+        if matches!(outcome, EntityCommitOutcome::Committed) {
+            self.signal_changes();
+        }
+        Ok(outcome)
     }
 
     async fn read_idempotency(
@@ -551,6 +628,40 @@ impl Provider for SqliteProvider {
             .map_err(|error| ProviderError::new(format!("SQLite idempotency read failed: {error}")))
     }
 
+    async fn read_idempotency_in_work_unit(
+        &self,
+        work_unit: &WorkUnit,
+        identity_json: &str,
+        request_json: &str,
+        now_unix_ms: u64,
+        allow_replay: bool,
+    ) -> Result<IdempotencyReadOutcome, ProviderError> {
+        let connection = self.connection().await?;
+        let work_unit = work_unit.clone();
+        let identity_json = identity_json.to_owned();
+        let request_json = request_json.to_owned();
+        connection
+            .call(
+                move |connection| -> Result<IdempotencyReadOutcome, ProviderError> {
+                    let transaction = connection
+                        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                        .map_err(database_error)?;
+                    let outcome = read_work_unit_idempotency(
+                        &transaction,
+                        &work_unit,
+                        &identity_json,
+                        &request_json,
+                        now_unix_ms,
+                        allow_replay,
+                    )?;
+                    commit_before_deadline(transaction, work_unit.deadline_unix_ms)?;
+                    Ok(outcome)
+                },
+            )
+            .await
+            .map_err(|error| sqlite_call_error("work-unit idempotency read", error))
+    }
+
     async fn commit_entity_idempotent(
         &self,
         commit: EntityCommit,
@@ -558,14 +669,16 @@ impl Provider for SqliteProvider {
         now_unix_ms: u64,
     ) -> Result<IdempotentCommitOutcome, ProviderError> {
         let connection = self.connection().await?;
-        connection
+        let outcome = connection
             .call(move |connection| {
                 commit_entity_idempotent(connection, commit, idempotency, now_unix_ms)
             })
             .await
-            .map_err(|error| {
-                ProviderError::new(format!("SQLite idempotent commit failed: {error}"))
-            })
+            .map_err(|error| sqlite_call_error("idempotent commit", error))?;
+        if matches!(outcome, IdempotentCommitOutcome::Committed) {
+            self.signal_changes();
+        }
+        Ok(outcome)
     }
 
     async fn read_entity_in_work_unit(
@@ -582,7 +695,7 @@ impl Provider for SqliteProvider {
                 read_entity_in_work_unit(connection, &work_unit, &key)
             })
             .await
-            .map_err(|error| ProviderError::new(format!("SQLite work-unit read failed: {error}")))
+            .map_err(|error| sqlite_call_error("work-unit read", error))
     }
 
     async fn commit_entity_in_work_unit(
@@ -590,13 +703,17 @@ impl Provider for SqliteProvider {
         commit: WorkUnitCommit,
     ) -> Result<WorkUnitCommitOutcome, ProviderError> {
         let connection = self.connection().await?;
-        connection
+        let outcome = connection
             .call(move |connection| {
                 sweep_expired_work_units(connection)?;
                 commit_entity_in_work_unit(connection, commit)
             })
             .await
-            .map_err(|error| ProviderError::new(format!("SQLite work-unit commit failed: {error}")))
+            .map_err(|error| sqlite_call_error("work-unit commit", error))?;
+        if matches!(outcome, WorkUnitCommitOutcome::Published) {
+            self.signal_changes();
+        }
+        Ok(outcome)
     }
 
     async fn publish_work_unit(
@@ -604,7 +721,7 @@ impl Provider for SqliteProvider {
         publish: WorkUnitPublish,
     ) -> Result<WorkUnitCommitOutcome, ProviderError> {
         let connection = self.connection().await?;
-        connection
+        let outcome = connection
             .call(move |connection| {
                 sweep_expired_work_units(connection)?;
                 publish_work_unit(connection, publish)
@@ -612,7 +729,11 @@ impl Provider for SqliteProvider {
             .await
             .map_err(|error| {
                 ProviderError::new(format!("SQLite work-unit publication failed: {error}"))
-            })
+            })?;
+        if matches!(outcome, WorkUnitCommitOutcome::Published) {
+            self.signal_changes();
+        }
+        Ok(outcome)
     }
 
     async fn checkpoint(&self) -> Result<(), ProviderError> {
@@ -691,8 +812,30 @@ fn unix_time_ms() -> Result<u64, ProviderError> {
         .map_err(|error| ProviderError::new(format!("system clock is before Unix epoch: {error}")))
 }
 
+fn commit_before_deadline(
+    transaction: rusqlite::Transaction<'_>,
+    deadline_unix_ms: Option<u64>,
+) -> Result<(), ProviderError> {
+    if let Some(deadline) = deadline_unix_ms
+        && unix_time_ms()? >= deadline
+    {
+        return Err(ProviderError::deadline_exceeded());
+    }
+    transaction.commit().map_err(database_error)
+}
+
 fn database_error(error: rusqlite::Error) -> ProviderError {
     ProviderError::new(format!("SQLite database error: {error}"))
+}
+
+fn sqlite_call_error(
+    operation: &str,
+    error: tokio_rusqlite::Error<ProviderError>,
+) -> ProviderError {
+    match error {
+        tokio_rusqlite::Error::Error(error) => error,
+        error => ProviderError::new(format!("SQLite {operation} failed: {error}")),
+    }
 }
 
 fn read_idempotency(
@@ -707,6 +850,12 @@ fn read_idempotency(
             [now_unix_ms],
         )
         .map_err(database_error)?;
+    connection
+        .execute(
+            "DELETE FROM patchouli_work_unit_idempotency WHERE expires_at_unix_ms <= ?1",
+            [now_unix_ms],
+        )
+        .map_err(database_error)?;
     let stored = connection
         .query_row(
             "SELECT request_json, result_json
@@ -717,10 +866,99 @@ fn read_idempotency(
         )
         .optional()
         .map_err(database_error)?;
-    Ok(match stored {
+    let outcome = match stored {
         None => IdempotencyReadOutcome::Missing,
         Some((stored_request, result_json)) if stored_request == request_json => {
             IdempotencyReadOutcome::Replayed { result_json }
+        }
+        Some(_) => IdempotencyReadOutcome::Conflict,
+    };
+    if outcome != IdempotencyReadOutcome::Missing {
+        return Ok(outcome);
+    }
+    let staged = connection
+        .query_row(
+            "SELECT 1 FROM patchouli_work_unit_idempotency WHERE identity_json = ?1",
+            [identity_json],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(database_error)?;
+    Ok(if staged.is_some() {
+        IdempotencyReadOutcome::Conflict
+    } else {
+        IdempotencyReadOutcome::Missing
+    })
+}
+
+fn read_work_unit_idempotency(
+    transaction: &rusqlite::Transaction<'_>,
+    work_unit: &WorkUnit,
+    identity_json: &str,
+    request_json: &str,
+    now_unix_ms: u64,
+    allow_replay: bool,
+) -> Result<IdempotencyReadOutcome, ProviderError> {
+    match ensure_work_unit(transaction, work_unit)? {
+        StoredWorkUnitState::PolicyMismatch => return Ok(IdempotencyReadOutcome::Conflict),
+        StoredWorkUnitState::Expired => return Ok(IdempotencyReadOutcome::Missing),
+        StoredWorkUnitState::Open
+        | StoredWorkUnitState::Closing
+        | StoredWorkUnitState::Committed => {}
+    }
+    transaction
+        .execute(
+            "DELETE FROM patchouli_idempotency WHERE expires_at_unix_ms <= ?1",
+            [now_unix_ms],
+        )
+        .map_err(database_error)?;
+    transaction
+        .execute(
+            "DELETE FROM patchouli_work_unit_idempotency WHERE expires_at_unix_ms <= ?1",
+            [now_unix_ms],
+        )
+        .map_err(database_error)?;
+    if let Some((stored_request, result_json)) = transaction
+        .query_row(
+            "SELECT request_json, result_json
+             FROM patchouli_idempotency WHERE identity_json = ?1",
+            [identity_json],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(database_error)?
+    {
+        return Ok(if stored_request == request_json {
+            IdempotencyReadOutcome::Replayed { result_json }
+        } else {
+            IdempotencyReadOutcome::Conflict
+        });
+    }
+    let staged = transaction
+        .query_row(
+            "SELECT work_unit_json, request_json, result_json
+             FROM patchouli_work_unit_idempotency WHERE identity_json = ?1",
+            [identity_json],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(database_error)?;
+    Ok(match staged {
+        None => IdempotencyReadOutcome::Missing,
+        Some((unit, stored_request, result_json))
+            if unit == work_unit.identity_json && stored_request == request_json =>
+        {
+            if allow_replay {
+                IdempotencyReadOutcome::Replayed { result_json }
+            } else {
+                IdempotencyReadOutcome::Missing
+            }
         }
         Some(_) => IdempotencyReadOutcome::Conflict,
     })
@@ -799,17 +1037,44 @@ fn read_changes(
 ) -> Result<ChangePage, ProviderError> {
     connection
         .execute(
+            "INSERT INTO patchouli_change_retention (scope_json, pruned_through_cursor)
+             SELECT scope_json, max(cursor)
+             FROM patchouli_change
+             WHERE recorded_at_unix_ms < ?1
+             GROUP BY scope_json
+             ON CONFLICT (scope_json) DO UPDATE SET
+                pruned_through_cursor = max(
+                    patchouli_change_retention.pruned_through_cursor,
+                    excluded.pruned_through_cursor
+                )",
+            [query.retained_after_unix_ms],
+        )
+        .map_err(database_error)?;
+    connection
+        .execute(
             "DELETE FROM patchouli_change WHERE recorded_at_unix_ms < ?1",
             [query.retained_after_unix_ms],
         )
         .map_err(database_error)?;
-    let (oldest_cursor, current_cursor): (Option<u64>, u64) = connection
+    let pruned_through = connection
         .query_row(
-            "SELECT min(cursor), COALESCE(max(cursor), 0) FROM patchouli_change",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            "SELECT pruned_through_cursor
+             FROM patchouli_change_retention
+             WHERE scope_json = ?1",
+            [&query.scope_json],
+            |row| row.get::<_, u64>(0),
         )
+        .optional()
         .map_err(database_error)?;
+    let current_cursor = connection
+        .query_row(
+            "SELECT cursor FROM patchouli_scope_frontier WHERE scope_json = ?1",
+            [&query.scope_json],
+            |row| row.get::<_, u64>(0),
+        )
+        .optional()
+        .map_err(database_error)?
+        .unwrap_or(0);
     let rows = connection
         .prepare(
             "SELECT cursor, entity_type, entity_id, kind, head_versions_json, event_meta_json
@@ -867,7 +1132,7 @@ fn read_changes(
         }
     }
     Ok(ChangePage {
-        oldest_cursor,
+        oldest_cursor: pruned_through.map(|cursor| cursor.saturating_add(1)),
         current_cursor,
         changes,
     })
@@ -1111,6 +1376,7 @@ fn read_crdt_fields(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StoredWorkUnitState {
     Open,
+    Closing,
     PolicyMismatch,
     Committed,
     Expired,
@@ -1129,6 +1395,7 @@ fn read_entity_in_work_unit(
         StoredWorkUnitState::PolicyMismatch => WorkUnitReadOutcome::PolicyMismatch,
         StoredWorkUnitState::Committed => WorkUnitReadOutcome::Committed,
         StoredWorkUnitState::Expired => WorkUnitReadOutcome::Expired,
+        StoredWorkUnitState::Closing => WorkUnitReadOutcome::Closing,
         StoredWorkUnitState::Open => {
             capture_work_unit_entity(&transaction, &work_unit.identity_json, key)?;
             WorkUnitReadOutcome::Open(read_work_unit_snapshot(
@@ -1138,7 +1405,7 @@ fn read_entity_in_work_unit(
             )?)
         }
     };
-    transaction.commit().map_err(database_error)?;
+    commit_before_deadline(transaction, work_unit.deadline_unix_ms)?;
     Ok(result)
 }
 
@@ -1156,16 +1423,35 @@ fn commit_entity_in_work_unit(
         .map_err(database_error)?;
     match ensure_work_unit(&transaction, &commit.work_unit)? {
         StoredWorkUnitState::PolicyMismatch => {
-            transaction.commit().map_err(database_error)?;
+            commit_before_deadline(transaction, commit.work_unit.deadline_unix_ms)?;
             return Ok(WorkUnitCommitOutcome::PolicyMismatch);
         }
         StoredWorkUnitState::Committed => {
-            transaction.commit().map_err(database_error)?;
+            commit_before_deadline(transaction, commit.work_unit.deadline_unix_ms)?;
             return Ok(WorkUnitCommitOutcome::Committed);
         }
         StoredWorkUnitState::Expired => {
-            transaction.commit().map_err(database_error)?;
+            commit_before_deadline(transaction, commit.work_unit.deadline_unix_ms)?;
             return Ok(WorkUnitCommitOutcome::Expired);
+        }
+        StoredWorkUnitState::Closing => {
+            if commit.close {
+                let unit = &commit.work_unit.identity_json;
+                let conflicts = publication_conflicts(&transaction, unit)?;
+                if conflicts.is_empty() {
+                    let recorded_at = sqlite_time(
+                        commit.entity.recorded_at_unix_ms,
+                        "recorded timestamp exceeds SQLite integer range",
+                    )?;
+                    finish_work_unit_publication(&transaction, unit, recorded_at)?;
+                    commit_before_deadline(transaction, commit.work_unit.deadline_unix_ms)?;
+                    return Ok(WorkUnitCommitOutcome::Published);
+                }
+                commit_before_deadline(transaction, commit.work_unit.deadline_unix_ms)?;
+                return Ok(WorkUnitCommitOutcome::PublicationConflict { conflicts });
+            }
+            commit_before_deadline(transaction, commit.work_unit.deadline_unix_ms)?;
+            return Ok(WorkUnitCommitOutcome::Closing);
         }
         StoredWorkUnitState::Open => {}
     }
@@ -1221,8 +1507,14 @@ fn commit_entity_in_work_unit(
     replace_work_unit_heads(&transaction, unit, key, &commit.entity.head_versions)?;
 
     if let Some(idempotency) = &commit.idempotency {
-        match store_idempotency(&transaction, idempotency, commit.work_unit.now_unix_ms)? {
+        match store_work_unit_idempotency(
+            &transaction,
+            unit,
+            idempotency,
+            commit.work_unit.now_unix_ms,
+        )? {
             IdempotencyReadOutcome::Missing => {}
+            IdempotencyReadOutcome::Replayed { .. } if commit.close => {}
             IdempotencyReadOutcome::Replayed { result_json } => {
                 return Ok(WorkUnitCommitOutcome::Replayed { result_json });
             }
@@ -1233,18 +1525,25 @@ fn commit_entity_in_work_unit(
     }
 
     if !commit.close {
-        transaction.commit().map_err(database_error)?;
+        commit_before_deadline(transaction, commit.work_unit.deadline_unix_ms)?;
         return Ok(WorkUnitCommitOutcome::Staged);
     }
 
+    transaction
+        .execute(
+            "UPDATE patchouli_work_unit SET state = 'closing' WHERE identity_json = ?1 AND state = 'open'",
+            [unit],
+        )
+        .map_err(database_error)?;
+
     let conflicts = publication_conflicts(&transaction, unit)?;
     if !conflicts.is_empty() {
-        transaction.commit().map_err(database_error)?;
+        commit_before_deadline(transaction, commit.work_unit.deadline_unix_ms)?;
         return Ok(WorkUnitCommitOutcome::PublicationConflict { conflicts });
     }
 
     finish_work_unit_publication(&transaction, unit, recorded_at)?;
-    transaction.commit().map_err(database_error)?;
+    commit_before_deadline(transaction, commit.work_unit.deadline_unix_ms)?;
     Ok(WorkUnitCommitOutcome::Published)
 }
 
@@ -1268,7 +1567,12 @@ fn publish_work_unit(
             transaction.commit().map_err(database_error)?;
             return Ok(WorkUnitCommitOutcome::Expired);
         }
-        StoredWorkUnitState::Open => {}
+        StoredWorkUnitState::Open => {
+            return Err(ProviderError::new(
+                "an open work unit cannot be published before a close marker",
+            ));
+        }
+        StoredWorkUnitState::Closing => {}
     }
 
     let unit = &publish.work_unit.identity_json;
@@ -1386,6 +1690,23 @@ fn finish_work_unit_publication(
     }
     transaction
         .execute(
+            "INSERT INTO patchouli_idempotency (
+                identity_json, request_json, result_json, expires_at_unix_ms
+             )
+             SELECT identity_json, request_json, result_json, expires_at_unix_ms
+             FROM patchouli_work_unit_idempotency
+             WHERE work_unit_json = ?1 AND expires_at_unix_ms > ?2",
+            (unit, recorded_at),
+        )
+        .map_err(database_error)?;
+    transaction
+        .execute(
+            "DELETE FROM patchouli_work_unit_idempotency WHERE work_unit_json = ?1",
+            [unit],
+        )
+        .map_err(database_error)?;
+    transaction
+        .execute(
             "UPDATE patchouli_work_unit
              SET state = 'committed', closed_at_unix_ms = ?2
              WHERE identity_json = ?1",
@@ -1401,7 +1722,7 @@ fn ensure_work_unit(
 ) -> Result<StoredWorkUnitState, ProviderError> {
     let existing = transaction
         .query_row(
-            "SELECT state, expires_at_unix_ms, policy_json, expiry_action
+            "SELECT state, expires_at_unix_ms, policy_json, expiry_action, scope_json
              FROM patchouli_work_unit
              WHERE identity_json = ?1",
             [&work_unit.identity_json],
@@ -1411,6 +1732,7 @@ fn ensure_work_unit(
                     row.get::<_, u64>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
@@ -1419,7 +1741,7 @@ fn ensure_work_unit(
     let expected_expiry_action = match work_unit.expiry_action {
         WorkUnitExpiryAction::Discard => "discard",
     };
-    let Some((state, expires_at, policy_json, expiry_action)) = existing else {
+    let Some((state, expires_at, policy_json, expiry_action, scope_json)) = existing else {
         let now = sqlite_time(
             work_unit.now_unix_ms,
             "work-unit timestamp exceeds SQLite integer range",
@@ -1437,6 +1759,7 @@ fn ensure_work_unit(
             .execute(
                 "INSERT INTO patchouli_work_unit (
                     identity_json,
+                    scope_json,
                     state,
                     policy_json,
                     expiry_action,
@@ -1446,16 +1769,20 @@ fn ensure_work_unit(
                     closed_at_unix_ms
                  ) VALUES (
                     ?1,
-                    'open',
                     ?2,
+                    'open',
                     ?3,
                     ?4,
                     ?5,
-                    COALESCE((SELECT max(cursor) FROM patchouli_change), 0),
+                    ?6,
+                    COALESCE((
+                        SELECT cursor FROM patchouli_scope_frontier WHERE scope_json = ?2
+                    ), 0),
                     NULL
                  )",
                 (
                     &work_unit.identity_json,
+                    &work_unit.scope_json,
                     &work_unit.policy_json,
                     expected_expiry_action,
                     now,
@@ -1466,12 +1793,20 @@ fn ensure_work_unit(
         return Ok(StoredWorkUnitState::Open);
     };
 
-    if policy_json != work_unit.policy_json || expiry_action != expected_expiry_action {
+    if scope_json != work_unit.scope_json
+        || policy_json != work_unit.policy_json
+        || expiry_action != expected_expiry_action
+    {
         return Ok(StoredWorkUnitState::PolicyMismatch);
     }
     match state.as_str() {
         "committed" => Ok(StoredWorkUnitState::Committed),
         "expired" => Ok(StoredWorkUnitState::Expired),
+        "closing" if work_unit.now_unix_ms < expires_at => Ok(StoredWorkUnitState::Closing),
+        "closing" => {
+            expire_work_unit(transaction, &work_unit.identity_json, work_unit.now_unix_ms)?;
+            Ok(StoredWorkUnitState::Expired)
+        }
         "open" if work_unit.now_unix_ms < expires_at => Ok(StoredWorkUnitState::Open),
         "open" => {
             expire_work_unit(transaction, &work_unit.identity_json, work_unit.now_unix_ms)?;
@@ -1500,7 +1835,7 @@ fn expire_open_work_units(
         .prepare(
             "SELECT identity_json
              FROM patchouli_work_unit
-             WHERE state = 'open'
+             WHERE state IN ('open', 'closing')
                AND expiry_action = 'discard'
                AND expires_at_unix_ms <= ?1
              ORDER BY identity_json",
@@ -1529,13 +1864,19 @@ fn expire_work_unit(
         .execute(
             "UPDATE patchouli_work_unit
              SET state = 'expired', closed_at_unix_ms = ?2
-             WHERE identity_json = ?1 AND state = 'open'",
+             WHERE identity_json = ?1 AND state IN ('open', 'closing')",
             (identity, now),
         )
         .map_err(database_error)?;
     transaction
         .execute(
             "DELETE FROM patchouli_entity_version WHERE work_unit_json = ?1",
+            [identity],
+        )
+        .map_err(database_error)?;
+    transaction
+        .execute(
+            "DELETE FROM patchouli_work_unit_idempotency WHERE work_unit_json = ?1",
             [identity],
         )
         .map_err(database_error)?;
@@ -1580,13 +1921,13 @@ fn capture_work_unit_entity(
                 WHERE identity_json = ?1
              ),
              baseline(head_versions_json) AS (
-                SELECT change.head_versions_json
-                FROM patchouli_change AS change, cutoff
-                WHERE change.scope_json = ?2
-                  AND change.entity_type = ?3
-                  AND change.entity_id = ?4
-                  AND change.cursor <= cutoff.cursor
-                ORDER BY change.cursor DESC
+                SELECT history.head_versions_json
+                FROM patchouli_entity_head_history AS history, cutoff
+                WHERE history.scope_json = ?2
+                  AND history.entity_type = ?3
+                  AND history.entity_id = ?4
+                  AND history.cursor <= cutoff.cursor
+                ORDER BY history.cursor DESC
                 LIMIT 1
              )
              INSERT INTO patchouli_work_unit_base_version (
@@ -1985,7 +2326,7 @@ fn insert_change(
                 &key.entity_type,
                 &key.entity_id,
                 stored_change_kind(kind),
-                head_versions_json,
+                &head_versions_json,
                 causal_token,
                 event_meta_json,
                 recorded_at,
@@ -1993,6 +2334,20 @@ fn insert_change(
         )
         .map_err(database_error)?;
     let cursor = transaction.last_insert_rowid();
+    transaction
+        .execute(
+            "INSERT INTO patchouli_entity_head_history (
+                scope_json, entity_type, entity_id, cursor, head_versions_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            (
+                &key.scope_json,
+                &key.entity_type,
+                &key.entity_id,
+                cursor,
+                &head_versions_json,
+            ),
+        )
+        .map_err(database_error)?;
     transaction
         .execute(
             "INSERT INTO patchouli_causal_frontier (causal_token, scope_json, cursor)
@@ -2188,9 +2543,10 @@ fn commit_entity_transaction(
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(database_error)?;
+    let deadline = commit.deadline_unix_ms;
     let outcome = commit_entity_in_transaction(&transaction, commit)?;
     if outcome == EntityCommitOutcome::Committed {
-        transaction.commit().map_err(database_error)?;
+        commit_before_deadline(transaction, deadline)?;
     }
     Ok(outcome)
 }
@@ -2201,12 +2557,19 @@ fn commit_entity_idempotent(
     idempotency: IdempotencyRecord,
     now_unix_ms: u64,
 ) -> Result<IdempotentCommitOutcome, ProviderError> {
+    let deadline = commit.deadline_unix_ms;
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(database_error)?;
     transaction
         .execute(
             "DELETE FROM patchouli_idempotency WHERE expires_at_unix_ms <= ?1",
+            [now_unix_ms],
+        )
+        .map_err(database_error)?;
+    transaction
+        .execute(
+            "DELETE FROM patchouli_work_unit_idempotency WHERE expires_at_unix_ms <= ?1",
             [now_unix_ms],
         )
         .map_err(database_error)?;
@@ -2227,6 +2590,17 @@ fn commit_entity_idempotent(
             IdempotentCommitOutcome::IdempotencyConflict
         });
     }
+    let staged = transaction
+        .query_row(
+            "SELECT 1 FROM patchouli_work_unit_idempotency WHERE identity_json = ?1",
+            [&idempotency.identity_json],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(database_error)?;
+    if staged.is_some() {
+        return Ok(IdempotentCommitOutcome::IdempotencyConflict);
+    }
     match commit_entity_in_transaction(&transaction, commit)? {
         EntityCommitOutcome::Conflict { current_heads } => {
             return Ok(IdempotentCommitOutcome::EntityConflict { current_heads });
@@ -2246,18 +2620,25 @@ fn commit_entity_idempotent(
             ),
         )
         .map_err(database_error)?;
-    transaction.commit().map_err(database_error)?;
+    commit_before_deadline(transaction, deadline)?;
     Ok(IdempotentCommitOutcome::Committed)
 }
 
-fn store_idempotency(
+fn store_work_unit_idempotency(
     transaction: &rusqlite::Transaction<'_>,
+    work_unit: &str,
     idempotency: &IdempotencyRecord,
     now_unix_ms: u64,
 ) -> Result<IdempotencyReadOutcome, ProviderError> {
     transaction
         .execute(
             "DELETE FROM patchouli_idempotency WHERE expires_at_unix_ms <= ?1",
+            [now_unix_ms],
+        )
+        .map_err(database_error)?;
+    transaction
+        .execute(
+            "DELETE FROM patchouli_work_unit_idempotency WHERE expires_at_unix_ms <= ?1",
             [now_unix_ms],
         )
         .map_err(database_error)?;
@@ -2278,13 +2659,39 @@ fn store_idempotency(
             IdempotencyReadOutcome::Conflict
         });
     }
+    if let Some((stored_unit, request_json, result_json)) = transaction
+        .query_row(
+            "SELECT work_unit_json, request_json, result_json
+             FROM patchouli_work_unit_idempotency
+             WHERE identity_json = ?1",
+            [&idempotency.identity_json],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(database_error)?
+    {
+        return Ok(
+            if stored_unit == work_unit && request_json == idempotency.request_json {
+                IdempotencyReadOutcome::Replayed { result_json }
+            } else {
+                IdempotencyReadOutcome::Conflict
+            },
+        );
+    }
     transaction
         .execute(
-            "INSERT INTO patchouli_idempotency (
-                identity_json, request_json, result_json, expires_at_unix_ms
-             ) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO patchouli_work_unit_idempotency (
+                identity_json, work_unit_json, request_json, result_json, expires_at_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
             (
                 &idempotency.identity_json,
+                work_unit,
                 &idempotency.request_json,
                 &idempotency.result_json,
                 idempotency.expires_at_unix_ms,

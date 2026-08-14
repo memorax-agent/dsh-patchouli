@@ -1,3 +1,5 @@
+#[cfg(feature = "sqlite")]
+mod provider_config;
 mod transport;
 
 use std::{
@@ -16,8 +18,8 @@ use patchouli_backend::{
     ControlShutdownResult, ControlShutdownResultData, ControlStatusResult, ControlStatusResultData,
     CreateEntityParams, DeleteEntityParams, EmptyData, EngineError, HandshakeParams,
     HandshakeResult, Meta, PROTOCOL_VERSION, ProtocolEntityConflict, ProtocolErrorData,
-    ProtocolErrorReason, ReadEntityParams, RetrieveEntitiesParams, RpcParams, RpcResult,
-    ServerIdentity, ServerLimits, SubscribeChangesParams, SubscribeChangesResult,
+    ProtocolErrorReason, ReadEntityParams, RequestDeadline, RetrieveEntitiesParams, RpcParams,
+    RpcResult, ServerIdentity, ServerLimits, SubscribeChangesParams, SubscribeChangesResult,
     SubscribeChangesResultData, UnsubscribeChangesParams, UnsubscribeChangesResult,
     UnsubscribeChangesResultData, UpdateEntityParams, error_codes, methods,
 };
@@ -30,6 +32,11 @@ use tokio::{
     },
     sync::{Mutex, watch},
     task::{JoinError, JoinHandle, JoinSet},
+};
+
+#[cfg(feature = "sqlite")]
+pub use provider_config::{
+    ProviderConfig, ProviderConfigError, ProviderDefinition, ProviderRouting, load_provider,
 };
 
 const SERVER_CAPABILITIES: &[&str] = &["subscriptions"];
@@ -244,6 +251,12 @@ impl ConnectionState {
                     return Ok(true);
                 }
             };
+            if let Err(error) =
+                RequestDeadline::from_meta(&params.meta).and_then(RequestDeadline::check_now)
+            {
+                write_json_line(&mut *writer.lock().await, &rpc_backend_error(id, error)).await?;
+                return Ok(true);
+            }
             let removed = subscriptions
                 .remove(&params.data.subscription_id)
                 .is_some_and(|task| {
@@ -294,7 +307,10 @@ impl ConnectionState {
             subscription_id,
             tokio::spawn(async move {
                 while let Some(event) = stream.next().await {
-                    let Ok(event) = event else { break };
+                    let Ok(event) = event else {
+                        let _ = writer.lock().await.shutdown().await;
+                        break;
+                    };
                     let params: ChangesEventParams = RpcParams {
                         meta: event.meta,
                         data: ChangesEventData {
@@ -386,8 +402,14 @@ impl ConnectionState {
 
         match method {
             methods::CONTROL_STATUS => {
-                if let Err(error) = serde_json::from_value::<RpcParams<EmptyData>>(params) {
-                    return (rpc_error(id, -32602, &error.to_string()), false);
+                let params = match serde_json::from_value::<RpcParams<EmptyData>>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                if let Err(error) =
+                    RequestDeadline::from_meta(&params.meta).and_then(RequestDeadline::check_now)
+                {
+                    return (rpc_backend_error(id, error), false);
                 }
                 let result: ControlStatusResult = RpcResult {
                     meta: Meta::new(),
@@ -407,11 +429,22 @@ impl ConnectionState {
                 (rpc_success(id, result), false)
             }
             methods::CONTROL_CHECKPOINT => {
-                if let Err(error) = serde_json::from_value::<RpcParams<EmptyData>>(params) {
-                    return (rpc_error(id, -32602, &error.to_string()), false);
+                let params = match serde_json::from_value::<RpcParams<EmptyData>>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                let deadline = match RequestDeadline::from_meta(&params.meta) {
+                    Ok(deadline) => deadline,
+                    Err(error) => return (rpc_backend_error(id, error), false),
+                };
+                if let Err(error) = deadline.check_now() {
+                    return (rpc_backend_error(id, error), false);
                 }
                 match self.engine.checkpoint().await {
                     Ok(()) => {
+                        if let Err(error) = deadline.check_now() {
+                            return (rpc_backend_error(id, error), false);
+                        }
                         let result: ControlCheckpointResult = RpcResult {
                             meta: Meta::new(),
                             data: ControlCheckpointResultData { completed: true },
@@ -422,8 +455,14 @@ impl ConnectionState {
                 }
             }
             methods::CONTROL_SHUTDOWN => {
-                if let Err(error) = serde_json::from_value::<RpcParams<EmptyData>>(params) {
-                    return (rpc_error(id, -32602, &error.to_string()), false);
+                let params = match serde_json::from_value::<RpcParams<EmptyData>>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                if let Err(error) =
+                    RequestDeadline::from_meta(&params.meta).and_then(RequestDeadline::check_now)
+                {
+                    return (rpc_backend_error(id, error), false);
                 }
                 let result: ControlShutdownResult = RpcResult {
                     meta: Meta::new(),
@@ -720,7 +759,6 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
 
 fn rpc_backend_error(id: Value, error: BackendError) -> Value {
     let (code, reason) = match error.reason {
-        BackendErrorReason::Cancelled => (error_codes::CANCELLED, ProtocolErrorReason::Cancelled),
         BackendErrorReason::CursorExpired => (
             error_codes::CURSOR_EXPIRED,
             ProtocolErrorReason::CursorExpired,

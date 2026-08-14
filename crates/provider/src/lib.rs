@@ -1,27 +1,55 @@
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error("{message}")]
 pub struct ProviderError {
+    reason: ProviderErrorReason,
     message: String,
 }
 
 impl ProviderError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
+            reason: ProviderErrorReason::Internal,
             message: message.into(),
         }
     }
+
+    pub fn deadline_exceeded() -> Self {
+        Self::with_reason(
+            ProviderErrorReason::DeadlineExceeded,
+            "request deadline elapsed before acceptance",
+        )
+    }
+
+    pub fn with_reason(reason: ProviderErrorReason, message: impl Into<String>) -> Self {
+        Self {
+            reason,
+            message: message.into(),
+        }
+    }
+
+    pub fn reason(&self) -> ProviderErrorReason {
+        self.reason
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderErrorReason {
+    Internal,
+    DeadlineExceeded,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderRecovery {
     pub generation: u64,
     pub recovered_after_unclean_shutdown: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderCapabilities {
     pub authority: bool,
     pub replica: bool,
@@ -46,34 +74,34 @@ impl ProviderCapabilities {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntityKey {
     pub scope_json: String,
     pub entity_type: String,
     pub entity_id: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StoredVersionState {
     Active,
     Deleted,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredCrdtChange {
     pub hash: String,
     pub parents: Vec<String>,
     pub bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredCrdtField {
     pub path: String,
     pub heads: Vec<String>,
     pub changes: Vec<StoredCrdtChange>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredEntityVersion {
     pub version: String,
     pub state: StoredVersionState,
@@ -81,13 +109,13 @@ pub struct StoredEntityVersion {
     pub crdt_fields: Vec<StoredCrdtField>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntitySnapshot {
     pub head_versions: Vec<String>,
     pub versions: Vec<StoredEntityVersion>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangeQuery {
     pub scope_json: String,
     pub entity_types: Option<Vec<String>>,
@@ -97,7 +125,7 @@ pub struct ChangeQuery {
     pub retained_after_unix_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredChange {
     pub cursor: u64,
     pub entity_type: String,
@@ -107,27 +135,27 @@ pub struct StoredChange {
     pub event_meta_json: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangePage {
     pub oldest_cursor: Option<u64>,
     pub current_cursor: u64,
     pub changes: Vec<StoredChange>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsistencyQuery {
     pub scope_json: String,
     pub minimum_tokens: Vec<String>,
     pub session_keys: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConsistencyAcquireOutcome {
     Acquired { causal_token: Option<String> },
     Unavailable,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetrieveQuery {
     pub scope_json: String,
     pub entity_types: Option<Vec<String>>,
@@ -135,13 +163,13 @@ pub struct RetrieveQuery {
     pub limit: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetrievedEntity {
     pub key: EntityKey,
     pub snapshot: EntitySnapshot,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StoredChangeKind {
     Conflicted,
     Created,
@@ -150,7 +178,7 @@ pub enum StoredChangeKind {
     Updated,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntityCommit {
     pub key: EntityKey,
     pub expected_heads: Vec<String>,
@@ -161,15 +189,16 @@ pub struct EntityCommit {
     pub event_meta_json: String,
     pub session_keys: Vec<String>,
     pub recorded_at_unix_ms: u64,
+    pub deadline_unix_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntityCommitOutcome {
     Committed,
     Conflict { current_heads: Vec<String> },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdempotencyRecord {
     pub identity_json: String,
     pub request_json: String,
@@ -177,14 +206,14 @@ pub struct IdempotencyRecord {
     pub expires_at_unix_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IdempotencyReadOutcome {
     Missing,
     Replayed { result_json: String },
     Conflict,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IdempotentCommitOutcome {
     Committed,
     EntityConflict { current_heads: Vec<String> },
@@ -192,29 +221,32 @@ pub enum IdempotentCommitOutcome {
     IdempotencyConflict,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkUnit {
     pub identity_json: String,
+    pub scope_json: String,
     pub policy_json: String,
     pub expiry_action: WorkUnitExpiryAction,
     pub now_unix_ms: u64,
     pub expires_at_unix_ms: u64,
+    pub deadline_unix_ms: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkUnitExpiryAction {
     Discard,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkUnitReadOutcome {
     Open(Option<EntitySnapshot>),
+    Closing,
     PolicyMismatch,
     Committed,
     Expired,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkUnitCommit {
     pub work_unit: WorkUnit,
     pub entity: EntityCommit,
@@ -223,7 +255,7 @@ pub struct WorkUnitCommit {
     pub close: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkUnitConflict {
     pub key: EntityKey,
     pub baseline_heads: Vec<String>,
@@ -232,23 +264,24 @@ pub struct WorkUnitConflict {
     pub conflict_policy_json: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkUnitResolution {
     pub expected_published_heads: Vec<String>,
     pub entity: EntityCommit,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkUnitPublish {
     pub work_unit: WorkUnit,
     pub resolutions: Vec<WorkUnitResolution>,
     pub recorded_at_unix_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkUnitCommitOutcome {
     Staged,
     Published,
+    Closing,
     Conflict { current_heads: Vec<String> },
     PublicationConflict { conflicts: Vec<WorkUnitConflict> },
     PolicyMismatch,
@@ -287,6 +320,16 @@ pub trait Provider: Send + Sync {
         ))
     }
 
+    async fn wait_for_changes(
+        &self,
+        _scope_json: &str,
+        _after_cursor: u64,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::new(
+            "provider does not support change notifications",
+        ))
+    }
+
     async fn retrieve_entities(
         &self,
         _query: RetrieveQuery,
@@ -306,6 +349,17 @@ pub trait Provider: Send + Sync {
         _identity_json: &str,
         _request_json: &str,
         _now_unix_ms: u64,
+    ) -> Result<IdempotencyReadOutcome, ProviderError> {
+        Err(ProviderError::new("provider does not support idempotency"))
+    }
+
+    async fn read_idempotency_in_work_unit(
+        &self,
+        _work_unit: &WorkUnit,
+        _identity_json: &str,
+        _request_json: &str,
+        _now_unix_ms: u64,
+        _allow_replay: bool,
     ) -> Result<IdempotencyReadOutcome, ProviderError> {
         Err(ProviderError::new("provider does not support idempotency"))
     }

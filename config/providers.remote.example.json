@@ -1,0 +1,27 @@
+{
+  "$schema": "./providers.schema.json",
+  "version": 1,
+  "providers": {
+    "local": {
+      "kind": "local",
+      "database": "patchouli.db"
+    },
+    "shared": {
+      "kind": "remote",
+      "endpoint": "https://knowledge.example.com",
+      "token_env": "PATCHOULI_SHARED_PROVIDER_TOKEN"
+    }
+  },
+  "routing": {
+    "default": "local",
+    "rules": [
+      {
+        "scope": {
+          "workspace_id": "shared-workspace"
+        },
+        "provider": "shared"
+      }
+    ]
+  }
+}
+

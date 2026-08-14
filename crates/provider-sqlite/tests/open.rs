@@ -1,8 +1,8 @@
 use patchouli_provider::{
     ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit, EntityCommitOutcome,
-    EntityKey, Provider, StoredChangeKind, StoredCrdtChange, StoredCrdtField, StoredEntityVersion,
-    StoredVersionState, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitExpiryAction,
-    WorkUnitReadOutcome,
+    EntityKey, Provider, ProviderErrorReason, StoredChangeKind, StoredCrdtChange, StoredCrdtField,
+    StoredEntityVersion, StoredVersionState, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome,
+    WorkUnitExpiryAction, WorkUnitReadOutcome,
 };
 use patchouli_provider_sqlite::SqliteProvider;
 use tokio_rusqlite::rusqlite::{Connection, params};
@@ -61,6 +61,7 @@ async fn change_reads_prune_records_outside_configured_retention() {
             event_meta_json: "{}".to_owned(),
             session_keys: vec![],
             recorded_at_unix_ms: 10,
+            deadline_unix_ms: None,
         })
         .await
         .expect("commit entity");
@@ -76,7 +77,8 @@ async fn change_reads_prune_records_outside_configured_retention() {
         .await
         .expect("read retained changes");
     assert!(page.changes.is_empty());
-    assert_eq!(page.oldest_cursor, None);
+    assert_eq!(page.oldest_cursor, Some(2));
+    assert_eq!(page.current_cursor, 1);
     assert_eq!(
         provider
             .acquire_consistency(ConsistencyQuery {
@@ -150,7 +152,7 @@ async fn defines_generic_entries_and_typed_fact_views() {
     let schema_version: u32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read schema version");
-    assert_eq!(schema_version, 9);
+    assert_eq!(schema_version, 10);
 
     insert_active_version(
         &connection,
@@ -321,6 +323,7 @@ async fn entity_commit_compares_heads_and_rolls_back_on_conflict() {
         event_meta_json: "{}".to_owned(),
         session_keys: vec![],
         recorded_at_unix_ms: 1,
+        deadline_unix_ms: None,
     };
     assert_eq!(
         provider.commit_entity(create.clone()).await.unwrap(),
@@ -348,6 +351,43 @@ async fn entity_commit_compares_heads_and_rolls_back_on_conflict() {
 }
 
 #[tokio::test]
+async fn expired_deadline_rolls_back_provider_commit() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let provider = SqliteProvider::open(directory.path().join("patchouli.db"))
+        .await
+        .expect("open SQLite");
+    provider.initialize().await.expect("initialize SQLite");
+    let key = EntityKey {
+        scope_json: r#"{"channel_id":"channel-7"}"#.to_owned(),
+        entity_type: "knowledge".to_owned(),
+        entity_id: "expired-provider-deadline".to_owned(),
+    };
+    let error = provider
+        .commit_entity(EntityCommit {
+            key: key.clone(),
+            expected_heads: vec![],
+            new_versions: vec![StoredEntityVersion {
+                version: "v1".to_owned(),
+                state: StoredVersionState::Active,
+                value_json: Some(KNOWLEDGE.to_owned()),
+                crdt_fields: vec![],
+            }],
+            head_versions: vec!["v1".to_owned()],
+            change_kind: StoredChangeKind::Created,
+            causal_token: "expired-token".to_owned(),
+            event_meta_json: "{}".to_owned(),
+            session_keys: vec![],
+            recorded_at_unix_ms: 1,
+            deadline_unix_ms: Some(0),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason(), ProviderErrorReason::DeadlineExceeded);
+    assert_eq!(provider.read_entity(&key).await.unwrap(), None);
+    provider.shutdown().await.expect("shutdown SQLite");
+}
+
+#[tokio::test]
 async fn expired_work_unit_discards_staged_versions_without_publication() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let path = directory.path().join("patchouli.db");
@@ -366,10 +406,12 @@ async fn expired_work_unit_discards_staged_versions_without_publication() {
         identity_json:
             r#"{"fields":{"transaction_id":"expired"},"scope":{"channel_id":"channel-7"}}"#
                 .to_owned(),
+        scope_json: key.scope_json.clone(),
         policy_json: r#"{"publication":"discard"}"#.to_owned(),
         expiry_action: WorkUnitExpiryAction::Discard,
         now_unix_ms: now,
         expires_at_unix_ms: now + 60_000,
+        deadline_unix_ms: None,
     };
     assert_eq!(
         provider
@@ -405,6 +447,7 @@ async fn expired_work_unit_discards_staged_versions_without_publication() {
                     event_meta_json: "{}".to_owned(),
                     session_keys: vec![],
                     recorded_at_unix_ms: now,
+                    deadline_unix_ms: None,
                 },
                 conflict_policy_json: r#"{"strategy":"mvcc"}"#.to_owned(),
                 idempotency: None,
@@ -474,10 +517,12 @@ async fn work_unit_identity_is_bound_to_its_opening_policy() {
         identity_json:
             r#"{"fields":{"transaction_id":"policy"},"scope":{"channel_id":"channel-7"}}"#
                 .to_owned(),
+        scope_json: key.scope_json.clone(),
         policy_json: r#"{"ttl":60000}"#.to_owned(),
         expiry_action: WorkUnitExpiryAction::Discard,
         now_unix_ms: now,
         expires_at_unix_ms: now + 60_000,
+        deadline_unix_ms: None,
     };
     assert_eq!(
         provider

@@ -4,7 +4,7 @@ Patchouli 是与具体 Harness 无关的本地知识数据库后端。它通过�
 JSON-RPC/IPC 提供类型化知识、事务、冲突解决、检索和响应式变更；
 DeepSeek Harness/Cordis 插件和 Agent Loop 接入由前端协作者维护。
 
-> 当前状态：已经具备 Rust `BackendEngine`、本地 IPC、控制 CLI、SQLite provider 生命周期、可配置的一致性/冲突计划，以及 `Knowledge`/`KnowledgeRelation` v1 类型和数据库条目。默认单节点配置下的 CRUD 使用真实 SQLite 事务：Knowledge 内容通过 Automerge 合并，其他字段保留 MVCC 多版本。后端支持持久化跨 RPC work unit、固定基线、暂存读取、批次原子发布、持久化幂等、cursor 变更订阅和通用实体检索。DeepSeek Harness 插件的业务接口和 Agent Loop 接线由前端协作者实现。
+> 当前状态：已经具备 Rust `BackendEngine`、本地 IPC、控制 CLI、SQLite provider 生命周期、可配置的一致性/冲突计划，以及 `Knowledge`/`KnowledgeRelation` v1 类型和数据库条目。默认 CRUD 使用真实 SQLite 事务：Knowledge 内容通过 Automerge 合并，其他字段保留 MVCC 多版本。后端支持持久化跨 RPC work unit、固定基线、暂存读取、批次原子发布、持久化幂等、cursor 变更订阅、通用实体检索，以及按 scope 将请求稳定路由到 `local` 或经过认证的远程 provider。DeepSeek Harness 插件的业务接口和 Agent Loop 接线由前端协作者实现。
 
 daemon 会独占数据库实例，记录运行代次和正常/异常关闭状态。正常停止会先停止接收连接、关闭现有 IPC 会话，再执行 SQLite WAL checkpoint、持久化干净关闭标记并释放数据库锁；异常退出后的下一次启动由 SQLite WAL 自动恢复已提交事务，并在状态接口中报告恢复事实。
 
@@ -51,10 +51,12 @@ cargo install --path crates/server
 ```bash
 mkdir -p "$HOME/.patchouli"
 cp config/patchouli.default.json "$HOME/.patchouli/config.json"
+cp config/providers.local.json "$HOME/.patchouli/providers.json"
 ```
 
-daemon 通过 `patchouli serve` 加载 `~/.patchouli/config.json` 并打开默认的
-`~/.patchouli/data/patchouli.db`。它由 `patchouli stop --endpoint <endpoint>`
+daemon 通过 `patchouli serve` 同时加载业务 policy 和 provider/routing 配置。
+`providers.json` 中唯一的本地 provider 固定命名为 `local`，相对数据库路径以该文件目录为基准。
+它由 `patchouli stop --endpoint <endpoint>`
 显式停止。运行期间可用
 `patchouli checkpoint --endpoint <endpoint>` 主动执行一次 WAL checkpoint。详细的三平台命令见
 [开发文档](docs/development.md)。
@@ -68,6 +70,8 @@ daemon 通过 `patchouli serve` 加载 `~/.patchouli/config.json` 并打开默�
 ├── crates/
 │   ├── backend/              # Rust 数据库后端核心契约
 │   ├── provider/             # 数据库 provider 公共边界
+│   ├── provider-remote/      # 远程 provider 认证传输
+│   ├── provider-router/      # 基于 scope 的稳定路由
 │   ├── provider-sqlite/      # 默认 SQLite adapter
 │   └── server/               # 跨平台 daemon、IPC 和控制 CLI
 ├── packages/

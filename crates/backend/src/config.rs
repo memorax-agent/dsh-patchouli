@@ -45,7 +45,7 @@ impl MetaField {
         meta.pointer(&self.pointer)
     }
 
-    pub(crate) fn validate_value(&self, value: &Value) -> Result<(), String> {
+    pub fn validate_value(&self, value: &Value) -> Result<(), String> {
         let validator = build_json_schema(&self.schema)?;
         validator.validate(value).map_err(|error| error.to_string())
     }
@@ -290,6 +290,12 @@ impl BackendConfig {
                 return Err(invalid(
                     format!("meta_fields.{name}.pointer"),
                     "pointer must be a non-root RFC 6901 JSON Pointer relative to meta",
+                ));
+            }
+            if field.pointer == format!("/{}", crate::DEADLINE_META_FIELD) {
+                return Err(invalid(
+                    format!("meta_fields.{name}.pointer"),
+                    "the protocol deadline field is reserved and cannot be configured as identity or policy metadata",
                 ));
             }
             validate_json_schema(&format!("meta_fields.{name}.schema"), &field.schema)?;

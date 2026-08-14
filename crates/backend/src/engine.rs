@@ -8,16 +8,16 @@ use async_trait::async_trait;
 use patchouli_provider::{
     ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit, EntityCommitOutcome,
     EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord, IdempotentCommitOutcome,
-    Provider, ProviderCapabilities, ProviderError, ProviderRecovery, RetrieveQuery,
-    StoredChangeKind, StoredCrdtChange, StoredCrdtField, StoredEntityVersion, StoredVersionState,
-    WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitConflict, WorkUnitExpiryAction,
-    WorkUnitPublish, WorkUnitReadOutcome, WorkUnitResolution,
+    Provider, ProviderCapabilities, ProviderError, ProviderErrorReason, ProviderRecovery,
+    RetrieveQuery, StoredChangeKind, StoredCrdtChange, StoredCrdtField, StoredEntityVersion,
+    StoredVersionState, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitConflict,
+    WorkUnitExpiryAction, WorkUnitPublish, WorkUnitReadOutcome, WorkUnitResolution,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use thiserror::Error;
-use tokio::sync::{Mutex, Notify, OwnedMutexGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use uuid::Uuid;
 
 use crate::{
@@ -27,8 +27,9 @@ use crate::{
     CreateEntityParams, DeleteEntityParams, EntityRef, EntityVersion, EntityVersionConflict, Meta,
     MutationData, MutationResult, PolicySelection, PolicySelector, PublicationPolicy,
     PublishedChange, ReadEntityParams, ReadEntityResult, ReadEntityResultData, ReadState,
-    RetrievalHit, RetrieveEntitiesParams, RetrieveEntitiesResult, RetrieveEntitiesResultData,
-    RpcResult, SubscribeChangesParams, UpdateEntityParams, resolve_prepared_conflict,
+    RequestDeadline, RetrievalHit, RetrieveEntitiesParams, RetrieveEntitiesResult,
+    RetrieveEntitiesResultData, RpcResult, SubscribeChangesParams, UpdateEntityParams,
+    resolve_prepared_conflict,
 };
 
 #[derive(Debug, Error)]
@@ -50,15 +51,26 @@ impl ExecutionLocks {
         selection: &PolicySelection,
         mutation: bool,
     ) -> Result<Vec<OwnedMutexGuard<()>>, BackendError> {
+        self.acquire_many(std::slice::from_ref(selection), mutation)
+            .await
+    }
+
+    async fn acquire_many(
+        &self,
+        selections: &[PolicySelection],
+        mutation: bool,
+    ) -> Result<Vec<OwnedMutexGuard<()>>, BackendError> {
         let mut keys = BTreeSet::new();
-        if let Some(key) = &selection.consistency.linearization_key {
-            keys.insert(serde_json::to_string(key).map_err(invalid_request)?);
-        }
-        if mutation && let Some(key) = &selection.consistency.commit_ordering_key {
-            keys.insert(serde_json::to_string(key).map_err(invalid_request)?);
-        }
-        if mutation && let Some(key) = &selection.idempotency_key {
-            keys.insert(serde_json::to_string(key).map_err(invalid_request)?);
+        for selection in selections {
+            if let Some(key) = &selection.consistency.linearization_key {
+                keys.insert(serde_json::to_string(key).map_err(invalid_request)?);
+            }
+            if mutation && let Some(key) = &selection.consistency.commit_ordering_key {
+                keys.insert(serde_json::to_string(key).map_err(invalid_request)?);
+            }
+            if mutation && let Some(key) = &selection.idempotency_key {
+                keys.insert(serde_json::to_string(key).map_err(invalid_request)?);
+            }
         }
         let locks = {
             let mut known = self.by_key.lock().await;
@@ -89,7 +101,6 @@ pub struct BackendEngine {
     provider: Arc<dyn Provider>,
     recovery: ProviderRecovery,
     execution_locks: ExecutionLocks,
-    changes: Arc<Notify>,
 }
 
 impl BackendEngine {
@@ -114,7 +125,6 @@ impl BackendEngine {
             provider,
             recovery,
             execution_locks: ExecutionLocks::default(),
-            changes: Arc::new(Notify::new()),
         })
     }
 
@@ -215,16 +225,20 @@ fn validate_provider_capabilities(
 #[async_trait]
 impl BackendService for BackendEngine {
     async fn create(&self, params: CreateEntityParams) -> Result<MutationResult, BackendError> {
+        let deadline = RequestDeadline::from_meta(&params.meta)?;
+        deadline.check_now()?;
         let selection = self.select(&params.data.entity_type, &params.meta)?;
         let _execution_guards = self.execution_locks.acquire(&selection, true).await?;
+        deadline.check_now()?;
         self.acquire_consistency(&selection).await?;
+        deadline.check_now()?;
+        let work_unit = selected_work_unit(&selection, deadline)?;
         let idempotency = self
-            .prepare_idempotency(&selection, "create", &params.data)
+            .prepare_idempotency(&selection, work_unit.as_ref(), "create", &params.data)
             .await?;
         if let Some(result) = replayed(&idempotency)? {
             return Ok(result);
         }
-        let work_unit = selected_work_unit(&selection)?;
         self.config
             .validate_entity_value(&params.data.entity_type, &params.data.value)
             .map_err(invalid_request)?;
@@ -256,6 +270,7 @@ impl BackendService for BackendEngine {
             event_meta_json: event_meta_json(&selection)?,
             session_keys: session_keys(&selection)?,
             recorded_at_unix_ms: unix_time_ms()?,
+            deadline_unix_ms: deadline.unix_ms(),
         };
         let mut result = mutation_result(entity_ref.clone(), version.clone(), params.data.value);
         result.meta = consistency_meta(&selection, Some(version));
@@ -277,14 +292,19 @@ impl BackendService for BackendEngine {
     }
 
     async fn read(&self, params: ReadEntityParams) -> Result<ReadEntityResult, BackendError> {
+        let deadline = RequestDeadline::from_meta(&params.meta)?;
+        deadline.check_now()?;
         let selection = self.select(&params.data.entity_ref.entity_type, &params.meta)?;
         let _execution_guards = self.execution_locks.acquire(&selection, false).await?;
+        deadline.check_now()?;
         let causal_token = self.acquire_consistency(&selection).await?;
-        let work_unit = selected_work_unit(&selection)?;
+        deadline.check_now()?;
+        let work_unit = selected_work_unit(&selection, deadline)?;
         let key = entity_key(&selection, &params.data.entity_ref)?;
         let snapshot = read_selected(self.provider.as_ref(), work_unit.as_ref(), &key)
             .await?
             .ok_or_else(not_found)?;
+        deadline.check_now()?;
         let variants = head_entities(&params.data.entity_ref, &snapshot)?;
         let state = read_state(&variants);
         Ok(RpcResult {
@@ -297,6 +317,8 @@ impl BackendService for BackendEngine {
         &self,
         params: RetrieveEntitiesParams,
     ) -> Result<RetrieveEntitiesResult, BackendError> {
+        let deadline = RequestDeadline::from_meta(&params.meta)?;
+        deadline.check_now()?;
         if params.data.query.trim().is_empty() {
             return Err(invalid_request("retrieval query must not be empty"));
         }
@@ -318,13 +340,20 @@ impl BackendService for BackendEngine {
             .types
             .clone()
             .unwrap_or_else(|| self.config.entity_types.keys().cloned().collect());
+        let selections = selected_types
+            .iter()
+            .map(|entity_type| self.select(entity_type, &params.meta))
+            .collect::<Result<Vec<_>, _>>()?;
+        let _consistency_guards = self
+            .execution_locks
+            .acquire_many(&selections, false)
+            .await?;
+        deadline.check_now()?;
         let mut result_meta = Meta::new();
-        let mut consistency_guards = Vec::new();
-        for entity_type in &selected_types {
-            let selection = self.select(entity_type, &params.meta)?;
-            consistency_guards.extend(self.execution_locks.acquire(&selection, false).await?);
-            let causal_token = self.acquire_consistency(&selection).await?;
-            result_meta.extend(consistency_meta(&selection, causal_token));
+        for selection in &selections {
+            let causal_token = self.acquire_consistency(selection).await?;
+            result_meta.extend(consistency_meta(selection, causal_token));
+            deadline.check_now()?;
         }
         let meta = serde_json::to_value(&params.meta).map_err(invalid_request)?;
         let scope = self.selector.select_scope(&meta).map_err(invalid_request)?;
@@ -338,6 +367,7 @@ impl BackendService for BackendEngine {
             })
             .await
             .map_err(provider_backend_error)?;
+        deadline.check_now()?;
         let hits = entities
             .into_iter()
             .map(|entity| {
@@ -358,16 +388,20 @@ impl BackendService for BackendEngine {
     }
 
     async fn update(&self, params: UpdateEntityParams) -> Result<MutationResult, BackendError> {
+        let deadline = RequestDeadline::from_meta(&params.meta)?;
+        deadline.check_now()?;
         let selection = self.select(&params.data.entity_ref.entity_type, &params.meta)?;
         let _execution_guards = self.execution_locks.acquire(&selection, true).await?;
+        deadline.check_now()?;
         self.acquire_consistency(&selection).await?;
+        deadline.check_now()?;
+        let work_unit = selected_work_unit(&selection, deadline)?;
         let idempotency = self
-            .prepare_idempotency(&selection, "update", &params.data)
+            .prepare_idempotency(&selection, work_unit.as_ref(), "update", &params.data)
             .await?;
         if let Some(result) = replayed(&idempotency)? {
             return Ok(result);
         }
-        let work_unit = selected_work_unit(&selection)?;
         self.config
             .validate_entity_value(&params.data.entity_ref.entity_type, &params.data.value)
             .map_err(invalid_request)?;
@@ -447,6 +481,7 @@ impl BackendService for BackendEngine {
             event_meta_json: event_meta_json(&selection)?,
             session_keys: session_keys(&selection)?,
             recorded_at_unix_ms: unix_time_ms()?,
+            deadline_unix_ms: deadline.unix_ms(),
         };
         if work_unit.is_none()
             && let Some(idempotency) = idempotency
@@ -467,16 +502,20 @@ impl BackendService for BackendEngine {
     }
 
     async fn delete(&self, params: DeleteEntityParams) -> Result<MutationResult, BackendError> {
+        let deadline = RequestDeadline::from_meta(&params.meta)?;
+        deadline.check_now()?;
         let selection = self.select(&params.data.entity_ref.entity_type, &params.meta)?;
         let _execution_guards = self.execution_locks.acquire(&selection, true).await?;
+        deadline.check_now()?;
         self.acquire_consistency(&selection).await?;
+        deadline.check_now()?;
+        let work_unit = selected_work_unit(&selection, deadline)?;
         let idempotency = self
-            .prepare_idempotency(&selection, "delete", &params.data)
+            .prepare_idempotency(&selection, work_unit.as_ref(), "delete", &params.data)
             .await?;
         if let Some(result) = replayed(&idempotency)? {
             return Ok(result);
         }
-        let work_unit = selected_work_unit(&selection)?;
         let key = entity_key(&selection, &params.data.entity_ref)?;
         let snapshot = read_selected(self.provider.as_ref(), work_unit.as_ref(), &key)
             .await?
@@ -522,6 +561,7 @@ impl BackendService for BackendEngine {
             event_meta_json: event_meta_json(&selection)?,
             session_keys: session_keys(&selection)?,
             recorded_at_unix_ms: unix_time_ms()?,
+            deadline_unix_ms: deadline.unix_ms(),
         };
         if work_unit.is_none()
             && let Some(idempotency) = idempotency
@@ -541,12 +581,13 @@ impl BackendService for BackendEngine {
         &self,
         params: SubscribeChangesParams,
     ) -> Result<ChangeSubscription, BackendError> {
+        let deadline = RequestDeadline::from_meta(&params.meta)?;
+        deadline.check_now()?;
         let meta = serde_json::to_value(&params.meta).map_err(invalid_request)?;
         let scope = self.selector.select_scope(&meta).map_err(invalid_request)?;
         let scope_json = serde_json::to_string(&scope).map_err(invalid_request)?;
         let filter = params.data.filter.unwrap_or_default();
         let provider = Arc::clone(&self.provider);
-        let changes = Arc::clone(&self.changes);
         let change_retention_seconds = self.config.retention.changes_seconds;
         let probe = provider
             .read_changes(ChangeQuery {
@@ -559,6 +600,7 @@ impl BackendService for BackendEngine {
             })
             .await
             .map_err(provider_backend_error)?;
+        deadline.check_now()?;
         let cursor = match params.data.after_cursor {
             Some(cursor) => parse_change_cursor(&cursor)?,
             None => probe.current_cursor,
@@ -567,8 +609,6 @@ impl BackendService for BackendEngine {
         let stream = async_stream::try_stream! {
             let mut cursor = cursor;
             loop {
-                let notified = changes.notified();
-                tokio::pin!(notified);
                 let page = provider
                     .read_changes(ChangeQuery {
                         scope_json: scope_json.clone(),
@@ -582,7 +622,11 @@ impl BackendService for BackendEngine {
                     .map_err(provider_backend_error)?;
                 validate_change_cursor(cursor, &page)?;
                 if page.changes.is_empty() {
-                    notified.await;
+                    cursor = page.current_cursor;
+                    provider
+                        .wait_for_changes(&scope_json, cursor)
+                        .await
+                        .map_err(provider_backend_error)?;
                     continue;
                 }
                 for change in page.changes {
@@ -698,6 +742,7 @@ impl BackendEngine {
     async fn prepare_idempotency<T: Serialize>(
         &self,
         selection: &PolicySelection,
+        work_unit: Option<&SelectedWorkUnit>,
         operation: &str,
         data: &T,
     ) -> Result<Option<PreparedIdempotency>, BackendError> {
@@ -713,12 +758,27 @@ impl BackendEngine {
         let identity_json = serde_json::to_string(key).map_err(invalid_request)?;
         let request_json = serde_json::to_string(&IdempotencyRequest { operation, data })
             .map_err(invalid_request)?;
-        let result_json = match self
-            .provider
-            .read_idempotency(&identity_json, &request_json, unix_time_ms()?)
-            .await
-            .map_err(provider_backend_error)?
-        {
+        let now = unix_time_ms()?;
+        let outcome = match work_unit {
+            Some(work_unit) => {
+                self.provider
+                    .read_idempotency_in_work_unit(
+                        &work_unit.work_unit,
+                        &identity_json,
+                        &request_json,
+                        now,
+                        !work_unit.close,
+                    )
+                    .await
+            }
+            None => {
+                self.provider
+                    .read_idempotency(&identity_json, &request_json, now)
+                    .await
+            }
+        }
+        .map_err(provider_backend_error)?;
+        let result_json = match outcome {
             IdempotencyReadOutcome::Missing => None,
             IdempotencyReadOutcome::Replayed { result_json } => Some(result_json),
             IdempotencyReadOutcome::Conflict => return Err(idempotency_conflict()),
@@ -747,10 +807,7 @@ impl BackendEngine {
             .await
             .map_err(provider_backend_error)?;
         match outcome {
-            IdempotentCommitOutcome::Committed => {
-                self.changes.notify_waiters();
-                Ok(result)
-            }
+            IdempotentCommitOutcome::Committed => Ok(result),
             IdempotentCommitOutcome::EntityConflict { current_heads } => {
                 Err(BackendError::version_conflict(current_heads))
             }
@@ -861,6 +918,7 @@ struct WorkUnitPolicy<'a> {
 
 fn selected_work_unit(
     selection: &PolicySelection,
+    deadline: RequestDeadline,
 ) -> Result<Option<SelectedWorkUnit>, BackendError> {
     let PublicationPolicy::Batch {
         close_when,
@@ -891,10 +949,12 @@ fn selected_work_unit(
     Ok(Some(SelectedWorkUnit {
         work_unit: WorkUnit {
             identity_json,
+            scope_json: serde_json::to_string(&selection.scope).map_err(invalid_request)?,
             policy_json,
             expiry_action: WorkUnitExpiryAction::Discard,
             now_unix_ms: now,
             expires_at_unix_ms: expires,
+            deadline_unix_ms: deadline.unix_ms(),
         },
         close,
     }))
@@ -1263,6 +1323,7 @@ async fn read_selected(
         .map_err(provider_backend_error)?
     {
         WorkUnitReadOutcome::Open(snapshot) => Ok(snapshot),
+        WorkUnitReadOutcome::Closing => Err(closed_work_unit()),
         WorkUnitReadOutcome::PolicyMismatch => Err(work_unit_policy_mismatch()),
         WorkUnitReadOutcome::Committed => Err(closed_work_unit()),
         WorkUnitReadOutcome::Expired => Err(expired_work_unit()),
@@ -1288,8 +1349,7 @@ impl BackendEngine {
                 EntityCommitOutcome::Conflict { current_heads } => {
                     Err(BackendError::version_conflict(current_heads))
                 }
-            }
-            .inspect(|_| self.changes.notify_waiters());
+            };
         };
         let conflict_policy_json =
             serde_json::to_string(&selection.conflict).map_err(invalid_request)?;
@@ -1320,13 +1380,11 @@ impl BackendEngine {
             .await
             .map_err(provider_backend_error)?;
         match outcome {
-            WorkUnitCommitOutcome::Published => {
-                self.changes.notify_waiters();
-                self.provider
-                    .read_entity(&committed_key)
-                    .await
-                    .map_err(provider_backend_error)
-            }
+            WorkUnitCommitOutcome::Published => self
+                .provider
+                .read_entity(&committed_key)
+                .await
+                .map_err(provider_backend_error),
             WorkUnitCommitOutcome::PublicationConflict { conflicts } => {
                 Err(publication_conflict_error(&conflicts))
             }
@@ -1445,6 +1503,7 @@ impl BackendEngine {
                 event_meta_json: "{}".to_owned(),
                 session_keys: Vec::new(),
                 recorded_at_unix_ms: unix_time_ms()?,
+                deadline_unix_ms: None,
             },
         })
     }
@@ -1471,6 +1530,7 @@ fn map_work_unit_outcome(outcome: WorkUnitCommitOutcome) -> Result<(), BackendEr
             Err(publication_conflict_error(&conflicts))
         }
         WorkUnitCommitOutcome::PolicyMismatch => Err(work_unit_policy_mismatch()),
+        WorkUnitCommitOutcome::Closing => Err(closed_work_unit()),
         WorkUnitCommitOutcome::Committed => Err(closed_work_unit()),
         WorkUnitCommitOutcome::Expired => Err(expired_work_unit()),
         WorkUnitCommitOutcome::Replayed { .. } => Err(provider_corruption(
@@ -1556,7 +1616,11 @@ fn conflict_backend_error(error: crate::ConflictError) -> BackendError {
 }
 
 fn provider_backend_error(error: ProviderError) -> BackendError {
-    BackendError::new(BackendErrorReason::Overloaded, error.to_string())
+    let reason = match error.reason() {
+        ProviderErrorReason::Internal => BackendErrorReason::Overloaded,
+        ProviderErrorReason::DeadlineExceeded => BackendErrorReason::DeadlineExceeded,
+    };
+    BackendError::new(reason, error.to_string())
 }
 
 fn provider_corruption(message: &str) -> BackendError {

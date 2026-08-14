@@ -10,7 +10,6 @@ pub struct EntityVersionConflict {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackendErrorReason {
-    Cancelled,
     CursorExpired,
     DeadlineExceeded,
     IdempotencyConflict,

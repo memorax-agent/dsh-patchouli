@@ -6,8 +6,13 @@ contains method business fields; the backend interprets `meta` through named
 configuration fields.
 
 This policy file does not select or configure a physical database provider.
-Provider connection settings belong to daemon startup; for the initial SQLite
-adapter that setting is the database file path.
+Physical adapters and scope routing use the separate
+[`config/providers.schema.json`](../config/providers.schema.json) shape. The
+only local SQLite adapter is named `local`; remote entries contain an HTTPS
+endpoint plus the name of an environment variable holding its bearer token.
+Ordered route rules partially match canonical scope fields and use the first
+match, followed by one explicit default. A route failure is returned directly:
+there is no fallback to another database.
 
 The frontend plugin does not select consistency or maintain transaction state.
 It may request a conflict strategy through the configured metadata field; when

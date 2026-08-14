@@ -45,6 +45,17 @@ fn configuration_schema_and_example_are_valid() {
 }
 
 #[test]
+fn configuration_rejects_the_reserved_deadline_field() {
+    let mut config: serde_json::Value = serde_json::from_str(DEFAULT).unwrap();
+    config["meta_fields"]["deadline"] = json!({
+        "pointer": "/deadline_unix_ms",
+        "schema": { "type": "integer", "minimum": 0 }
+    });
+    let error = BackendConfig::from_json(&config.to_string()).unwrap_err();
+    assert!(error.to_string().contains("reserved"));
+}
+
+#[test]
 fn common_consistency_patterns_compile_to_the_expected_plans() {
     for (name, document) in [
         ("eventual", EVENTUAL),

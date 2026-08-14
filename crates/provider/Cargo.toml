@@ -9,4 +9,5 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
+serde.workspace = true
 thiserror.workspace = true

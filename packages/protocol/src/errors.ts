@@ -10,14 +10,12 @@ export const errorCodes = {
   idempotencyConflict: -32005,
   unsupportedCapability: -32006,
   deadlineExceeded: -32007,
-  cancelled: -32008,
   overloaded: -32009,
   cursorExpired: -32010,
   workUnitExpired: -32011,
 } as const
 
 export type ErrorReason =
-  | 'CANCELLED'
   | 'CURSOR_EXPIRED'
   | 'DEADLINE_EXCEEDED'
   | 'FORBIDDEN'

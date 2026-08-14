@@ -36,7 +36,6 @@ test('OpenRPC, TypeScript methods, and error codes stay in sync', () => {
     Object.entries(document.components.errors).map(([name, { code }]) => [name, code]),
   )
   assert.deepEqual(documentedErrors, {
-    Cancelled: errorCodes.cancelled,
     CursorExpired: errorCodes.cursorExpired,
     DeadlineExceeded: errorCodes.deadlineExceeded,
     Forbidden: errorCodes.forbidden,

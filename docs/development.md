@@ -41,7 +41,7 @@ macOS/Linux lifecycle:
 ```bash
 patchouli serve \
   --endpoint "$HOME/.patchouli/run/patchouli.sock" \
-  --database "$HOME/.patchouli/data/patchouli.db" \
+  --providers "$HOME/.patchouli/providers.json" \
   --config "$HOME/.patchouli/config.json"
 patchouli status --endpoint "$HOME/.patchouli/run/patchouli.sock"
 patchouli checkpoint --endpoint "$HOME/.patchouli/run/patchouli.sock"
@@ -52,9 +52,9 @@ Manual PowerShell lifecycle:
 
 ```powershell
 $endpoint = '\\.\pipe\patchouli'
-$database = Join-Path $HOME '.patchouli\data\patchouli.db'
 $config = Join-Path $HOME '.patchouli\config.json'
-patchouli serve --endpoint $endpoint --database $database --config $config
+$providers = Join-Path $HOME '.patchouli\providers.json'
+patchouli serve --endpoint $endpoint --providers $providers --config $config
 patchouli status --endpoint $endpoint
 patchouli checkpoint --endpoint $endpoint
 patchouli stop --endpoint $endpoint
@@ -88,6 +88,7 @@ Validate the existing backend policy file without starting a daemon:
 
 ```bash
 patchouli config check config/patchouli.default.json
+patchouli config check config/patchouli.default.json --providers config/providers.local.json
 ```
 
 The two entries in `pnpm-workspace.yaml` are explicit exceptions to pnpm's minimum-release-age policy. DeepSeek Harness and its Cordis dependency were newly published when this repository was initialized; all other dependencies remain subject to the active supply-chain policy.
@@ -101,8 +102,10 @@ The matrix job builds Linux, macOS, and Windows daemon binaries. Tags named
 also build on the registered self-hosted runner, install the daemon under
 `PATCHOULI_DEPLOY_ROOT` (default `~/.patchouli`), restart it, and verify
 `patchouli status`. A failed health check restores and restarts the previous
-binary. Repository variables may override deploy root, endpoint, database, and
-configuration paths. The workflow does not install or modify a DSH plugin.
+binary. Repository variables may override deploy root, endpoint, backend policy,
+and provider configuration paths. Without `PATCHOULI_PROVIDERS`, deployment
+creates one persistent local-only provider configuration under the deploy root.
+The workflow does not install or modify a DSH plugin.
 
 ## Generated files
 

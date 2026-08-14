@@ -52,7 +52,9 @@ export interface JsonRpcFailure<TData = JsonValue> {
 export type ChangeCursor = string
 export type VersionToken = string
 
-export type Meta = JsonObject
+export type Meta = JsonObject & {
+  readonly deadline_unix_ms?: number
+}
 
 export interface RpcParams<TData> {
   readonly meta: Meta

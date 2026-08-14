@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
 use patchouli_backend::{
@@ -93,6 +93,61 @@ async fn sqlite_replays_idempotent_mutations_and_retrieves_and_streams_changes()
 }
 
 #[tokio::test]
+async fn default_retrieval_across_all_entity_types_does_not_reacquire_the_same_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = start_engine(&directory.path().join("patchouli.db")).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        engine.retrieve(RpcParams {
+            meta: meta([]),
+            data: RetrieveEntitiesData {
+                query: "nothing".to_owned(),
+                types: None,
+                limit: 10,
+            },
+        }),
+    )
+    .await
+    .expect("multi-type retrieval must not deadlock")
+    .unwrap();
+    assert!(result.data.hits.is_empty());
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn expired_deadline_rejects_mutation_before_acceptance() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = start_engine(&directory.path().join("patchouli.db")).await;
+    let error = engine
+        .create(RpcParams {
+            meta: meta([("deadline_unix_ms", json!(0))]),
+            data: CreateEntityData {
+                entity_type: "knowledge".to_owned(),
+                id: Some("expired-deadline".to_owned()),
+                value: knowledge("must not persist", "deadline"),
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason, BackendErrorReason::DeadlineExceeded);
+
+    let read = engine
+        .read(RpcParams {
+            meta: meta([]),
+            data: ReadEntityData {
+                entity_ref: EntityRef {
+                    entity_type: "knowledge".to_owned(),
+                    id: "expired-deadline".to_owned(),
+                },
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(read.reason, BackendErrorReason::NotFound);
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn causal_and_session_frontiers_survive_restart() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("patchouli.db");
@@ -182,6 +237,16 @@ async fn batch_acceptance_and_idempotency_commit_atomically() {
         rule["behavior"]["idempotency"] = json!({ "mode": "keyed", "key_by": ["request_id"] });
     }
     let engine = start_engine_with(&path, &config.to_string()).await;
+    let mut subscription = engine
+        .subscribe(RpcParams {
+            meta: meta([]),
+            data: SubscribeChangesData {
+                filter: None,
+                after_cursor: None,
+            },
+        })
+        .await
+        .unwrap();
     let first = RpcParams {
         meta: work_unit_meta(
             "idempotent-batch",
@@ -211,6 +276,22 @@ async fn batch_acceptance_and_idempotency_commit_atomically() {
         })
         .await
         .unwrap();
+    let first_event = tokio::time::timeout(Duration::from_secs(1), subscription.stream.next())
+        .await
+        .expect("batch publication must wake subscriptions")
+        .unwrap()
+        .unwrap();
+    let second_event = tokio::time::timeout(Duration::from_secs(1), subscription.stream.next())
+        .await
+        .expect("batch publication must publish every member")
+        .unwrap()
+        .unwrap();
+    let ids = [
+        first_event.change.entity_ref.id,
+        second_event.change.entity_ref.id,
+    ];
+    assert!(ids.contains(&"batch-idempotent-a".to_owned()));
+    assert!(ids.contains(&"batch-idempotent-b".to_owned()));
     let visible = engine
         .read(RpcParams {
             meta: meta([]),
@@ -225,6 +306,52 @@ async fn batch_acceptance_and_idempotency_commit_atomically() {
         .unwrap();
     assert_eq!(visible.data.state, ReadState::Active);
     engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn expired_batch_discards_staged_idempotency_instead_of_replaying_success() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("patchouli.db");
+    let mut config: Value = serde_json::from_str(WORK_UNITS).unwrap();
+    config["meta_fields"]["request_id"] = json!({
+        "pointer": "/request_id",
+        "schema": { "type": "string", "minLength": 1 }
+    });
+    for rule in config["entity_types"]["knowledge"]["rules"]
+        .as_array_mut()
+        .unwrap()
+    {
+        rule["behavior"]["idempotency"] = json!({ "mode": "keyed", "key_by": ["request_id"] });
+        rule["behavior"]["publication"]["staging_ttl_ms"] = json!(50);
+    }
+    let engine = start_engine_with(&path, &config.to_string()).await;
+    let request = RpcParams {
+        meta: work_unit_meta(
+            "expiring-idempotent-batch",
+            false,
+            [("request_id", json!("expiring-request"))],
+        ),
+        data: CreateEntityData {
+            entity_type: "knowledge".to_owned(),
+            id: Some("expiring-batch-entity".to_owned()),
+            value: knowledge("staged", "batch"),
+        },
+    };
+    engine.create(request.clone()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let error = engine.create(request).await.unwrap_err();
+    assert_eq!(error.reason, BackendErrorReason::WorkUnitExpired);
+    engine.shutdown().await.unwrap();
+
+    let connection = Connection::open(path).unwrap();
+    let staged: u64 = connection
+        .query_row(
+            "SELECT count(*) FROM patchouli_work_unit_idempotency",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(staged, 0);
 }
 
 #[tokio::test]
@@ -725,7 +852,7 @@ async fn work_unit_rejects_external_baseline_drift_when_requested() {
                 ],
             ),
             data: UpdateEntityData {
-                entity_ref,
+                entity_ref: entity_ref.clone(),
                 value: knowledge("inside", "inside"),
             },
         })
@@ -739,6 +866,18 @@ async fn work_unit_rejects_external_baseline_drift_when_requested() {
         error.conflicts[0].current_versions,
         vec![version(&outside.data.entity)]
     );
+    let sealed = engine
+        .create(RpcParams {
+            meta: work_unit_meta("work-reject", false, []),
+            data: CreateEntityData {
+                entity_type: "knowledge".to_owned(),
+                id: Some("must-not-join-after-close".to_owned()),
+                value: knowledge("late", "late"),
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(sealed.reason, BackendErrorReason::InvalidRequest);
     engine.shutdown().await.unwrap();
 }
 
@@ -891,7 +1030,8 @@ async fn work_unit_resolves_stale_member_writes_before_atomic_publication() {
 #[tokio::test]
 async fn work_unit_uses_one_global_baseline_for_entities_first_read_later() {
     let directory = tempfile::tempdir().unwrap();
-    let engine = start_engine_with(&directory.path().join("patchouli.db"), WORK_UNITS).await;
+    let path = directory.path().join("patchouli.db");
+    let engine = start_engine_with(&path, WORK_UNITS).await;
     let first_ref = EntityRef {
         entity_type: "knowledge".to_owned(),
         id: "baseline-first".to_owned(),
@@ -924,6 +1064,14 @@ async fn work_unit_uses_one_global_baseline_for_entities_first_read_later() {
         .unwrap();
     let first_base = version(&first.data.entity);
     let second_base = version(&second.data.entity);
+
+    engine.shutdown().await.unwrap();
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute("DELETE FROM patchouli_change", [])
+        .unwrap();
+    drop(connection);
+    let engine = start_engine_with(&path, WORK_UNITS).await;
 
     engine
         .read(RpcParams {

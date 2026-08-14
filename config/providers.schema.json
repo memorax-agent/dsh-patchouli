@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Patchouli physical provider configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "version", "providers", "routing"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "version": { "const": 1 },
+    "providers": {
+      "type": "object",
+      "required": ["local"],
+      "minProperties": 1,
+      "propertyNames": { "type": "string", "minLength": 1 },
+      "additionalProperties": { "$ref": "#/$defs/provider" }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default", "rules"],
+      "properties": {
+        "default": { "type": "string", "minLength": 1 },
+        "rules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/route" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "provider": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "database"],
+          "properties": {
+            "kind": { "const": "local" },
+            "database": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "endpoint", "token_env"],
+          "properties": {
+            "kind": { "const": "remote" },
+            "endpoint": { "type": "string", "format": "uri" },
+            "token_env": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "provider"],
+      "properties": {
+        "scope": {
+          "type": "object",
+          "minProperties": 1
+        },
+        "provider": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
+

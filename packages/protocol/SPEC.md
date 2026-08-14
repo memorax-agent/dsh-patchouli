@@ -21,8 +21,9 @@ The words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are normative.
 - A server notification has no `id`. Clients MUST NOT respond to
   `patchouli.changes.event@1`.
 - Every non-handshake method uses `params: { meta, data }`. `meta` is an open
-  JSON object interpreted by backend configuration. `data` is the strict method
-  business schema; entity `value` remains open JSON.
+  JSON object interpreted by backend configuration apart from the reserved
+  `deadline_unix_ms` field. `data` is the strict method business schema; entity
+  `value` remains open JSON.
 
 Method suffix `@1` is part of method identity. A breaking request, response, or
 behavior change requires a new method suffix.
@@ -74,9 +75,9 @@ Configuration MAY define:
 - phase-specific snapshot acquisition, session, and commit-ordering constraints;
 - separate consistency, idempotency, conflict, and publication keys and policies.
 
-Channel IDs, transaction IDs, timestamps, causal tokens, idempotency keys,
-deadlines, plugin-route IDs, base versions, and conflict-strategy requests
-remain ordinary configured metadata. They MUST NOT create new RPC methods or
+Channel IDs, transaction IDs, application timestamps, causal tokens, idempotency keys,
+plugin-route IDs, base versions, and conflict-strategy requests remain ordinary
+configured metadata. They MUST NOT create new RPC methods or
 hard-coded protocol fields. Consistency selection is exclusively
 backend-controller policy; only conflict handling has a request override.
 
@@ -109,10 +110,15 @@ MUST return `IDEMPOTENCY_CONFLICT`. The guarantee lasts at least
 deferred acceptance both store the accepted result atomically. With idempotency
 disabled, clients MUST NOT assume that retrying a mutation is deduplicated.
 
-Cancellation or deadline expiry before acceptance commits MUST roll back and
-return the corresponding error. If acceptance wins the race, the operation is
-successful; a retry with the same idempotency identity obtains the stored
-result.
+`meta.deadline_unix_ms`, when present, is an unsigned Unix-millisecond
+acceptance deadline reserved by the protocol and is not a configurable identity
+field. Expiry before acceptance commits MUST roll back and return
+`DEADLINE_EXCEEDED`. Once acceptance commits, the operation is successful even
+if the response is delivered after the deadline; a retry with the same
+idempotency identity obtains the stored result. Protocol v1 does not support
+request cancellation. For remote providers, the authority provider's clock is
+authoritative at the commit boundary, so participating nodes must keep their
+system clocks synchronized.
 
 v1 does not expose a transaction lifecycle in JSON-RPC. Cross-request grouping
 is controller state driven by configuration and version 1 uses an explicit
@@ -219,6 +225,11 @@ Change delivery is committed, ordered, resumable, and at least once.
   that subscription.
 - Cursors increase in server-defined order, but clients MUST treat them as
   opaque. Notifications on one subscription follow cursor order.
+- Physical provider routing is deployment state outside this wire schema. One
+  scope MUST remain pinned to one provider authority and cursor domain for the
+  lifetime of its cursors, causal tokens, sessions, idempotency identities and
+  open work units. Route changes require explicit data movement; a failed
+  request MUST NOT fall back to another provider.
 - Consumers MUST apply idempotently, persist the last applied cursor, and dedupe
   repeated cursors. A Harness binding may remain policy-stateless by forwarding
   the cursor to its consumer; the backend does not silently acknowledge delivery.
@@ -254,7 +265,6 @@ JSON-RPC standard errors remain available. Patchouli domain errors use:
 | -32005 | `IDEMPOTENCY_CONFLICT` | A key was reused for another mutation. |
 | -32006 | `UNSUPPORTED_CAPABILITY` | Version, consistency, or capability is unavailable. |
 | -32007 | `DEADLINE_EXCEEDED` | Deadline elapsed before completion. |
-| -32008 | `CANCELLED` | Request was cancelled before completion. |
 | -32009 | `OVERLOADED` | Server cannot currently accept the request. |
 | -32010 | `CURSOR_EXPIRED` | Replay position is outside retained history. |
 | -32011 | `WORK_UNIT_EXPIRED` | Configured cross-request state expired before publication. |

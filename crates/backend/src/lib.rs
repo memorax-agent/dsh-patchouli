@@ -22,11 +22,12 @@ pub use fact::{
 };
 pub use model::{
     ChangeCursor, ChangeFilter, ChangeKind, ChangeRecord, CreateEntityData, CreateEntityParams,
-    DeleteEntityData, DeleteEntityParams, EntityRef, EntityVersion, Meta, MutationData,
-    MutationResult, ReadEntityData, ReadEntityParams, ReadEntityResult, ReadEntityResultData,
-    ReadState, RetrievalHit, RetrieveEntitiesData, RetrieveEntitiesParams, RetrieveEntitiesResult,
-    RetrieveEntitiesResultData, RpcParams, RpcResult, SubscribeChangesData, SubscribeChangesParams,
-    UpdateEntityData, UpdateEntityParams, VersionToken,
+    DEADLINE_META_FIELD, DeleteEntityData, DeleteEntityParams, EntityRef, EntityVersion, Meta,
+    MutationData, MutationResult, ReadEntityData, ReadEntityParams, ReadEntityResult,
+    ReadEntityResultData, ReadState, RequestDeadline, RetrievalHit, RetrieveEntitiesData,
+    RetrieveEntitiesParams, RetrieveEntitiesResult, RetrieveEntitiesResultData, RpcParams,
+    RpcResult, SubscribeChangesData, SubscribeChangesParams, UpdateEntityData, UpdateEntityParams,
+    VersionToken,
 };
 pub use service::{BackendService, ChangeStream, ChangeSubscription, PublishedChange};
 pub use wire::{

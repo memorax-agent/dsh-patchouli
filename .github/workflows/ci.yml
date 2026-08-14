@@ -142,6 +142,6 @@ jobs:
         env:
           PATCHOULI_DEPLOY_ROOT: ${{ vars.PATCHOULI_DEPLOY_ROOT }}
           PATCHOULI_ENDPOINT: ${{ vars.PATCHOULI_ENDPOINT }}
-          PATCHOULI_DATABASE: ${{ vars.PATCHOULI_DATABASE }}
           PATCHOULI_CONFIG: ${{ vars.PATCHOULI_CONFIG }}
+          PATCHOULI_PROVIDERS: ${{ vars.PATCHOULI_PROVIDERS }}
         run: node scripts/deploy-daemon.mjs "${{ runner.os == 'Windows' && 'target/release/patchouli.exe' || 'target/release/patchouli' }}"

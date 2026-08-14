@@ -3,7 +3,8 @@
 ## Status
 
 Patchouli provides a local Rust daemon, cross-platform IPC, a control CLI, an
-explicit database-provider boundary, and a SQLite adapter. Transactional CRUD,
+explicit database-provider boundary, a SQLite adapter, authenticated remote
+provider transport, and deterministic scope routing. Transactional CRUD,
 durable shared-baseline work units, Automerge/MVCC resolution, immediate and
 batch idempotency, lexical retrieval, causal/session frontiers, retained change
 streams, and lifecycle recovery are implemented. Harness/Cordis integration
@@ -32,7 +33,7 @@ The Service Definition owns the stable query contract and shared result vocabula
 
 Expected responsibilities:
 
-- accept a query, workspace identity, result limit, and cancellation signal;
+- accept a query, workspace identity, result limit, and optional acceptance deadline;
 - return bounded hits with stable identifiers, source locations, content, and scores;
 - expose no model-facing schema by itself.
 
@@ -64,7 +65,8 @@ behavior combine without fallback or downgrade. A database provider does not
 interpret business fields and is never called directly by the frontend adapter.
 
 `BackendEngine` is the runtime owner of the immutable validated policy and one
-injected provider. JSON-RPC sessions call it only through `BackendService`.
+injected provider boundary. That boundary may be a routing provider containing
+the required `local` SQLite authority and named remote authorities. JSON-RPC sessions call it only through `BackendService`.
 Cross-request business facts live in the provider; the engine retains no
 process-local transaction or batch map.
 
@@ -80,13 +82,12 @@ response succeeds.
 
 Database providers are compile-time Rust adapters rather than dynamically
 loaded plugins. `patchouli-provider` owns the common contract,
-`patchouli-provider-sqlite` owns SQLite connection details, and the daemon
-library accepts the contract through dependency injection. The shipped CLI
-composes SQLite; another executable may choose another adapter without changing
-the JSON-RPC protocol or Cordis service. SQLite is the default server Cargo
-feature and can be omitted when embedding the server library. Exactly one
-provider is selected at startup and failure is explicit—there is no provider
-fallback chain.
+`patchouli-provider-sqlite` owns SQLite connection details,
+`patchouli-provider-remote` transports the same provider primitives over an
+authenticated HTTPS boundary, and `patchouli-provider-router` maps canonical
+scope JSON to exactly one named provider. Rules use first-match order followed
+by one explicit default; routing never falls back after provider failure. One
+atomic work unit cannot cross routes.
 
 `cluster_id` and `node_id` identify the serving process but do not imply
 replication. Multi-node support enters through a provider that advertises a
@@ -94,9 +95,11 @@ replica source and causal frontier operations; the engine validates those
 capabilities before startup. SQLite remains a single authority and never
 pretends that a local transaction makes remote replicas immediately visible.
 
-Physical provider settings are not part of the business-policy schema. The
-SQLite path is a daemon startup option, while entity schemas and consistency
-rules remain in backend policy configuration.
+Physical provider settings are not part of the business-policy schema. A
+separate provider configuration defines `local`, remote endpoints and ordered
+scope routes, while entity schemas and consistency rules remain in backend
+policy configuration. Remote storage nodes expose provider primitives rather
+than a second backend engine, so policy and conflict logic execute once.
 
 ### External runtime bootstrap
 

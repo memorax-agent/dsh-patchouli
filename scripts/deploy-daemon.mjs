@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -19,14 +19,23 @@ const backup = join(installDir, `${binaryName}.previous`)
 const endpoint = process.env.PATCHOULI_ENDPOINT || (process.platform === 'win32'
   ? String.raw`\\.\pipe\patchouli`
   : join(deployRoot, 'run', 'patchouli.sock'))
-const database = process.env.PATCHOULI_DATABASE || join(deployRoot, 'data', 'patchouli.db')
 const config = resolve(process.env.PATCHOULI_CONFIG || 'config/patchouli.default.json')
+const providers = resolve(process.env.PATCHOULI_PROVIDERS || join(deployRoot, 'providers.json'))
 
 for (const path of [installDir, join(deployRoot, 'run'), join(deployRoot, 'data')]) {
   mkdirSync(path, { recursive: true, mode: 0o700 })
 }
 
-run(source, ['config', 'check', config], 'new daemon rejected its backend configuration')
+if (!process.env.PATCHOULI_PROVIDERS && !existsSync(providers)) {
+  writeFileSync(providers, `${JSON.stringify({
+    $schema: 'https://github.com/memorax-agent/dsh-patchouli/blob/main/config/providers.schema.json',
+    version: 1,
+    providers: { local: { kind: 'local', database: 'data/patchouli.db' } },
+    routing: { default: 'local', rules: [] },
+  }, null, 2)}\n`, { mode: 0o600 })
+}
+
+run(source, ['config', 'check', config, '--providers', providers], 'new daemon rejected its configuration')
 const hadPrevious = existsSync(target)
 if (hadPrevious) copyFileSync(target, backup)
 
@@ -55,7 +64,7 @@ function start(command) {
   const child = spawn(command, [
     'serve',
     '--endpoint', endpoint,
-    '--database', database,
+    '--providers', providers,
     '--config', config,
   ], {
     detached: true,

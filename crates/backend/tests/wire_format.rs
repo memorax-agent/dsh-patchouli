@@ -73,7 +73,6 @@ fn rust_method_and_error_constants_match_openrpc() {
         errors["DeadlineExceeded"]["code"],
         error_codes::DEADLINE_EXCEEDED
     );
-    assert_eq!(errors["Cancelled"]["code"], error_codes::CANCELLED);
     assert_eq!(errors["Overloaded"]["code"], error_codes::OVERLOADED);
     assert_eq!(errors["CursorExpired"]["code"], error_codes::CURSOR_EXPIRED);
     assert_eq!(

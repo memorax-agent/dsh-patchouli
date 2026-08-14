@@ -17,10 +17,13 @@ default = ["sqlite"]
 sqlite = ["dep:patchouli-provider-sqlite"]
 
 [dependencies]
+axum.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 patchouli-backend = { path = "../backend" }
 patchouli-provider = { path = "../provider" }
+patchouli-provider-remote = { path = "../provider-remote" }
+patchouli-provider-router = { path = "../provider-router" }
 patchouli-provider-sqlite = { path = "../provider-sqlite", optional = true }
 serde.workspace = true
 serde_json.workspace = true

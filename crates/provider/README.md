@@ -11,7 +11,7 @@ refuses startup when no valid execution path exists.
 
 The contract owns the durable process lifecycle, published entity snapshots,
 atomic compare-and-swap commits, and durable cross-request work units. A work
-unit records one global published cursor and immutable policy descriptor when
+unit records its canonical scope, one provider-local published cursor and immutable policy descriptor when
 it opens, reconstructs every entity baseline at that cursor, persists staged
 versions, heads, and effective conflict policies between RPC calls, and
 atomically publishes every mutated entity on marker close. On baseline drift it
@@ -19,4 +19,6 @@ returns complete entity snapshots to the engine and accepts one resolved atomic
 publication guarded by the latest published heads. Immediate and grouped commits both keep immutable
 versions, CRDT changes/frontiers, visible heads, and change records within their
 required SQLite transaction boundary. Change records carry configured mutation
-metadata, and session frontiers advance atomically with publication.
+metadata, and session frontiers advance atomically with publication. Change
+waiting is provider-backed, so subscriptions observe commits made through a
+remote storage node rather than relying on an engine-process notification.
