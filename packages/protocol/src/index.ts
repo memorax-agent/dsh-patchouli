@@ -10,6 +10,8 @@ import type { JsonValue } from './json.js'
 import type {
   ControlShutdownParams,
   ControlShutdownResult,
+  ControlCheckpointParams,
+  ControlCheckpointResult,
   ControlStatusParams,
   ControlStatusResult,
   HandshakeParams,
@@ -25,5 +27,6 @@ export type PatchouliProtocol<
   & {
     readonly 'patchouli.protocol.handshake@1': RpcMethod<HandshakeParams, HandshakeResult>
     readonly 'patchouli.control.status@1': RpcMethod<ControlStatusParams, ControlStatusResult>
+    readonly 'patchouli.control.checkpoint@1': RpcMethod<ControlCheckpointParams, ControlCheckpointResult>
     readonly 'patchouli.control.shutdown@1': RpcMethod<ControlShutdownParams, ControlShutdownResult>
   }

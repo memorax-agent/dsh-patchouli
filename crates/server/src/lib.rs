@@ -10,8 +10,9 @@ use std::{
 
 use patchouli_backend::{
     BackendEngine, BackendError, BackendErrorReason, BackendService, ClientIdentity,
-    ControlShutdownResult, ControlShutdownResultData, ControlStatusResult, ControlStatusResultData,
-    CreateEntityParams, DeleteEntityParams, EmptyData, HandshakeParams, HandshakeResult, Meta,
+    ControlCheckpointResult, ControlCheckpointResultData, ControlShutdownResult,
+    ControlShutdownResultData, ControlStatusResult, ControlStatusResultData, CreateEntityParams,
+    DeleteEntityParams, EmptyData, EngineError, HandshakeParams, HandshakeResult, Meta,
     PROTOCOL_VERSION, ProtocolErrorData, ProtocolErrorReason, ReadEntityParams, RpcParams,
     RpcResult, ServerIdentity, ServerLimits, SubscribeChangesParams, UnsubscribeChangesParams,
     UpdateEntityParams, error_codes, methods,
@@ -24,9 +25,10 @@ use tokio::{
         AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, Lines, ReadHalf, WriteHalf, split,
     },
     sync::watch,
+    task::{JoinError, JoinSet},
 };
 
-const SERVER_CAPABILITIES: &[&str] = &["control.status", "control.shutdown"];
+const SERVER_CAPABILITIES: &[&str] = &["control.status", "control.checkpoint", "control.shutdown"];
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -48,6 +50,10 @@ pub enum IpcError {
     Rpc { code: i64, message: String },
     #[error("daemon response id does not match request id")]
     ResponseIdMismatch,
+    #[error("backend engine lifecycle failed: {0}")]
+    Engine(#[from] EngineError),
+    #[error("connection task failed: {0}")]
+    Task(#[from] JoinError),
 }
 
 pub struct LocalServer {
@@ -78,33 +84,44 @@ impl LocalServer {
 
     pub async fn run(mut self) -> Result<(), IpcError> {
         let mut shutdown_rx = self.shutdown_tx.subscribe();
-        loop {
+        let mut connections = JoinSet::new();
+        let mut result = loop {
             tokio::select! {
-                result = self.listener.accept() => {
-                    let stream = result?;
-                    let connection = ConnectionState::new(
-                        self.options.clone(),
-                        self.started_at_unix_ms,
-                        Arc::clone(&self.active_connections),
-                        self.shutdown_tx.clone(),
-                        Arc::clone(&self.engine),
-                    );
-                    tokio::spawn(async move {
-                        let _ = connection.serve(stream).await;
-                    });
-                }
-                result = shutdown_rx.changed() => {
-                    if result.is_err() || *shutdown_rx.borrow() {
-                        break;
+                accepted = self.listener.accept() => {
+                    match accepted {
+                        Ok(stream) => {
+                            let connection = ConnectionState::new(
+                                self.options.clone(),
+                                self.started_at_unix_ms,
+                                Arc::clone(&self.active_connections),
+                                self.shutdown_tx.clone(),
+                                Arc::clone(&self.engine),
+                            );
+                            connections.spawn(connection.serve(stream));
+                        }
+                        Err(error) => break Err(IpcError::Io(error)),
                     }
                 }
-                result = tokio::signal::ctrl_c() => {
-                    result?;
-                    break;
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        break Ok(());
+                    }
                 }
+                interrupt = tokio::signal::ctrl_c() => break interrupt.map_err(IpcError::Io),
+            }
+        };
+
+        let _ = self.shutdown_tx.send(true);
+        while let Some(joined) = connections.join_next().await {
+            if let Err(error) = joined
+                && result.is_ok()
+            {
+                result = Err(IpcError::Task(error));
             }
         }
-        Ok(())
+        let shutdown = self.engine.shutdown().await.map_err(IpcError::Engine);
+        result?;
+        shutdown
     }
 }
 
@@ -139,8 +156,24 @@ impl ConnectionState {
         let (read_half, mut write_half) = split(stream);
         let mut lines = BufReader::new(read_half).lines();
         let mut handshaken = false;
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
 
-        while let Some(line) = lines.next_line().await? {
+        loop {
+            if *shutdown_rx.borrow() {
+                break;
+            }
+            let line = tokio::select! {
+                line = lines.next_line() => line?,
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            let Some(line) = line else {
+                break;
+            };
             let (response, shutdown) = self.dispatch(&line, &mut handshaken).await;
             write_json_line(&mut write_half, &response).await?;
             if shutdown {
@@ -238,12 +271,32 @@ impl ConnectionState {
                     data: ControlStatusResultData {
                         ready: true,
                         provider: self.engine.provider_kind().to_owned(),
+                        generation: self.engine.recovery().generation,
+                        recovered_after_unclean_shutdown: self
+                            .engine
+                            .recovery()
+                            .recovered_after_unclean_shutdown,
                         pid: std::process::id(),
                         started_at_unix_ms: self.started_at_unix_ms,
                         active_connections: self.active_connections.load(Ordering::Relaxed),
                     },
                 };
                 (rpc_success(id, result), false)
+            }
+            methods::CONTROL_CHECKPOINT => {
+                if let Err(error) = serde_json::from_value::<RpcParams<EmptyData>>(params) {
+                    return (rpc_error(id, -32602, &error.to_string()), false);
+                }
+                match self.engine.checkpoint().await {
+                    Ok(()) => {
+                        let result: ControlCheckpointResult = RpcResult {
+                            meta: Meta::new(),
+                            data: ControlCheckpointResultData { completed: true },
+                        };
+                        (rpc_success(id, result), false)
+                    }
+                    Err(error) => (rpc_error(id, -32603, &error.to_string()), false),
+                }
             }
             methods::CONTROL_SHUTDOWN => {
                 if let Err(error) = serde_json::from_value::<RpcParams<EmptyData>>(params) {
@@ -382,6 +435,17 @@ impl LocalClient {
     pub async fn shutdown(&mut self) -> Result<ControlShutdownResult, IpcError> {
         self.call(
             methods::CONTROL_SHUTDOWN,
+            &RpcParams {
+                meta: Meta::new(),
+                data: EmptyData::default(),
+            },
+        )
+        .await
+    }
+
+    pub async fn checkpoint(&mut self) -> Result<ControlCheckpointResult, IpcError> {
+        self.call(
+            methods::CONTROL_CHECKPOINT,
             &RpcParams {
                 meta: Meta::new(),
                 data: EmptyData::default(),

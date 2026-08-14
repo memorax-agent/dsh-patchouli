@@ -5,6 +5,7 @@ export const protocolVersion = 1 as const
 export const methods = {
   handshake: 'patchouli.protocol.handshake@1',
   controlStatus: 'patchouli.control.status@1',
+  controlCheckpoint: 'patchouli.control.checkpoint@1',
   controlShutdown: 'patchouli.control.shutdown@1',
   entityCreate: 'patchouli.entity.create@1',
   entityRead: 'patchouli.entity.read@1',
@@ -95,12 +96,22 @@ export type ControlStatusParams = RpcParams<EmptyData>
 export interface ControlStatusResultData {
   readonly ready: boolean
   readonly provider: string
+  readonly generation: number
+  readonly recovered_after_unclean_shutdown: boolean
   readonly pid: number
   readonly started_at_unix_ms: number
   readonly active_connections: number
 }
 
 export type ControlStatusResult = RpcResult<ControlStatusResultData>
+
+export type ControlCheckpointParams = RpcParams<EmptyData>
+
+export interface ControlCheckpointResultData {
+  readonly completed: boolean
+}
+
+export type ControlCheckpointResult = RpcResult<ControlCheckpointResultData>
 
 export type ControlShutdownParams = RpcParams<EmptyData>
 

@@ -54,6 +54,16 @@ injected provider. JSON-RPC sessions call it only through `BackendService`.
 Cross-request business facts will live in the provider; the engine retains no
 in-memory transaction or batch map.
 
+The provider also owns the durable daemon lifecycle. Startup takes exclusive
+database ownership, lets the database recover committed state, records a new
+runtime generation, and only then exposes IPC. A manual checkpoint flushes WAL
+pages without stopping service. Graceful shutdown first drains IPC connections,
+then records a clean stop, truncates the WAL, closes the provider, and releases
+ownership. A later startup reports whether the previous generation ended
+uncleanly. This runtime marker does not replace business transactions: once
+CRUD is implemented, every mutation must become durable through its own
+provider transaction before its RPC response succeeds.
+
 Database providers are compile-time Rust adapters rather than dynamically
 loaded plugins. `patchouli-provider` owns the common contract,
 `patchouli-provider-sqlite` owns SQLite connection details, and the daemon

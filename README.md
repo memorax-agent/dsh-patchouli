@@ -4,6 +4,8 @@ Patchouli 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-h
 
 > 当前状态：已经具备可加载的 Cordis 插件、Rust `BackendEngine`、本地 IPC、控制 CLI 和 SQLite provider 启动适配。macOS/Linux 使用 Unix socket，Windows 使用 named pipe。CRUD 已经完成前后端接线，但存储业务逻辑仍为明确的未实现占位；知识采集、索引和召回尚未实现。
 
+daemon 会独占数据库实例，记录运行代次和正常/异常关闭状态。正常停止会先停止接收连接、关闭现有 IPC 会话，再执行 SQLite WAL checkpoint、持久化干净关闭标记并释放数据库锁；异常退出后的下一次启动由 SQLite WAL 自动恢复已提交事务，并在状态接口中报告恢复事实。
+
 ## 设计方向
 
 Patchouli 将以 monorepo 形式围绕三个边界逐步实现：
@@ -62,7 +64,8 @@ cp config/patchouli.example.json "$HOME/.patchouli/config.json"
 插件加载时会连接默认本地 endpoint；若 daemon 不存在，则执行
 `patchouli serve`，加载 `~/.patchouli/config.json` 并打开默认的
 `~/.patchouli/data/patchouli.db` 后等待 handshake。插件卸载只关闭自身连接，daemon 由
-`patchouli stop --endpoint <endpoint>` 显式停止。详细的三平台命令见
+`patchouli stop --endpoint <endpoint>` 显式停止。运行期间可用
+`patchouli checkpoint --endpoint <endpoint>` 主动执行一次 WAL checkpoint。详细的三平台命令见
 [开发文档](docs/development.md)。
 
 ## 仓库结构

@@ -45,6 +45,7 @@ patchouli serve \
   --database "$HOME/.patchouli/data/patchouli.db" \
   --config "$HOME/.patchouli/config.json"
 patchouli status --endpoint "$HOME/.patchouli/run/patchouli.sock"
+patchouli checkpoint --endpoint "$HOME/.patchouli/run/patchouli.sock"
 patchouli stop --endpoint "$HOME/.patchouli/run/patchouli.sock"
 ```
 
@@ -56,6 +57,7 @@ $database = Join-Path $HOME '.patchouli\data\patchouli.db'
 $config = Join-Path $HOME '.patchouli\config.json'
 patchouli serve --endpoint $endpoint --database $database --config $config
 patchouli status --endpoint $endpoint
+patchouli checkpoint --endpoint $endpoint
 patchouli stop --endpoint $endpoint
 ```
 
@@ -65,6 +67,15 @@ same command as a detached process. Policy validation and the SQLite health
 check both complete before the daemon begins listening. CRUD calls are decoded
 and routed through `BackendEngine`; until transactional storage is implemented,
 they return `UNSUPPORTED_CAPABILITY` rather than reporting success.
+
+Only one daemon may own a SQLite database at a time; ownership is represented
+by an exclusive `<database>.lock`. Each successful startup increments a durable
+generation and reports whether the prior generation stopped uncleanly.
+`checkpoint` waits for a complete WAL checkpoint without stopping the daemon.
+`stop` stops accepting connections, closes and drains existing sessions, marks
+the generation clean, performs a truncating checkpoint, closes SQLite, and
+releases the lock. If the process is terminated instead, SQLite recovers
+committed WAL transactions at the next open and the status recovery flag is set.
 
 Validate the existing backend policy file without starting a daemon:
 

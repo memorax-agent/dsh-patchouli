@@ -1,6 +1,6 @@
 # Patchouli Storage Protocol v1
 
-Status: draft 5. Normative method and data schemas are in `openrpc.json`.
+Status: draft 6. Normative method and data schemas are in `openrpc.json`.
 
 The words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are normative.
 
@@ -30,9 +30,11 @@ behavior change requires a new method suffix.
 ### Control methods
 
 `patchouli.control.status@1` reports daemon readiness, selected database
-provider, process identity, start time, and active connection count.
-`patchouli.control.shutdown@1` accepts a graceful local shutdown request. Both
-follow the normal `{ meta, data }` shape; their `data` request object is empty.
+provider, runtime generation, unclean-shutdown recovery, process identity,
+start time, and active connection count. `patchouli.control.checkpoint@1` asks
+the provider to checkpoint durable state without stopping. `patchouli.control.shutdown@1`
+accepts a graceful local shutdown request. All follow the normal `{ meta, data }`
+shape; their `data` request object is empty.
 
 ## 2. Identity and scope
 

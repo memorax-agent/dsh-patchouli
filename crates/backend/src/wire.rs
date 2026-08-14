@@ -100,12 +100,23 @@ pub type ControlStatusParams = RpcParams<EmptyData>;
 pub struct ControlStatusResultData {
     pub ready: bool,
     pub provider: String,
+    pub generation: u64,
+    pub recovered_after_unclean_shutdown: bool,
     pub pid: u32,
     pub started_at_unix_ms: u64,
     pub active_connections: u64,
 }
 
 pub type ControlStatusResult = RpcResult<ControlStatusResultData>;
+
+pub type ControlCheckpointParams = RpcParams<EmptyData>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlCheckpointResultData {
+    pub completed: bool,
+}
+
+pub type ControlCheckpointResult = RpcResult<ControlCheckpointResultData>;
 
 pub type ControlShutdownParams = RpcParams<EmptyData>;
 

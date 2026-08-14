@@ -12,6 +12,7 @@ test('publishes the versioned generic CRUD and reactive method names', () => {
   assert.deepEqual(methods, {
     handshake: 'patchouli.protocol.handshake@1',
     controlStatus: 'patchouli.control.status@1',
+    controlCheckpoint: 'patchouli.control.checkpoint@1',
     controlShutdown: 'patchouli.control.shutdown@1',
     entityCreate: 'patchouli.entity.create@1',
     entityRead: 'patchouli.entity.read@1',

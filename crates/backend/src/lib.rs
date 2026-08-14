@@ -17,7 +17,8 @@ pub use model::{
 };
 pub use service::{BackendService, ChangeStream};
 pub use wire::{
-    ChangesEventData, ChangesEventParams, ClientIdentity, ControlShutdownParams,
+    ChangesEventData, ChangesEventParams, ClientIdentity, ControlCheckpointParams,
+    ControlCheckpointResult, ControlCheckpointResultData, ControlShutdownParams,
     ControlShutdownResult, ControlShutdownResultData, ControlStatusParams, ControlStatusResult,
     ControlStatusResultData, EmptyData, HandshakeParams, HandshakeResult, JsonRpcError,
     JsonRpcFailure, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcSuccess, JsonRpcVersion,
@@ -31,6 +32,7 @@ pub const PROTOCOL_VERSION: u16 = 1;
 pub mod methods {
     pub const HANDSHAKE: &str = "patchouli.protocol.handshake@1";
     pub const CONTROL_STATUS: &str = "patchouli.control.status@1";
+    pub const CONTROL_CHECKPOINT: &str = "patchouli.control.checkpoint@1";
     pub const CONTROL_SHUTDOWN: &str = "patchouli.control.shutdown@1";
     pub const ENTITY_CREATE: &str = "patchouli.entity.create@1";
     pub const ENTITY_READ: &str = "patchouli.entity.read@1";

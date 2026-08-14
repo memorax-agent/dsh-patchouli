@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
+fs4.workspace = true
 patchouli-provider = { path = "../provider" }
 thiserror.workspace = true
 tokio.workspace = true

@@ -25,6 +25,14 @@ test('registers a daemon service and completes the control handshake', async (t)
         if (newline < 0) return
         const request = JSON.parse(buffer.slice(0, newline))
         buffer = buffer.slice(newline + 1)
+        if (request.method === 'patchouli.control.checkpoint@1') {
+          socket.write(JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.id,
+            result: { meta: {}, data: { completed: true } },
+          }) + '\n')
+          continue
+        }
         if (request.method === 'patchouli.entity.create@1') {
           socket.write(JSON.stringify({
             jsonrpc: '2.0',
@@ -54,6 +62,8 @@ test('registers a daemon service and completes the control handshake', async (t)
               data: {
                 ready: true,
                 provider: 'sqlite',
+                generation: 4,
+                recovered_after_unclean_shutdown: false,
                 pid: process.pid,
                 started_at_unix_ms: 1,
                 active_connections: 1,
@@ -88,7 +98,10 @@ test('registers a daemon service and completes the control handshake', async (t)
   const status = await ctx.patchouli.status()
   assert.equal(status.data.ready, true)
   assert.equal(status.data.provider, 'sqlite')
+  assert.equal(status.data.generation, 4)
+  assert.equal(status.data.recovered_after_unclean_shutdown, false)
   assert.equal(status.data.pid, process.pid)
+  assert.equal((await ctx.patchouli.checkpoint()).data.completed, true)
   await assert.rejects(
     ctx.patchouli.create({
       meta: {},

@@ -5,6 +5,7 @@ import { createConnection, type Socket } from 'node:net'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   type CreateEntityParams,
+  type ControlCheckpointResult,
   type DeleteEntityParams,
   type JsonValue,
   type MutationResult,
@@ -71,6 +72,10 @@ export class PatchouliService extends Service {
 
   async status(): Promise<ControlStatusResult> {
     return this.call<ControlStatusResult>(methods.controlStatus, { meta: {}, data: {} })
+  }
+
+  async checkpoint(): Promise<ControlCheckpointResult> {
+    return this.call<ControlCheckpointResult>(methods.controlCheckpoint, { meta: {}, data: {} })
   }
 
   async create<TType extends string = string, TValue extends JsonValue = JsonValue>(

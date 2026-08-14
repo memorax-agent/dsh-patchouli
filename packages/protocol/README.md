@@ -31,6 +31,7 @@ conflict-resolution algorithms, or a Harness binding.
 ```text
 patchouli.protocol.handshake@1
 patchouli.control.status@1
+patchouli.control.checkpoint@1
 patchouli.control.shutdown@1
 patchouli.entity.create@1
 patchouli.entity.read@1

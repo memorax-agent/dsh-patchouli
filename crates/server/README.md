@@ -15,6 +15,7 @@ Local transports:
 cargo install --path crates/server
 patchouli serve --endpoint <endpoint> --database <path> --config <policy-path>
 patchouli status --endpoint <endpoint>
+patchouli checkpoint --endpoint <endpoint>
 patchouli stop --endpoint <endpoint>
 patchouli config check config/patchouli.example.json
 ```
@@ -24,3 +25,7 @@ connection. The shipped CLI selects the SQLite adapter and reports `sqlite` in
 the control status response. SQLite is the default Cargo feature; consumers
 embedding only the server library may disable default features and inject
 another provider.
+
+`status` reports the provider generation and whether startup followed an
+unclean shutdown. On `stop`, the daemon stops accepting clients, signals and
+drains connection tasks, then shuts down the engine and provider.

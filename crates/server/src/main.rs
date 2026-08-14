@@ -38,6 +38,11 @@ enum Command {
         #[arg(long)]
         endpoint: String,
     },
+    /// Checkpoint durable provider state without stopping the daemon.
+    Checkpoint {
+        #[arg(long)]
+        endpoint: String,
+    },
     /// Ask the daemon to shut down cleanly.
     Stop {
         #[arg(long)]
@@ -70,15 +75,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let config = BackendConfig::from_json(&input)?;
             let provider = Arc::new(SqliteProvider::open(&database).await?);
             let engine = Arc::new(BackendEngine::start(config, provider).await?);
-            let server = LocalServer::bind(
+            let server = match LocalServer::bind(
                 ServerOptions {
                     endpoint: endpoint.clone(),
                     node_id,
                     cluster_id,
                 },
-                engine,
+                Arc::clone(&engine),
             )
-            .await?;
+            .await
+            {
+                Ok(server) => server,
+                Err(bind_error) => {
+                    engine.shutdown().await?;
+                    return Err(Box::<dyn Error>::from(bind_error));
+                }
+            };
             eprintln!("Patchouli daemon listening on {endpoint}");
             server.run().await?;
         }
@@ -86,6 +98,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let mut client =
                 LocalClient::connect(&endpoint, "patchouli-cli", env!("CARGO_PKG_VERSION")).await?;
             println!("{}", serde_json::to_string_pretty(&client.status().await?)?);
+        }
+        Command::Checkpoint { endpoint } => {
+            let mut client =
+                LocalClient::connect(&endpoint, "patchouli-cli", env!("CARGO_PKG_VERSION")).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&client.checkpoint().await?)?
+            );
         }
         Command::Stop { endpoint } => {
             let mut client =

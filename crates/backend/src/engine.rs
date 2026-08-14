@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use patchouli_provider::{Provider, ProviderError};
+use patchouli_provider::{Provider, ProviderError, ProviderRecovery};
 use thiserror::Error;
 
 use crate::{
@@ -19,6 +19,7 @@ pub enum EngineError {
 pub struct BackendEngine {
     config: BackendConfig,
     provider: Arc<dyn Provider>,
+    recovery: ProviderRecovery,
 }
 
 impl BackendEngine {
@@ -26,8 +27,20 @@ impl BackendEngine {
         config: BackendConfig,
         provider: Arc<dyn Provider>,
     ) -> Result<Self, EngineError> {
-        provider.health_check().await?;
-        Ok(Self { config, provider })
+        let recovery = provider.initialize().await?;
+        if let Err(health_error) = provider.health_check().await {
+            return match provider.shutdown().await {
+                Ok(()) => Err(EngineError::Provider(health_error)),
+                Err(shutdown_error) => Err(EngineError::Provider(ProviderError::new(format!(
+                    "{health_error}; provider cleanup also failed: {shutdown_error}"
+                )))),
+            };
+        }
+        Ok(Self {
+            config,
+            provider,
+            recovery,
+        })
     }
 
     pub fn config(&self) -> &BackendConfig {
@@ -36,6 +49,20 @@ impl BackendEngine {
 
     pub fn provider_kind(&self) -> &'static str {
         self.provider.kind()
+    }
+
+    pub fn recovery(&self) -> ProviderRecovery {
+        self.recovery
+    }
+
+    pub async fn checkpoint(&self) -> Result<(), EngineError> {
+        self.provider.checkpoint().await?;
+        Ok(())
+    }
+
+    pub async fn shutdown(&self) -> Result<(), EngineError> {
+        self.provider.shutdown().await?;
+        Ok(())
     }
 }
 
