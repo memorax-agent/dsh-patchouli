@@ -2,15 +2,16 @@
 
 Patchouli 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地知识依赖。目标是在不要求模型发起 Tool Call 的前提下，按当前任务检索相关知识，并通过 Harness 原生、可记录的上下文链路注入模型请求。
 
-> 当前状态：仓库初始化阶段。现在提供可构建、可打包、可被 Cordis Loader 加载的最小插件骨架，尚未实现知识采集、索引和召回。
+> 当前状态：已提供通用 Memory Service 基础能力，包括具体 Memory Plugin 的注册，以及无状态 `update` / `retrieve` 路由和聚合。尚未接入具体记忆实现、Agent Loop 或数据库后端。
 
 ## 设计方向
 
-Patchouli 将以 monorepo 形式围绕三个边界逐步实现：
+Patchouli 将以 monorepo 形式围绕四个边界逐步实现：
 
-1. **Knowledge Service**：定义稳定的知识检索契约，供其他 Cordis 插件通过 `ctx` 使用。
-2. **Provider**：负责本地知识的采集、索引和检索，不依赖 Agent 或 Prompt。
-3. **Context Consumer**：在 `agent/pre-step` 阶段异步检索，并把带来源信息的有界结果追加到下一次模型请求。
+1. **Memory Service**：通过 `ctx.patchouliMemory` 暴露稳定的 `update` / `retrieve` 契约，并负责插件注册、路由和结果聚合。
+2. **Memory Plugin**：实现具体的 `update` / `retrieve` 语义，例如 MemoraX 或本地记忆实现。
+3. **Agent Loop Consumer**：通过 Tool、Hook 或 `agent/pre-step` 决定何时以及如何调用 Memory Service。
+4. **Storage Backend**：为需要本地持久化的 Memory Plugin 提供独立的 Rust CRUD/change 能力。
 
 数据库后端使用 Rust 实现，独立于 DeepSeek Harness；TypeScript 仅承担插件和客户端协议类型。
 
@@ -44,7 +45,7 @@ dsh plugin --profile web add .
 dsh --profile web --dump-config
 ```
 
-配置中应出现 `patchouli` 插件行。当前插件不会向模型注入任何内容。
+配置中应出现 `patchouli` 插件行。当前插件只注册通用 Memory Service，不会向模型注入任何内容。
 
 ## 仓库结构
 
