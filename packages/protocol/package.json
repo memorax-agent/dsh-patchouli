@@ -9,10 +9,12 @@
     ".": {
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
-    }
+    },
+    "./schemas/*": "./schemas/*"
   },
   "files": [
     "lib",
+    "schemas",
     "README.md",
     "SPEC.md",
     "openrpc.json"

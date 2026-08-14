@@ -1,0 +1,14 @@
+{
+  "$schema": "./providers.schema.json",
+  "version": 1,
+  "providers": {
+    "local": {
+      "kind": "local",
+      "database": "patchouli.db"
+    }
+  },
+  "routing": {
+    "default": "local",
+    "rules": []
+  }
+}

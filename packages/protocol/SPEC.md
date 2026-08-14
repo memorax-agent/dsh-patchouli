@@ -1,13 +1,15 @@
 # Patchouli Storage Protocol v1
 
-Status: draft 3. Normative method and data schemas are in `openrpc.json`.
+Status: draft 6. Normative method and data schemas are in `openrpc.json`.
 
 The words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are normative.
 
 ## 1. Transport and session
 
-- The transport is JSON-RPC 2.0 over WebSocket.
-- One text frame MUST contain exactly one complete JSON-RPC object.
+- The local transport is a UTF-8, newline-delimited JSON-RPC 2.0 byte stream.
+- macOS and Linux use a Unix domain socket. Windows uses a named pipe.
+- One line MUST contain exactly one complete JSON-RPC object. JSON string line
+  breaks therefore remain escaped inside that object.
 - Batch requests are not supported in v1.
 - Request IDs MUST be strings or integers. Clients MUST NOT reuse an ID while
   its request is outstanding on the same connection.
@@ -19,17 +21,27 @@ The words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are normative.
 - A server notification has no `id`. Clients MUST NOT respond to
   `patchouli.changes.event@1`.
 - Every non-handshake method uses `params: { meta, data }`. `meta` is an open
-  JSON object interpreted by backend configuration. `data` is the strict method
-  business schema; entity `value` remains open JSON.
+  JSON object interpreted by backend configuration apart from the reserved
+  `deadline_unix_ms` field. `data` is the strict method business schema; entity
+  `value` remains open JSON.
 
 Method suffix `@1` is part of method identity. A breaking request, response, or
 behavior change requires a new method suffix.
+
+### Control methods
+
+`patchouli.control.status@1` reports daemon readiness, selected database
+provider, runtime generation, unclean-shutdown recovery, process identity,
+start time, and active connection count. `patchouli.control.checkpoint@1` asks
+the provider to checkpoint durable state without stopping. `patchouli.control.shutdown@1`
+accepts a graceful local shutdown request. All follow the normal `{ meta, data }`
+shape; their `data` request object is empty.
 
 ## 2. Identity and scope
 
 The wire-level entity reference is `(type, id)`.
 
-- `type` is an opaque, non-empty string. Values such as `memory` and `relation`
+- `type` is an opaque, non-empty string. Values such as `knowledge` and `knowledge_relation`
   do not create different protocol methods.
 - `id` is an opaque, non-empty string. When create omits it, the server MUST
   generate it and return it in the accepted entity reference.
@@ -54,17 +66,20 @@ conflict handling, publication, and response construction. A database provider
 exposes storage primitives and MUST NOT independently reinterpret business
 fields.
 
-Configuration MAY define, per entity type:
+Configuration MAY define:
 
-- a JSON Schema for `value`;
-- named fields extracted from `meta` or method `data`;
-- identity fields and consistency rules selected by field presence;
-- logical grouping, baseline, batch-close, timestamp, and conflict policies.
+- named fields extracted from `meta` and validated by their own JSON Schemas;
+- a global scope that namespaces `(type, id)` and change records;
+- a JSON Schema for each entity type's `value`;
+- ordered rules selected by metadata presence;
+- phase-specific snapshot acquisition, session, and commit-ordering constraints;
+- separate consistency, idempotency, conflict, and publication keys and policies.
 
-Channel IDs, transaction IDs, timestamps, causal tokens, idempotency keys,
-deadlines, and plugin-route IDs remain ordinary configured metadata. They MUST
-NOT create new RPC methods or hard-coded protocol fields. Consistency selection
-is exclusively backend-controller policy.
+Channel IDs, transaction IDs, application timestamps, causal tokens, idempotency keys,
+plugin-route IDs, base versions, and conflict-strategy requests remain ordinary
+configured metadata. They MUST NOT create new RPC methods or
+hard-coded protocol fields. Consistency selection is exclusively
+backend-controller policy; only conflict handling has a request override.
 
 ## 4. Transaction and idempotency semantics
 
@@ -72,7 +87,7 @@ Each create, update, and delete request is accepted using one short database
 transaction. The following effects MUST commit atomically:
 
 1. the immutable entity candidate or tombstone;
-2. the idempotency record and serialized successful result;
+2. the idempotency record and serialized successful result, when enabled;
 3. assignment to the configured logical group, if any.
 
 Without a configured deferred batch, the same transaction MUST publish the
@@ -86,35 +101,61 @@ A successful mutation response means durable acceptance. Publication may be
 immediate or deferred. A stateless client observes publication through a causal
 read or the change stream; it does not maintain batch state itself.
 
-When a policy configures idempotency fields, the controller derives the
-idempotency identity from `meta`. Repeating the same identity and mutation data
-MUST return the original accepted result without another candidate or change
-event. Reusing the identity with different mutation data MUST return
-`IDEMPOTENCY_CONFLICT`. The guarantee lasts at least
-`idempotency_retention_seconds` reported by the handshake.
+When the selected behavior enables keyed idempotency, the controller derives
+its identity from configured `meta` fields. Repeating the same identity and
+mutation data MUST return the original accepted result without another
+candidate or change event. Reusing the identity with different mutation data
+MUST return `IDEMPOTENCY_CONFLICT`. The guarantee lasts at least
+`idempotency_retention_seconds` reported by the handshake. Immediate and
+deferred acceptance both store the accepted result atomically. With idempotency
+disabled, clients MUST NOT assume that retrying a mutation is deduplicated.
 
-Cancellation or deadline expiry before acceptance commits MUST roll back and
-return the corresponding error. If acceptance wins the race, the operation is
-successful; a retry with the same idempotency identity obtains the stored
-result.
+`meta.deadline_unix_ms`, when present, is an unsigned Unix-millisecond
+acceptance deadline reserved by the protocol and is not a configurable identity
+field. Expiry before acceptance commits MUST roll back and return
+`DEADLINE_EXCEEDED`. Once acceptance commits, the operation is successful even
+if the response is delivered after the deadline; a retry with the same
+idempotency identity obtains the stored result. Protocol v1 does not support
+request cancellation. For remote providers, the authority provider's clock is
+authoritative at the commit boundary, so participating nodes must keep their
+system clocks synchronized.
 
 v1 does not expose a transaction lifecycle in JSON-RPC. Cross-request grouping
-is controller state driven by configuration and requires an explicit marker,
-expected-count, or time-window close condition. Reads use one database snapshot
-per request.
+is controller state driven by configuration and version 1 uses an explicit
+marker close condition. Request snapshot mode reads one
+database snapshot per request. Shared snapshot mode fixes one baseline for the
+configured scoped group, exposes that group's staged overlay to its own reads,
+and requires batch publication with the same grouping fields.
+
+Closing compares every mutated entity's published heads with the group's fixed
+baseline. Drift is resolved per entity using the conflict strategy persisted
+with that staged mutation: `reject` returns `VERSION_CONFLICT`, `mvcc` retains
+both branches, and `merge` applies the configured CRDT rules and fallback. The
+resolved set is published with one atomic compare-and-swap; a write racing that
+final compare returns entity-specific conflict details. A discard-on-expiry
+group permanently rejects further use of that identity and publishes none of
+its staged mutations.
 
 ## 5. Versions and conflicts
 
-When a conflict policy configures a base-version metadata field, that field MUST
-contain a non-empty set without duplicates. It declares the versions on which
-the candidate is based:
+The selected conflict policy identifies a base-version metadata field. For
+update and delete that field MUST contain a non-empty set without duplicates.
+It declares the versions on which the candidate is based. The policy also
+identifies an optional metadata field containing `merge`, `mvcc`, or `reject`;
+when absent, backend configuration supplies the strategy:
 
 - `reject` requires exact equality with the complete current head set and
   otherwise returns `VERSION_CONFLICT`;
-- `preserve_heads` may accept a candidate based on known older heads and expose
-  concurrent candidates as multiple heads;
+- `mvcc` accepts concurrent candidates as multiple heads;
+- `merge` applies backend-configured CRDT rules and uses the configured fallback
+  for fields or discriminator groups outside those rules;
 - unknown base versions return `VERSION_CONFLICT` and the current set;
 - an unknown entity identity returns `NOT_FOUND`.
+
+The shipped Knowledge policy applies Automerge to `/content`, groups it by the
+relative `/kind` discriminator, and applies MVCC to all other fields. A request
+still carries one complete JSON value. CRDT changes and frontiers are internal
+database state, not a second mutation format.
 
 A backend may contain multiple heads after replication. A read returns:
 
@@ -130,19 +171,49 @@ from one that never existed. A never-existing identity returns `NOT_FOUND`.
 
 ## 6. Consistency
 
-- `eventual` rules may read any controller-selected published state.
-- `causal` rules use the controller's persisted identity/group state to choose
-  a baseline that includes prior dependent publications.
-- `linearizable` rules read from a cluster-authoritative ordering point.
-- Mixed consistency is selected from configured fields and never from a client
-  request flag.
+Consistency is a conjunction of constraints compiled from the selected backend
+behavior. Metadata fields supply identities, tokens, or bounds; they do not
+select a client-controlled consistency level.
 
-When configured, the controller reads and writes an opaque causal token in
-`meta`. It uses the token alongside other configured identities for baselines,
-publication grouping, and cross-node progress. The CRUD business `data` schema
-does not contain causal fields.
+- request snapshots have no persistent baseline identity;
+- shared snapshots use `scope + configured key fields` and remain fixed for the
+  lifetime of the durable transaction group;
+- allowed source sets are intersected by acquisition requirements;
+- causal and session frontiers are joined into the minimum acceptable frontier;
+- linearizable acquisition requires an authority ordering point between request
+  invocation and response;
+- commit serialization applies one configured total-order domain;
+- eventual behavior is expressed by the absence of a causal, session, or
+  linearizable freshness requirement.
 
-## 7. Change subscriptions
+The first matching policy rule is an alternative to later rules. Within the
+selected behavior every consistency constraint applies. A fixed baseline that
+is older than a later causal/session lower bound is unsatisfiable; the backend
+MUST reject it rather than advance the baseline or weaken the lower bound.
+Statically impossible combinations MUST prevent startup. Provider capability
+mismatches MUST also prevent startup once a provider is selected.
+
+When configured, the controller reads and writes opaque causal tokens in
+`meta`. A provider joins multiple tokens using its frontier representation.
+Clients store and forward tokens but never parse them. The CRUD business `data`
+schema does not contain causal fields.
+
+The SQLite authority represents a causal token by a published change frontier
+and persists configured session frontiers across daemon restarts. Causal/session
+behavior is restricted to immediate publication in version 1; unsupported
+provider sources or frontier operations prevent daemon startup.
+
+## 7. Entity retrieval
+
+`patchouli.entity.retrieve@1` searches active published entities inside the
+scope selected from request `meta`. Its business data is `query`, optional
+`types`, and an optional `limit` from 1 through 100. Results contain scored
+hits with the current entity variants. The RPC remains entity-generic;
+deployments choose which types (for example `knowledge`) a consumer requests.
+The initial SQLite provider performs case-insensitive lexical matching over the
+stored JSON value. Retrieval never exposes staged work-unit candidates.
+
+## 8. Change subscriptions
 
 Change delivery is committed, ordered, resumable, and at least once.
 
@@ -154,11 +225,18 @@ Change delivery is committed, ordered, resumable, and at least once.
   that subscription.
 - Cursors increase in server-defined order, but clients MUST treat them as
   opaque. Notifications on one subscription follow cursor order.
-- Clients MUST apply idempotently, persist the last applied cursor, and dedupe
-  repeated cursors.
+- Physical provider routing is deployment state outside this wire schema. One
+  scope MUST remain pinned to one provider authority and cursor domain for the
+  lifetime of its cursors, causal tokens, sessions, idempotency identities and
+  open work units. Route changes require explicit data movement; a failed
+  request MUST NOT fall back to another provider.
+- Consumers MUST apply idempotently, persist the last applied cursor, and dedupe
+  repeated cursors. A Harness binding may remain policy-stateless by forwarding
+  the cursor to its consumer; the backend does not silently acknowledge delivery.
 - Only published mutations produce events. A rolled-back acceptance or failed
-  publication produces none. Changes published by one configured batch may
-  share a causal token in event `meta`, and a configured close-marker change is
+  publication produces none. Changes carry configured mutation metadata in
+  event `meta`; one configured batch may share a causal token, and its
+  configured close-marker change is
   ordered last.
 - If a requested cursor is older than retained history, subscribe returns
   `CURSOR_EXPIRED`. Retention is at least `change_retention_seconds`.
@@ -171,9 +249,12 @@ Change delivery is committed, ordered, resumable, and at least once.
 become one, `deleted` for an ordinary tombstone transition, and `updated` for an
 ordinary active transition.
 
-## 8. Errors
+## 9. Errors
 
 JSON-RPC standard errors remain available. Patchouli domain errors use:
+
+- `-32602 INVALID_REQUEST` for metadata or entity values that fail configured
+  validation. Its `error.data.reason` is `INVALID_REQUEST`.
 
 | Code | Reason | Meaning |
 | ---: | --- | --- |
@@ -184,15 +265,16 @@ JSON-RPC standard errors remain available. Patchouli domain errors use:
 | -32005 | `IDEMPOTENCY_CONFLICT` | A key was reused for another mutation. |
 | -32006 | `UNSUPPORTED_CAPABILITY` | Version, consistency, or capability is unavailable. |
 | -32007 | `DEADLINE_EXCEEDED` | Deadline elapsed before completion. |
-| -32008 | `CANCELLED` | Request was cancelled before completion. |
 | -32009 | `OVERLOADED` | Server cannot currently accept the request. |
 | -32010 | `CURSOR_EXPIRED` | Replay position is outside retained history. |
+| -32011 | `WORK_UNIT_EXPIRED` | Configured cross-request state expired before publication. |
 
-`error.data.reason` MUST match the code. `VERSION_CONFLICT` MUST also return
-`current_versions`. Error message text is diagnostic and MUST NOT drive client
-logic.
+`error.data.reason` MUST match the code. `VERSION_CONFLICT` MUST return either
+`current_versions` for one request entity or `conflicts` containing every
+conflicting entity reference and its current versions for grouped publication.
+Error message text is diagnostic and MUST NOT drive client logic.
 
-## 9. Complete wire examples
+## 10. Complete wire examples
 
 Handshake:
 
@@ -201,53 +283,53 @@ Handshake:
 ```
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"protocol_version":1,"server":{"version":"0.1.0","cluster_id":"cluster-a","node_id":"node-1"},"capabilities":["subscriptions"],"limits":{"max_request_bytes":1048576,"max_result_items":1000,"idempotency_retention_seconds":86400,"change_retention_seconds":604800}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocol_version":1,"server":{"version":"0.1.0","cluster_id":"cluster-a","node_id":"node-1"},"capabilities":["subscriptions"],"limits":{"max_request_bytes":1048576,"max_result_items":100,"idempotency_retention_seconds":86400,"change_retention_seconds":604800}}}
 ```
 
 Create:
 
 ```json
-{"jsonrpc":"2.0","id":2,"method":"patchouli.entity.create@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"create-42"},"data":{"type":"memory","id":"m-42","value":{"text":"hello"}}}}
+{"jsonrpc":"2.0","id":2,"method":"patchouli.entity.create@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"create-42"},"data":{"type":"note","id":"note-42","value":{"text":"hello"}}}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":2,"result":{"meta":{"causal_token":"c1"},"data":{"entity":{"ref":{"type":"memory","id":"m-42"},"version":"v1","state":"active","value":{"text":"hello"}}}}}
+{"jsonrpc":"2.0","id":2,"result":{"meta":{"causal_token":"c1"},"data":{"entity":{"ref":{"type":"note","id":"note-42"},"version":"v1","state":"active","value":{"text":"hello"}}}}}
 ```
 
 Read:
 
 ```json
-{"jsonrpc":"2.0","id":3,"method":"patchouli.entity.read@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","causal_token":"c1"},"data":{"ref":{"type":"memory","id":"m-42"}}}}
+{"jsonrpc":"2.0","id":3,"method":"patchouli.entity.read@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","causal_token":"c1"},"data":{"ref":{"type":"note","id":"note-42"}}}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":3,"result":{"meta":{"causal_token":"c1"},"data":{"state":"active","variants":[{"ref":{"type":"memory","id":"m-42"},"version":"v1","state":"active","value":{"text":"hello"}}]}}}
+{"jsonrpc":"2.0","id":3,"result":{"meta":{"causal_token":"c1"},"data":{"state":"active","variants":[{"ref":{"type":"note","id":"note-42"},"version":"v1","state":"active","value":{"text":"hello"}}]}}}
 ```
 
 Update:
 
 ```json
-{"jsonrpc":"2.0","id":4,"method":"patchouli.entity.update@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"update-42","base_versions":["v1"],"causal_token":"c1"},"data":{"ref":{"type":"memory","id":"m-42"},"value":{"text":"hello again"}}}}
+{"jsonrpc":"2.0","id":4,"method":"patchouli.entity.update@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"update-42","base_versions":["v1"],"causal_token":"c1","conflict_strategy":"merge"},"data":{"ref":{"type":"note","id":"note-42"},"value":{"text":"hello again"}}}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":4,"result":{"meta":{"causal_token":"c2"},"data":{"entity":{"ref":{"type":"memory","id":"m-42"},"version":"v2","state":"active","value":{"text":"hello again"}}}}}
+{"jsonrpc":"2.0","id":4,"result":{"meta":{"causal_token":"c2"},"data":{"entity":{"ref":{"type":"note","id":"note-42"},"version":"v2","state":"active","value":{"text":"hello again"}}}}}
 ```
 
 Delete:
 
 ```json
-{"jsonrpc":"2.0","id":5,"method":"patchouli.entity.delete@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"delete-42","base_versions":["v2"],"causal_token":"c2"},"data":{"ref":{"type":"memory","id":"m-42"}}}}
+{"jsonrpc":"2.0","id":5,"method":"patchouli.entity.delete@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"delete-42","base_versions":["v2"],"causal_token":"c2"},"data":{"ref":{"type":"note","id":"note-42"}}}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":5,"result":{"meta":{"causal_token":"c3"},"data":{"entity":{"ref":{"type":"memory","id":"m-42"},"version":"v3","state":"deleted"}}}}
+{"jsonrpc":"2.0","id":5,"result":{"meta":{"causal_token":"c3"},"data":{"entity":{"ref":{"type":"note","id":"note-42"},"version":"v3","state":"deleted"}}}}
 ```
 
 Subscribe and event:
 
 ```json
-{"jsonrpc":"2.0","id":6,"method":"patchouli.changes.subscribe@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7"},"data":{"filter":{"types":["memory"]},"after_cursor":"cursor-8"}}}
+{"jsonrpc":"2.0","id":6,"method":"patchouli.changes.subscribe@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7"},"data":{"filter":{"types":["note"]},"after_cursor":"cursor-8"}}}
 ```
 
 ```json
@@ -255,7 +337,7 @@ Subscribe and event:
 ```
 
 ```json
-{"jsonrpc":"2.0","method":"patchouli.changes.event@1","params":{"meta":{"causal_token":"c3","transaction_id":"tx-1"},"data":{"subscription_id":"sub-1","change":{"cursor":"cursor-9","ref":{"type":"memory","id":"m-42"},"kind":"deleted","head_versions":["v3"]}}}}
+{"jsonrpc":"2.0","method":"patchouli.changes.event@1","params":{"meta":{"causal_token":"c3","transaction_id":"tx-1"},"data":{"subscription_id":"sub-1","change":{"cursor":"cursor-9","ref":{"type":"note","id":"note-42"},"kind":"deleted","head_versions":["v3"]}}}}
 ```
 
 Unsubscribe:

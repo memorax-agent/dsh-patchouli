@@ -4,8 +4,12 @@ export const protocolVersion = 1 as const
 
 export const methods = {
   handshake: 'patchouli.protocol.handshake@1',
+  controlStatus: 'patchouli.control.status@1',
+  controlCheckpoint: 'patchouli.control.checkpoint@1',
+  controlShutdown: 'patchouli.control.shutdown@1',
   entityCreate: 'patchouli.entity.create@1',
   entityRead: 'patchouli.entity.read@1',
+  entityRetrieve: 'patchouli.entity.retrieve@1',
   entityUpdate: 'patchouli.entity.update@1',
   entityDelete: 'patchouli.entity.delete@1',
   changesSubscribe: 'patchouli.changes.subscribe@1',
@@ -48,7 +52,9 @@ export interface JsonRpcFailure<TData = JsonValue> {
 export type ChangeCursor = string
 export type VersionToken = string
 
-export type Meta = JsonObject
+export type Meta = JsonObject & {
+  readonly deadline_unix_ms?: number
+}
 
 export interface RpcParams<TData> {
   readonly meta: Meta
@@ -85,6 +91,38 @@ export interface HandshakeResult {
     readonly change_retention_seconds: number
   }
 }
+
+export type EmptyData = Readonly<Record<string, never>>
+
+export type ControlStatusParams = RpcParams<EmptyData>
+
+export interface ControlStatusResultData {
+  readonly ready: boolean
+  readonly provider: string
+  readonly generation: number
+  readonly recovered_after_unclean_shutdown: boolean
+  readonly pid: number
+  readonly started_at_unix_ms: number
+  readonly active_connections: number
+}
+
+export type ControlStatusResult = RpcResult<ControlStatusResultData>
+
+export type ControlCheckpointParams = RpcParams<EmptyData>
+
+export interface ControlCheckpointResultData {
+  readonly completed: boolean
+}
+
+export type ControlCheckpointResult = RpcResult<ControlCheckpointResultData>
+
+export type ControlShutdownParams = RpcParams<EmptyData>
+
+export interface ControlShutdownResultData {
+  readonly accepted: boolean
+}
+
+export type ControlShutdownResult = RpcResult<ControlShutdownResultData>
 
 export interface RpcMethod<TParams, TResult> {
   readonly params: TParams

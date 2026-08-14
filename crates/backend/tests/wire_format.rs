@@ -31,8 +31,12 @@ fn rust_method_and_error_constants_match_openrpc() {
 
     let mut rust_methods = vec![
         methods::HANDSHAKE,
+        methods::CONTROL_STATUS,
+        methods::CONTROL_CHECKPOINT,
+        methods::CONTROL_SHUTDOWN,
         methods::ENTITY_CREATE,
         methods::ENTITY_READ,
+        methods::ENTITY_RETRIEVE,
         methods::ENTITY_UPDATE,
         methods::ENTITY_DELETE,
         methods::CHANGES_SUBSCRIBE,
@@ -43,6 +47,10 @@ fn rust_method_and_error_constants_match_openrpc() {
     assert_eq!(rust_methods, documented_methods);
 
     let errors = document["components"]["errors"].as_object().unwrap();
+    assert_eq!(
+        errors["InvalidRequest"]["code"],
+        error_codes::INVALID_REQUEST
+    );
     assert_eq!(
         errors["Unauthenticated"]["code"],
         error_codes::UNAUTHENTICATED
@@ -65,16 +73,19 @@ fn rust_method_and_error_constants_match_openrpc() {
         errors["DeadlineExceeded"]["code"],
         error_codes::DEADLINE_EXCEEDED
     );
-    assert_eq!(errors["Cancelled"]["code"], error_codes::CANCELLED);
     assert_eq!(errors["Overloaded"]["code"], error_codes::OVERLOADED);
     assert_eq!(errors["CursorExpired"]["code"], error_codes::CURSOR_EXPIRED);
+    assert_eq!(
+        errors["WorkUnitExpired"]["code"],
+        error_codes::WORK_UNIT_EXPIRED
+    );
 }
 
 #[test]
 fn entity_version_uses_the_json_rpc_field_names() {
     let entity = EntityVersion::Active {
         entity_ref: EntityRef {
-            entity_type: "memory".to_owned(),
+            entity_type: "knowledge".to_owned(),
             id: "entity-1".to_owned(),
         },
         version: "version-1".to_owned(),
@@ -85,7 +96,7 @@ fn entity_version_uses_the_json_rpc_field_names() {
         serde_json::to_value(entity).unwrap(),
         json!({
             "state": "active",
-            "ref": { "type": "memory", "id": "entity-1" },
+            "ref": { "type": "knowledge", "id": "entity-1" },
             "version": "version-1",
             "value": { "text": "hello" }
         })
@@ -100,7 +111,7 @@ fn business_params_have_only_meta_and_data_at_the_top_level() {
             ("causal_token".to_owned(), json!("causal-2")),
         ]),
         data: CreateEntityData {
-            entity_type: "memory".to_owned(),
+            entity_type: "knowledge".to_owned(),
             id: Some("entity-1".to_owned()),
             value: json!({ "text": "hello" }),
         },
@@ -114,7 +125,7 @@ fn business_params_have_only_meta_and_data_at_the_top_level() {
                 "causal_token": "causal-2"
             },
             "data": {
-                "type": "memory",
+                "type": "knowledge",
                 "id": "entity-1",
                 "value": { "text": "hello" }
             }

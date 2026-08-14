@@ -2,82 +2,181 @@
 
 ## Status
 
-Patchouli currently provides the common Cordis Memory Service and an MVP Consumer for the official Agent Loop. Concrete memory plugins and storage connectivity are not implemented yet.
+Patchouli currently combines two implemented surfaces:
+
+- a Harness-neutral Rust backend with transactional CRUD, typed knowledge,
+  Automerge/MVCC conflict handling, lexical retrieval, retained change streams,
+  SQLite and authenticated remote providers, deterministic scope routing, and
+  daemon lifecycle recovery;
+- a DSH common Memory Service plus an MVP Consumer for the official Agent Loop.
+
+Concrete Memory Plugins are not implemented yet. The optional TypeScript
+storage client exposes control and CRUD, but does not yet bridge entity
+retrieval or change subscriptions from the backend protocol.
 
 ## Goal
 
-Provide DeepSeek Harness with a common memory capability whose concrete plugins implement update and retrieval without coupling them to Agent Loop policy.
+Provide DSH with one common memory capability while keeping Agent Loop policy,
+memory semantics, and storage mechanics independently replaceable.
 
 ```text
-Agent Loop Consumer
-       │ update / retrieve
-       ▼
-Memory Service on ctx ── route / aggregate ── Memory Plugins
-                                                  │
-                                  optional CRUD ──┴── external API
+Official Agent Loop
+  -> dsh-patchouli/agent-loop
+  -> ctx.patchouliMemory
+  -> registered MemoryPlugin
+       |-> MemoraX / another remote API
+       `-> optional ctx.patchouli
+             <- dsh-patchouli/storage
+             -> JSON-RPC daemon
+             -> BackendEngine
+             -> provider router
+             -> SQLite / remote provider
 ```
 
 ## Capability roles
 
 ### Common Memory Service
 
-The common frontend is registered as `ctx.patchouliMemory`. It owns the stable `update` / `retrieve` contract, the Memory Plugin registry, routing, and per-plugin outcomes. It contains no storage, Agent, or prompt logic.
+The root `dsh-patchouli` plugin registers `ctx.patchouliMemory`. It owns the
+stable high-level `update` / `retrieve` contract, MemoryPlugin registration,
+routing, and per-plugin outcomes. It contains no storage, Agent, or prompt
+logic.
 
 Current responsibilities:
 
 - accept an opaque scope plus update messages or a retrieval query;
-- call registered Memory Plugins without interpreting their implementation;
-- preserve plugin provenance and failures in the aggregate result;
+- call every registered MemoryPlugin without interpreting its semantics;
+- preserve plugin provenance and isolated failures in aggregate results;
 - expose no model-facing schema by itself.
 
 ### Memory Plugins
 
-A concrete Memory Plugin implements both high-level operations. `update` means submitting information for the plugin to incorporate according to its own memory semantics; it is not entity replacement. `retrieve` returns provider-local hits whose scores are not compared across plugins by the common frontend.
+A concrete MemoryPlugin implements both high-level operations. `update` means
+submitting information for that plugin to incorporate according to its own
+memory semantics; it is not entity replacement. `retrieve` returns
+provider-local hits, and scores are not compared across plugins by the common
+service.
 
-A MemoraX plugin may call the MemoraX API directly. A local plugin may instead consume the storage backend through its versioned JSON-RPC contract. Storage CRUD types do not appear in the common Memory Service contract.
+A MemoraX plugin may call the MemoraX API directly. A local plugin may instead
+consume the optional storage client. Storage CRUD types do not appear in the
+common Memory Service contract.
+
+### Agent Loop Consumer
+
+`dsh-patchouli/agent-loop` is a separate Cordis plugin. It registers the
+model-facing `memory_update` and `memory_retrieve` tools, listens to
+`agent/pre-step` for automatic retrieval, and can observe committed
+`session/event` turn boundaries for automatic update. Scope comes from the
+session working directory, falling back to the session id, rather than model
+input.
+
+The retrieval Hook calls `next()`, extracts text only from directly sourced
+user messages, retrieves through the common service, and appends one
+plugin-sourced recall message. Tool continuations, rejected steps, empty
+results, and retrieval failures inject nothing.
+
+Automatic update is opt-in. A `completed` or `max-tokens` `turn/end` is the
+post-commit boundary; the Consumer reconstructs that bracket from the canonical
+Session Log and submits direct-user plus assistant text once. Plugin-injected
+context, reasoning, tool calls, and tool results are excluded. Updates are
+serialized per Session, failures do not affect the Agent Loop, and Consumer
+disposal aborts and drains admitted work.
+
+Every call includes normalized metadata identifying the official Agent Loop,
+the trigger (`manual-tool`, `pre-step`, or `turn-end`), and available
+session/turn/step position. MemoryPlugins therefore do not depend on Agent or
+Session objects.
+
+### Optional Storage Client
+
+`dsh-patchouli/storage` registers `ctx.patchouli`, connects to an existing
+daemon, and may start one when the configured endpoint is unavailable. It is
+not part of the default bundle, so remote-only MemoryPlugins do not require a
+local daemon.
+
+The client currently exposes status, checkpoint, and generic entity
+create/read/update/delete. The backend protocol also implements entity retrieve
+and cursor-based change subscriptions, but the TypeScript client does not yet
+expose those methods or dispatch `patchouli.changes.event@1` notifications.
+
+The daemon remains independent of plugin lifecycle: unloading the storage
+plugin closes its IPC connection but does not administratively stop the daemon.
+Shutdown goes through the `patchouli stop` CLI.
 
 ### Storage Backend
 
-The database backend is implemented in Rust and owns persistence plus the generic entity CRUD/change stream. It must not depend on Agent lifecycle, prompt assembly, DeepSeek Harness, or Cordis. Local Memory Plugins consume this backend through the versioned JSON-RPC contract.
+The Rust backend owns persistence plus generic entity CRUD, retrieval, and
+change streams. It does not depend on Agent lifecycle, prompt assembly, DSH, or
+Cordis. Its first fact vocabulary contains versioned `knowledge` and
+`knowledge_relation` entities; see [the fact model](knowledge-model.md).
 
-The frontend binding is stateless with respect to database policy. Backend calls follow this boundary:
+The frontend binding remains stateless with respect to database policy:
 
 ```text
 JSON-RPC adapter
     -> backend controller
     -> configured policy engine
-    -> database provider primitives
+    -> provider boundary
 ```
 
-The controller owns schemas, identity extraction, consistency selection, logical transaction/batch state, conflicts and publication. A database provider does not interpret business fields and is never called directly by the frontend adapter.
+The controller owns schemas, identity extraction, consistency planning,
+logical work units, conflicts, idempotency, and publication. Selected behavior
+compiles metadata aliases into scoped snapshot, acquisition, session, and
+commit-order constraints. Rules are alternatives; constraints inside one
+behavior combine without fallback or downgrade.
 
-### Agent Loop Consumer
+`BackendEngine` owns immutable validated policy and one injected provider
+boundary. That boundary may be a router containing the required local SQLite
+authority and named remote authorities. Cross-request business facts live in
+the provider; the engine retains no process-local transaction or batch map.
 
-The Consumer is a separate `dsh-patchouli/agent-loop` Cordis plugin. It registers model-facing `memory_update` and `memory_retrieve` tools, listens to `agent/pre-step` for automatic retrieval, and can observe committed `session/event` turn boundaries for automatic update. Scope is derived from the session working directory, falling back to the session id, rather than accepted from model input.
+Providers also own durable lifecycle. Startup takes exclusive database
+ownership, lets SQLite recover committed state, records a runtime generation,
+and only then exposes IPC. Graceful shutdown drains connections, records a clean
+stop, checkpoints WAL, closes the provider, and releases ownership. Every
+mutation is made durable by its provider transaction before its RPC response
+succeeds.
 
-The retrieval Hook calls `next()`, extracts text only from directly sourced user messages, retrieves through the common service, and appends one plugin-sourced recall message to the returned decision. Tool continuations, rejected steps, empty results, and retrieval failures inject nothing.
+Database providers are compile-time Rust adapters:
 
-Automatic update is opt-in. A `completed` or `max-tokens` `turn/end` is the post-commit boundary; the Consumer reconstructs that bracket from the canonical Session Log and submits direct-user plus assistant text once. Plugin-injected user context, reasoning, tool calls, and tool results are excluded. Updates are serialized per live Session, failures do not affect the Agent Loop, and Consumer disposal aborts and drains admitted work.
+- `patchouli-provider` defines the common boundary;
+- `patchouli-provider-sqlite` owns local persistence;
+- `patchouli-provider-remote` transports provider primitives over authenticated
+  HTTPS;
+- `patchouli-provider-router` maps canonical scope JSON to one named provider.
 
-Every call includes normalized Consumer metadata identifying the official Agent Loop, the trigger (`manual-tool`, `pre-step`, or `turn-end`), and the available session/turn/step position. Concrete Memory Plugins therefore do not depend on Agent or Session objects.
+Routing uses first-match order and one explicit default. It never falls back to
+another provider after failure, and one atomic work unit cannot cross routes.
+`cluster_id` and `node_id` identify a serving process but do not imply
+replication.
 
-The injected message must be:
+The IPC framing is shared across platforms: Unix domain sockets on macOS/Linux,
+Windows named pipes, and UTF-8 NDJSON on every platform.
 
-- bounded by an explicit result and character budget;
-- tagged with plugin provenance and the `recall` context form;
-- appended rather than inserted into earlier history;
-- admitted through the normal Session Log path so the model-visible request can be reconstructed;
-- emitted once per admitted direct-user batch; tool continuations do not repeat retrieval.
+## Model interface
 
-## MVP model interface
+The official Consumer currently provides automatic retrieval and explicit
+update/retrieve tools. Automatic retrieval defaults on; committed-turn
+automatic update defaults off. Turn-count, character-count, and inactivity
+policies remain follow-up work in the Consumer rather than provider-specific
+behavior in the common service.
 
-The current Consumer enables automatic retrieval and exposes explicit update/retrieve tools. Automatic retrieval defaults on; committed-turn automatic update defaults off. Additional turn-count, character-count, and inactivity policies remain separate follow-up work rather than provider-specific behavior in the common frontend.
+## Delivery status
 
-## Initial delivery sequence
+Completed:
 
-1. Common Memory Service and Memory Plugin registry.
+1. Common Memory Service and MemoryPlugin registry.
 2. Official Agent Loop Consumer with Hook and Tool paths.
-3. A MemoraX plugin working end to end through the common service and Consumer.
-4. Local storage-backed plugins and operational surfaces such as status, rebuild, and inspection.
+3. Harness-neutral storage protocol, transactional daemon, retrieval, change
+   stream, and local/remote providers.
+4. Optional TypeScript control and CRUD client.
 
-The repository is a monorepo. Rust backend crates live under `crates/`; JavaScript/TypeScript protocol and Harness packages live under `packages/`. The root package remains the DeepSeek Harness plugin until it is moved into its own package.
+Next:
+
+1. A MemoraX MemoryPlugin working end to end through the common service.
+2. A local storage-backed MemoryPlugin.
+3. TypeScript entity retrieve and change-subscription bridging.
+4. Operational memory surfaces such as inspection and rebuild.
+
+The root package is the DSH frontend bundle. Rust backend crates live under
+`crates/`, and only `packages/protocol` is a Harness-neutral TypeScript package.

@@ -1,7 +1,7 @@
 # Patchouli Protocol
 
 This package defines the harness-neutral JSON-RPC contract between Patchouli
-clients and the database backend. Entity kinds such as memories, relations, or
+clients and the database backend. Entity kinds such as knowledge, relations, or
 future records are values of the generic `type` parameter; they do not create
 separate RPC method families.
 
@@ -19,17 +19,24 @@ Version 1 contains:
 
 - generic entity create, read, update, and delete methods;
 - an open `meta` envelope plus strict CRUD business data;
-- configuration-selected preconditions, consistency, and causal metadata;
+- configuration-selected preconditions, consistency, causal metadata, and an
+  optional conflict-strategy request;
 - resumable change subscriptions through opaque cursors;
 - cluster and node identity in the connection handshake.
 
-It does not define entity payload schemas, storage tables, replication,
-conflict-resolution algorithms, or a Harness binding.
+The generic OpenRPC methods do not specialize entity payloads. This package
+also publishes the optional, harness-neutral `KnowledgeValue` and
+`KnowledgeRelationValue` bindings plus their versioned JSON Schemas. Storage
+tables, replication, conflict-resolution algorithms, and Harness bindings stay
+outside the wire contract.
 
 ## Methods
 
 ```text
 patchouli.protocol.handshake@1
+patchouli.control.status@1
+patchouli.control.checkpoint@1
+patchouli.control.shutdown@1
 patchouli.entity.create@1
 patchouli.entity.read@1
 patchouli.entity.update@1
@@ -47,6 +54,11 @@ and every successful result uses `{ meta, data }`. `data` contains only the
 method's business fields. `meta` is an open JSON object whose recognized fields
 are selected by backend configuration.
 
+`meta.deadline_unix_ms` is reserved by the protocol as an optional unsigned
+Unix-millisecond acceptance deadline. Expiry before a database acceptance commit
+returns `DEADLINE_EXCEEDED` and rolls the operation back. Version 1 does not
+support request cancellation.
+
 Each create, update, or delete is accepted atomically by the Rust backend
 controller. Configuration determines whether the accepted version is published
 immediately or as part of a logical batch. Only published versions produce
@@ -57,8 +69,8 @@ change notifications.
 An adapter supplies its own entity type and JSON payload vocabulary:
 
 ```ts
-type EntityType = 'memory' | 'relation'
-type EntityValue = MemoryValue | RelationValue
+type EntityType = 'knowledge' | 'knowledge_relation'
+type EntityValue = KnowledgeValue | KnowledgeRelationValue
 type Contract = PatchouliProtocol<EntityType, EntityValue>
 ```
 
@@ -79,7 +91,9 @@ may accept several heads without changing the CRUD `data` schema.
 Clients must not parse version or causal tokens. When configured, causal input
 and output live in `meta` alongside channel, transaction, plugin-route, and
 other deployment-specific identities. The controller retains causal progress
-for configured identities; CRUD requests do not select a consistency mode.
+for configured identities; CRUD requests do not select a consistency mode. A
+configured metadata field may request `merge`, `mvcc`, or `reject` conflict
+handling. Its absence uses the backend-configured default.
 
 ## Reactive delivery
 
@@ -94,6 +108,7 @@ does not invalidate the cursor.
 
 ## Transport binding
 
-The first binding is JSON-RPC 2.0 over WebSocket. One WebSocket text frame
-contains one complete JSON-RPC object. Batch requests are not part of protocol
-version 1.
+The first binding is a UTF-8 NDJSON stream over local IPC. macOS and Linux use
+a Unix domain socket; Windows uses a named pipe. One line contains one complete
+JSON-RPC object. The same connection carries responses and server
+notifications. Batch requests are not part of protocol version 1.

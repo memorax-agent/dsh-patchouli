@@ -1,40 +1,98 @@
 {
+  "$schema": "./patchouli.schema.json",
   "version": 1,
-  "entity_types": {
-    "event": {
+  "retention": { "idempotency_seconds": 86400, "changes_seconds": 604800 },
+  "meta_fields": {
+    "workspace_id": {
+      "pointer": "/workspace_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "user_id": {
+      "pointer": "/user_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "channel_id": {
+      "pointer": "/channel_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "conflict_strategy": {
+      "pointer": "/conflict_strategy",
+      "schema": { "type": "string", "enum": ["merge", "mvcc", "reject"] }
+    },
+    "transaction_id": {
+      "pointer": "/transaction_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "transaction_state": {
+      "pointer": "/transaction_state",
+      "schema": { "type": "string" }
+    },
+    "base_versions": {
+      "pointer": "/base_versions",
       "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "required": ["payload"],
-        "properties": {
-          "payload": {}
-        },
-        "additionalProperties": false
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1,
+        "uniqueItems": true
+      }
+    }
+  },
+  "entity_identity": {
+    "scope_by": ["workspace_id", "user_id"]
+  },
+  "entity_types": {
+    "knowledge": {
+      "value_schema": {
+        "$ref": "urn:patchouli:schema:knowledge:1"
       },
-      "fields": {
-        "channel_id": { "pointer": "/meta/channel_id", "required": true },
-        "transaction_id": { "pointer": "/meta/transaction_id" },
-        "event_time": { "pointer": "/meta/event_time" },
-        "participant_id": { "pointer": "/meta/plugin_route_id" },
-        "transaction_state": { "pointer": "/meta/transaction_state" },
-        "causal_token": { "pointer": "/meta/causal_token" },
-        "base_versions": { "pointer": "/meta/base_versions" }
-      },
-      "consistency": {
-        "rules": [
-          {
-            "name": "transaction_batch",
-            "when_all_present": ["transaction_id", "event_time", "participant_id"],
-            "identity": ["channel_id", "transaction_id", "event_time", "participant_id"],
-            "group_by": ["channel_id", "transaction_id"],
-            "baseline": {
-              "consistency": "causal",
-              "source": "replica",
-              "at_field": "event_time",
-              "causal_field": "causal_token"
+      "rules": [
+        {
+          "name": "transaction_batch",
+          "when": {
+            "all_present": ["transaction_id"]
+          },
+          "behavior": {
+            "consistency": {
+              "snapshot": {
+                "mode": "shared",
+                "key_by": ["transaction_id"]
+              },
+              "acquire": {
+                "allow_sources": ["authority"],
+                "requirements": [
+                  {
+                    "kind": "linearizable",
+                    "key_by": []
+                  }
+                ]
+              },
+              "sessions": [],
+              "commit": {
+                "ordering": {
+                  "kind": "serialize",
+                  "key_by": []
+                }
+              }
             },
-            "batch": {
-              "visibility": "on_close",
+            "idempotency": {
+              "mode": "disabled"
+            },
+            "conflict": {
+              "default_strategy": "merge",
+              "strategy_from": "conflict_strategy",
+              "base_versions": "base_versions",
+              "merge": [
+                {
+                  "path": "/content",
+                  "strategy": "automerge",
+                  "group_by": ["/kind"]
+                }
+              ],
+              "otherwise": "mvcc"
+            },
+            "publication": {
+              "mode": "batch",
+              "key_by": ["transaction_id"],
               "close_when": {
                 "kind": "marker",
                 "field": "transaction_state",
@@ -42,23 +100,144 @@
               },
               "staging_ttl_ms": 3600000,
               "on_expire": "discard"
-            },
-            "conflict": {
-              "strategy": "preserve_heads",
-              "base_versions_field": "base_versions"
             }
           }
-        ],
-        "fallback": {
-          "identity": ["channel_id"],
-          "baseline": {
-            "consistency": "linearizable",
-            "source": "authority"
+        }
+      ],
+      "fallback": {
+        "consistency": {
+          "snapshot": {
+            "mode": "request"
           },
-          "conflict": {
-            "strategy": "reject",
-            "base_versions_field": "base_versions"
+          "acquire": {
+            "allow_sources": ["authority"],
+            "requirements": [
+              {
+                "kind": "linearizable",
+                "key_by": []
+              }
+            ]
+          },
+          "sessions": [],
+          "commit": {
+            "ordering": {
+              "kind": "serialize",
+              "key_by": []
+            }
           }
+        },
+        "idempotency": {
+          "mode": "disabled"
+        },
+        "conflict": {
+          "default_strategy": "merge",
+          "strategy_from": "conflict_strategy",
+          "base_versions": "base_versions",
+          "merge": [
+            {
+              "path": "/content",
+              "strategy": "automerge",
+              "group_by": ["/kind"]
+            }
+          ],
+          "otherwise": "mvcc"
+        },
+        "publication": {
+          "mode": "immediate"
+        }
+      }
+    },
+    "knowledge_relation": {
+      "value_schema": {
+        "$ref": "urn:patchouli:schema:knowledge-relation:1"
+      },
+      "rules": [
+        {
+          "name": "transaction_batch",
+          "when": {
+            "all_present": ["transaction_id"]
+          },
+          "behavior": {
+            "consistency": {
+              "snapshot": {
+                "mode": "shared",
+                "key_by": ["transaction_id"]
+              },
+              "acquire": {
+                "allow_sources": ["authority"],
+                "requirements": [
+                  {
+                    "kind": "linearizable",
+                    "key_by": []
+                  }
+                ]
+              },
+              "sessions": [],
+              "commit": {
+                "ordering": {
+                  "kind": "serialize",
+                  "key_by": []
+                }
+              }
+            },
+            "idempotency": {
+              "mode": "disabled"
+            },
+            "conflict": {
+              "default_strategy": "mvcc",
+              "strategy_from": "conflict_strategy",
+              "base_versions": "base_versions",
+              "merge": [],
+              "otherwise": "mvcc"
+            },
+            "publication": {
+              "mode": "batch",
+              "key_by": ["transaction_id"],
+              "close_when": {
+                "kind": "marker",
+                "field": "transaction_state",
+                "equals": "commit"
+              },
+              "staging_ttl_ms": 3600000,
+              "on_expire": "discard"
+            }
+          }
+        }
+      ],
+      "fallback": {
+        "consistency": {
+          "snapshot": {
+            "mode": "request"
+          },
+          "acquire": {
+            "allow_sources": ["authority"],
+            "requirements": [
+              {
+                "kind": "linearizable",
+                "key_by": []
+              }
+            ]
+          },
+          "sessions": [],
+          "commit": {
+            "ordering": {
+              "kind": "serialize",
+              "key_by": []
+            }
+          }
+        },
+        "idempotency": {
+          "mode": "disabled"
+        },
+        "conflict": {
+          "default_strategy": "mvcc",
+          "strategy_from": "conflict_strategy",
+          "base_versions": "base_versions",
+          "merge": [],
+          "otherwise": "mvcc"
+        },
+        "publication": {
+          "mode": "immediate"
         }
       }
     }

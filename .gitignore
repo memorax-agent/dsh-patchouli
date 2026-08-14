@@ -16,12 +16,14 @@ coverage/
 *.db
 *.db-shm
 *.db-wal
+*.db.lock
 
 # Local configuration and secrets
 .env
 .env.*
 !.env.example
 *.local
+PRODUCT.md
 
 # Logs
 *.log

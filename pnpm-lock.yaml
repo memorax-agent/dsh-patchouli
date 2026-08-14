@@ -11,6 +11,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.1
+      '@memorax-agent/patchouli-protocol':
+        specifier: workspace:*
+        version: link:packages/protocol
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1

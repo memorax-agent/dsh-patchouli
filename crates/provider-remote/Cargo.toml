@@ -1,0 +1,22 @@
+[package]
+name = "patchouli-provider-remote"
+description = "Authenticated remote Patchouli provider transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+patchouli-provider = { path = "../provider" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+
+[dev-dependencies]
+patchouli-provider-sqlite = { path = "../provider-sqlite" }
+tempfile = "3"
+tokio.workspace = true

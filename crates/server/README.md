@@ -1,0 +1,44 @@
+# Patchouli Server
+
+Cross-platform daemon shell and control CLI for Patchouli. It owns process
+lifecycle, local IPC, JSON-RPC handshake, status, graceful shutdown, and
+composition of `BackendEngine` with scope-routed local and remote providers. CRUD, generic
+retrieval, and resumable change subscriptions
+are routed to the engine and use transactional storage under the shipped
+single-node policy.
+
+Local transports:
+
+- macOS/Linux: Unix domain socket;
+- Windows: named pipe;
+- framing: UTF-8 NDJSON, one JSON-RPC object per line.
+
+```bash
+cargo install --path crates/server
+patchouli serve --endpoint <endpoint> --providers <provider-config> --config <policy-path>
+patchouli provide --listen 127.0.0.1:8080 --database <path> --token-env PATCHOULI_PROVIDER_TOKEN
+patchouli status --endpoint <endpoint>
+patchouli checkpoint --endpoint <endpoint>
+patchouli stop --endpoint <endpoint>
+patchouli config check config/patchouli.default.json --providers config/providers.local.json
+```
+
+The server library accepts the provider contract rather than a SQLite
+connection. The shipped CLI always names its local SQLite provider `local`, may
+connect named remote storage nodes, and reports `routed` in the control status
+response. Scope rules select exactly one provider and never fail over. SQLite is the default Cargo feature; consumers
+embedding only the server library may disable default features and inject
+another provider.
+
+Handshake capabilities are negotiated by intersection. The reusable local
+client queues change notifications while ordinary responses are outstanding
+and exposes subscribe/unsubscribe operations without depending on Harness.
+
+`status` reports the provider generation and whether startup followed an
+unclean shutdown. On `stop`, the daemon stops accepting clients, signals and
+drains connection tasks, then shuts down the engine and provider.
+
+`patchouli provide` owns one SQLite authority and exposes provider primitives.
+Read its bearer token only from the named environment variable. Bind it to
+loopback behind an HTTPS reverse proxy for remote access; non-loopback remote
+clients reject cleartext HTTP.
