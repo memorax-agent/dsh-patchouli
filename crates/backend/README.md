@@ -15,8 +15,11 @@ policy and a healthy injected provider. The next storage layer will use
 `PolicySelector` to derive scope, baseline, idempotency, and publication keys
 before invoking provider transaction primitives.
 
-Entity kinds are opaque strings. `memory`, `relation`, and future kinds all use
-the same methods and storage interface.
+Entity kinds remain opaque to the CRUD protocol. The backend additionally
+publishes the first harness-neutral fact vocabulary: typed `knowledge` and
+`knowledge_relation` Rust values backed by versioned JSON Schemas. They use the
+same methods and storage interface as any future configured kind; see
+[`docs/knowledge-model.md`](../../docs/knowledge-model.md).
 
 The frontend plugin is stateless with respect to database policy. JSON Schema,
 identity extraction, batching, baselines, timestamps, and conflicts are backend

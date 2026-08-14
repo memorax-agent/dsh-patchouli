@@ -12,7 +12,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio_rusqlite::{Connection, rusqlite};
 
-const STORAGE_SCHEMA_VERSION: i64 = 1;
+const STORAGE_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Error)]
 pub enum SqliteProviderError {
@@ -122,7 +122,78 @@ impl Provider for SqliteProvider {
                             running,
                             started_at_unix_ms,
                             clean_shutdown_at_unix_ms
-                        ) VALUES (1, 0, 0, 0, NULL);",
+                        ) VALUES (1, 0, 0, 0, NULL);
+
+                        CREATE TABLE IF NOT EXISTS patchouli_entity_version (
+                            scope_json TEXT NOT NULL
+                                CHECK (json_valid(scope_json) AND json_type(scope_json) = 'object'),
+                            entity_type TEXT NOT NULL CHECK (length(entity_type) > 0),
+                            entity_id TEXT NOT NULL CHECK (length(entity_id) > 0),
+                            version TEXT NOT NULL CHECK (length(version) > 0),
+                            state TEXT NOT NULL CHECK (state IN ('active', 'deleted')),
+                            value_json TEXT,
+                            recorded_at_unix_ms INTEGER NOT NULL
+                                CHECK (recorded_at_unix_ms >= 0),
+                            PRIMARY KEY (scope_json, entity_type, entity_id, version),
+                            CHECK (
+                                (state = 'active' AND value_json IS NOT NULL AND json_valid(value_json))
+                                OR (state = 'deleted' AND value_json IS NULL)
+                            )
+                        ) STRICT;
+
+                        CREATE TABLE IF NOT EXISTS patchouli_entity_head (
+                            scope_json TEXT NOT NULL,
+                            entity_type TEXT NOT NULL,
+                            entity_id TEXT NOT NULL,
+                            version TEXT NOT NULL,
+                            PRIMARY KEY (scope_json, entity_type, entity_id, version),
+                            FOREIGN KEY (scope_json, entity_type, entity_id, version)
+                                REFERENCES patchouli_entity_version (
+                                    scope_json,
+                                    entity_type,
+                                    entity_id,
+                                    version
+                                ) ON DELETE CASCADE
+                        ) STRICT, WITHOUT ROWID;
+
+                        CREATE VIEW IF NOT EXISTS patchouli_knowledge AS
+                        SELECT
+                            version.scope_json,
+                            version.entity_id AS knowledge_id,
+                            version.version,
+                            json_extract(version.value_json, '$.content') AS content_json,
+                            json_extract(version.value_json, '$.metadata') AS metadata_json,
+                            json_extract(version.value_json, '$.artifact') AS artifact_json,
+                            json_extract(version.value_json, '$.profile') AS profile_json,
+                            version.recorded_at_unix_ms
+                        FROM patchouli_entity_version AS version
+                        INNER JOIN patchouli_entity_head AS head USING (
+                            scope_json,
+                            entity_type,
+                            entity_id,
+                            version
+                        )
+                        WHERE version.entity_type = 'knowledge' AND version.state = 'active';
+
+                        CREATE VIEW IF NOT EXISTS patchouli_knowledge_relation AS
+                        SELECT
+                            version.scope_json,
+                            version.entity_id AS relation_id,
+                            version.version,
+                            json_extract(version.value_json, '$.type') AS relation_type,
+                            json_extract(version.value_json, '$.from') AS from_knowledge_refs_json,
+                            json_extract(version.value_json, '$.to') AS to_knowledge_refs_json,
+                            json_extract(version.value_json, '$.metadata') AS metadata_json,
+                            version.recorded_at_unix_ms
+                        FROM patchouli_entity_version AS version
+                        INNER JOIN patchouli_entity_head AS head USING (
+                            scope_json,
+                            entity_type,
+                            entity_id,
+                            version
+                        )
+                        WHERE version.entity_type = 'knowledge_relation'
+                            AND version.state = 'active';",
                     )
                     .map_err(database_error)?;
 

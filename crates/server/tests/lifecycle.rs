@@ -7,11 +7,14 @@ use async_trait::async_trait;
 use patchouli_backend::{BackendConfig, BackendEngine, CreateEntityData, RpcParams};
 use patchouli_provider::{Provider, ProviderError, ProviderRecovery};
 use patchouli_server::{IpcError, LocalClient, LocalServer, ServerOptions};
-use serde_json::json;
 
 const EXAMPLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../config/patchouli.example.json"
+));
+const KNOWLEDGE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/protocol/schemas/examples/knowledge@1.json"
 ));
 
 #[derive(Default)]
@@ -97,9 +100,9 @@ async fn daemon_accepts_status_and_shutdown_over_local_ipc() {
         .create(&RpcParams {
             meta: Default::default(),
             data: CreateEntityData {
-                entity_type: "event".to_owned(),
-                id: Some("event-1".to_owned()),
-                value: json!({ "payload": "hello" }),
+                entity_type: "knowledge".to_owned(),
+                id: Some("knowledge-1".to_owned()),
+                value: serde_json::from_str(KNOWLEDGE).expect("valid knowledge fixture"),
             },
         })
         .await

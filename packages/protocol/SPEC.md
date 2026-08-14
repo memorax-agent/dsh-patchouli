@@ -40,7 +40,7 @@ shape; their `data` request object is empty.
 
 The wire-level entity reference is `(type, id)`.
 
-- `type` is an opaque, non-empty string. Values such as `memory` and `relation`
+- `type` is an opaque, non-empty string. Values such as `knowledge` and `knowledge_relation`
   do not create different protocol methods.
 - `id` is an opaque, non-empty string. When create omits it, the server MUST
   generate it and return it in the accepted entity reference.
@@ -220,47 +220,47 @@ Handshake:
 Create:
 
 ```json
-{"jsonrpc":"2.0","id":2,"method":"patchouli.entity.create@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"create-42"},"data":{"type":"memory","id":"m-42","value":{"text":"hello"}}}}
+{"jsonrpc":"2.0","id":2,"method":"patchouli.entity.create@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"create-42"},"data":{"type":"note","id":"note-42","value":{"text":"hello"}}}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":2,"result":{"meta":{"causal_token":"c1"},"data":{"entity":{"ref":{"type":"memory","id":"m-42"},"version":"v1","state":"active","value":{"text":"hello"}}}}}
+{"jsonrpc":"2.0","id":2,"result":{"meta":{"causal_token":"c1"},"data":{"entity":{"ref":{"type":"note","id":"note-42"},"version":"v1","state":"active","value":{"text":"hello"}}}}}
 ```
 
 Read:
 
 ```json
-{"jsonrpc":"2.0","id":3,"method":"patchouli.entity.read@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","causal_token":"c1"},"data":{"ref":{"type":"memory","id":"m-42"}}}}
+{"jsonrpc":"2.0","id":3,"method":"patchouli.entity.read@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","causal_token":"c1"},"data":{"ref":{"type":"note","id":"note-42"}}}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":3,"result":{"meta":{"causal_token":"c1"},"data":{"state":"active","variants":[{"ref":{"type":"memory","id":"m-42"},"version":"v1","state":"active","value":{"text":"hello"}}]}}}
+{"jsonrpc":"2.0","id":3,"result":{"meta":{"causal_token":"c1"},"data":{"state":"active","variants":[{"ref":{"type":"note","id":"note-42"},"version":"v1","state":"active","value":{"text":"hello"}}]}}}
 ```
 
 Update:
 
 ```json
-{"jsonrpc":"2.0","id":4,"method":"patchouli.entity.update@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"update-42","base_versions":["v1"],"causal_token":"c1"},"data":{"ref":{"type":"memory","id":"m-42"},"value":{"text":"hello again"}}}}
+{"jsonrpc":"2.0","id":4,"method":"patchouli.entity.update@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"update-42","base_versions":["v1"],"causal_token":"c1"},"data":{"ref":{"type":"note","id":"note-42"},"value":{"text":"hello again"}}}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":4,"result":{"meta":{"causal_token":"c2"},"data":{"entity":{"ref":{"type":"memory","id":"m-42"},"version":"v2","state":"active","value":{"text":"hello again"}}}}}
+{"jsonrpc":"2.0","id":4,"result":{"meta":{"causal_token":"c2"},"data":{"entity":{"ref":{"type":"note","id":"note-42"},"version":"v2","state":"active","value":{"text":"hello again"}}}}}
 ```
 
 Delete:
 
 ```json
-{"jsonrpc":"2.0","id":5,"method":"patchouli.entity.delete@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"delete-42","base_versions":["v2"],"causal_token":"c2"},"data":{"ref":{"type":"memory","id":"m-42"}}}}
+{"jsonrpc":"2.0","id":5,"method":"patchouli.entity.delete@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7","transaction_id":"tx-1","idempotency_key":"delete-42","base_versions":["v2"],"causal_token":"c2"},"data":{"ref":{"type":"note","id":"note-42"}}}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":5,"result":{"meta":{"causal_token":"c3"},"data":{"entity":{"ref":{"type":"memory","id":"m-42"},"version":"v3","state":"deleted"}}}}
+{"jsonrpc":"2.0","id":5,"result":{"meta":{"causal_token":"c3"},"data":{"entity":{"ref":{"type":"note","id":"note-42"},"version":"v3","state":"deleted"}}}}
 ```
 
 Subscribe and event:
 
 ```json
-{"jsonrpc":"2.0","id":6,"method":"patchouli.changes.subscribe@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7"},"data":{"filter":{"types":["memory"]},"after_cursor":"cursor-8"}}}
+{"jsonrpc":"2.0","id":6,"method":"patchouli.changes.subscribe@1","params":{"meta":{"workspace":"alpha","channel_id":"channel-7"},"data":{"filter":{"types":["note"]},"after_cursor":"cursor-8"}}}
 ```
 
 ```json
@@ -268,7 +268,7 @@ Subscribe and event:
 ```
 
 ```json
-{"jsonrpc":"2.0","method":"patchouli.changes.event@1","params":{"meta":{"causal_token":"c3","transaction_id":"tx-1"},"data":{"subscription_id":"sub-1","change":{"cursor":"cursor-9","ref":{"type":"memory","id":"m-42"},"kind":"deleted","head_versions":["v3"]}}}}
+{"jsonrpc":"2.0","method":"patchouli.changes.event@1","params":{"meta":{"causal_token":"c3","transaction_id":"tx-1"},"data":{"subscription_id":"sub-1","change":{"cursor":"cursor-9","ref":{"type":"note","id":"note-42"},"kind":"deleted","head_versions":["v3"]}}}}
 ```
 
 Unsubscribe:

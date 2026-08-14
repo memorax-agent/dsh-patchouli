@@ -44,15 +44,68 @@
     "scope_by": ["channel_id"]
   },
   "entity_types": {
-    "event": {
+    "knowledge": {
       "value_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "required": ["payload"],
-        "properties": {
-          "payload": {}
+        "$ref": "urn:patchouli:schema:knowledge:1"
+      },
+      "rules": [
+        {
+          "name": "transaction_batch",
+          "when": {
+            "all_present": ["transaction_id", "event_time", "participant_id"]
+          },
+          "behavior": {
+            "baseline": {
+              "mode": "shared",
+              "consistency": "causal",
+              "source": "replica",
+              "key_by": ["channel_id", "transaction_id"],
+              "at": "event_time",
+              "causal_token": "causal_token"
+            },
+            "idempotency": {
+              "mode": "keyed",
+              "key_by": ["channel_id", "transaction_id", "participant_id", "request_id"]
+            },
+            "conflict": {
+              "strategy": "preserve_heads",
+              "base_versions": "base_versions"
+            },
+            "publication": {
+              "mode": "batch",
+              "key_by": ["channel_id", "transaction_id"],
+              "close_when": {
+                "kind": "marker",
+                "field": "transaction_state",
+                "equals": "commit"
+              },
+              "staging_ttl_ms": 3600000,
+              "on_expire": "discard"
+            }
+          }
+        }
+      ],
+      "fallback": {
+        "baseline": {
+          "mode": "request",
+          "consistency": "linearizable",
+          "source": "authority"
         },
-        "additionalProperties": false
+        "idempotency": {
+          "mode": "disabled"
+        },
+        "conflict": {
+          "strategy": "reject",
+          "base_versions": "base_versions"
+        },
+        "publication": {
+          "mode": "immediate"
+        }
+      }
+    },
+    "knowledge_relation": {
+      "value_schema": {
+        "$ref": "urn:patchouli:schema:knowledge-relation:1"
       },
       "rules": [
         {

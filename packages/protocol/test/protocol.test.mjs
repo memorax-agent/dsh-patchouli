@@ -3,6 +3,8 @@ import test from 'node:test'
 
 import {
   errorCodes,
+  factEntityTypes,
+  factSchemaUris,
   methods,
   protocolVersion,
 } from '../lib/index.js'
@@ -21,6 +23,18 @@ test('publishes the versioned generic CRUD and reactive method names', () => {
     changesSubscribe: 'patchouli.changes.subscribe@1',
     changesUnsubscribe: 'patchouli.changes.unsubscribe@1',
     changesEvent: 'patchouli.changes.event@1',
+  })
+})
+
+test('publishes the typed fact identities without adding RPC methods', () => {
+  assert.deepEqual(factEntityTypes, {
+    knowledge: 'knowledge',
+    knowledgeRelation: 'knowledge_relation',
+  })
+  assert.deepEqual(factSchemaUris, {
+    common: 'urn:patchouli:schema:fact-common:1',
+    knowledge: 'urn:patchouli:schema:knowledge:1',
+    knowledgeRelation: 'urn:patchouli:schema:knowledge-relation:1',
   })
 })
 

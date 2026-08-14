@@ -21,6 +21,18 @@ The normative configuration shape is
 deployment example is
 [`config/patchouli.example.json`](../config/patchouli.example.json).
 
+The default configuration registers the built-in fact schemas by stable URN:
+
+```json
+"knowledge": {
+  "value_schema": { "$ref": "urn:patchouli:schema:knowledge:1" }
+}
+```
+
+The backend resolves the built-in Knowledge and KnowledgeRelation schemas from the
+installed package without network access. Inline deployment schemas remain
+valid for other entity types.
+
 ## Validation
 
 Configuration is checked in two layers at backend startup:

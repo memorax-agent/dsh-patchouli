@@ -2,7 +2,7 @@
 
 Patchouli 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地知识依赖。目标是在不要求模型发起 Tool Call 的前提下，按当前任务检索相关知识，并通过 Harness 原生、可记录的上下文链路注入模型请求。
 
-> 当前状态：已经具备可加载的 Cordis 插件、Rust `BackendEngine`、本地 IPC、控制 CLI 和 SQLite provider 启动适配。macOS/Linux 使用 Unix socket，Windows 使用 named pipe。CRUD 已经完成前后端接线，但存储业务逻辑仍为明确的未实现占位；知识采集、索引和召回尚未实现。
+> 当前状态：已经具备可加载的 Cordis 插件、Rust `BackendEngine`、本地 IPC、控制 CLI、SQLite provider 生命周期，以及 `Knowledge`/`KnowledgeRelation` v1 类型和数据库条目。macOS/Linux 使用 Unix socket，Windows 使用 named pipe。CRUD 已经完成前后端接线，但存储执行逻辑仍为明确的未实现占位；知识采集、索引和召回尚未实现。
 
 daemon 会独占数据库实例，记录运行代次和正常/异常关闭状态。正常停止会先停止接收连接、关闭现有 IPC 会话，再执行 SQLite WAL checkpoint、持久化干净关闭标记并释放数据库锁；异常退出后的下一次启动由 SQLite WAL 自动恢复已提交事务，并在状态接口中报告恢复事实。
 
@@ -17,6 +17,7 @@ Patchouli 将以 monorepo 形式围绕三个边界逐步实现：
 数据库后端使用 Rust 实现，独立于 DeepSeek Harness；TypeScript 仅承担插件和客户端协议类型。
 
 默认模型界面是自动上下文注入，而不是知识库工具。详细约束见 [架构文档](docs/architecture.md)。
+知识事实字段、关系方向和 SQLite 条目见 [事实模型](docs/knowledge-model.md)。
 
 ## 环境要求
 

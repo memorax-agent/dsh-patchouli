@@ -23,8 +23,11 @@ Version 1 contains:
 - resumable change subscriptions through opaque cursors;
 - cluster and node identity in the connection handshake.
 
-It does not define entity payload schemas, storage tables, replication,
-conflict-resolution algorithms, or a Harness binding.
+The generic OpenRPC methods do not specialize entity payloads. This package
+also publishes the optional, harness-neutral `KnowledgeValue` and
+`KnowledgeRelationValue` bindings plus their versioned JSON Schemas. Storage
+tables, replication, conflict-resolution algorithms, and Harness bindings stay
+outside the wire contract.
 
 ## Methods
 
@@ -60,8 +63,8 @@ change notifications.
 An adapter supplies its own entity type and JSON payload vocabulary:
 
 ```ts
-type EntityType = 'memory' | 'relation'
-type EntityValue = MemoryValue | RelationValue
+type EntityType = 'knowledge' | 'knowledge_relation'
+type EntityValue = KnowledgeValue | KnowledgeRelationValue
 type Contract = PatchouliProtocol<EntityType, EntityValue>
 ```
 

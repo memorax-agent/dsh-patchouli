@@ -8,11 +8,14 @@ use patchouli_backend::{
     BackendConfig, BackendEngine, BackendErrorReason, BackendService, CreateEntityData, RpcParams,
 };
 use patchouli_provider::{Provider, ProviderError, ProviderRecovery};
-use serde_json::json;
 
 const EXAMPLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../config/patchouli.example.json"
+));
+const KNOWLEDGE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/protocol/schemas/examples/knowledge@1.json"
 ));
 
 struct HealthyProvider;
@@ -106,15 +109,21 @@ async fn engine_starts_with_validated_config_and_routes_to_placeholders() {
 
     assert_eq!(engine.provider_kind(), "test");
     assert_eq!(engine.recovery().generation, 1);
-    assert!(engine.config().entity_types.contains_key("event"));
+    assert!(engine.config().entity_types.contains_key("knowledge"));
+    assert!(
+        engine
+            .config()
+            .entity_types
+            .contains_key("knowledge_relation")
+    );
 
     let error = engine
         .create(RpcParams {
             meta: Default::default(),
             data: CreateEntityData {
-                entity_type: "event".to_owned(),
-                id: Some("event-1".to_owned()),
-                value: json!({ "payload": "hello" }),
+                entity_type: "knowledge".to_owned(),
+                id: Some("knowledge-1".to_owned()),
+                value: serde_json::from_str(KNOWLEDGE).expect("valid knowledge fixture"),
             },
         })
         .await

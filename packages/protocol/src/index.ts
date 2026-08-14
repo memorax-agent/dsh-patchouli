@@ -1,6 +1,7 @@
 export * from './changes.js'
 export * from './entity.js'
 export * from './errors.js'
+export * from './facts.js'
 export * from './json.js'
 export * from './rpc.js'
 

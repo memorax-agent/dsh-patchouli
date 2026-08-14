@@ -38,6 +38,13 @@ Expected responsibilities:
 
 The database backend is implemented in Rust and owns persistence plus the generic entity CRUD/change stream. It must not depend on Agent lifecycle, prompt assembly, DeepSeek Harness, or Cordis. Provider and retrieval code consume this backend through the versioned JSON-RPC contract.
 
+The first fact vocabulary has two configured entity kinds: `knowledge` and
+`knowledge_relation`. Their versioned JSON Schemas and Rust/TypeScript bindings are
+harness-neutral and do not add knowledge-specific RPC methods. Generic entity
+identity/version remains outside the value, while SQLite stores immutable
+versions once and exposes typed read-only views. See
+[the fact model](knowledge-model.md).
+
 The frontend binding is stateless with respect to database policy. Backend calls follow this boundary:
 
 ```text
@@ -52,7 +59,7 @@ The controller owns schemas, identity extraction, consistency selection, logical
 `BackendEngine` is the runtime owner of the immutable validated policy and one
 injected provider. JSON-RPC sessions call it only through `BackendService`.
 Cross-request business facts will live in the provider; the engine retains no
-in-memory transaction or batch map.
+process-local transaction or batch map.
 
 The provider also owns the durable daemon lifecycle. Startup takes exclusive
 database ownership, lets the database recover committed state, records a new

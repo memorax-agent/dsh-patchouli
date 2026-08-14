@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::fact::BuiltinFactSchemaRetriever;
+
 const CONFIG_SCHEMA: &str = include_str!("../../../config/patchouli.schema.json");
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -271,6 +273,28 @@ impl BackendConfig {
 
         Ok(())
     }
+
+    pub fn validate_entity_value(
+        &self,
+        entity_type: &str,
+        value: &Value,
+    ) -> Result<(), ConfigError> {
+        let policy = self.entity_types.get(entity_type).ok_or_else(|| {
+            invalid(
+                format!("entity_types.{entity_type}"),
+                "entity type is not configured",
+            )
+        })?;
+        let validator = build_json_schema(&policy.value_schema).map_err(|message| {
+            invalid(format!("entity_types.{entity_type}.value_schema"), message)
+        })?;
+        validator.validate(value).map_err(|error| {
+            invalid(
+                format!("entity_types.{entity_type}.value{}", error.instance_path()),
+                error.to_string(),
+            )
+        })
+    }
 }
 
 fn validate_behavior(
@@ -399,7 +423,17 @@ fn validate_aliases(
 
 fn validate_json_schema(path: &str, schema: &Value) -> Result<(), ConfigError> {
     jsonschema::meta::validate(schema)
-        .map_err(|error| invalid(path, format!("value must be a valid JSON Schema: {error}")))
+        .map_err(|error| invalid(path, format!("value must be a valid JSON Schema: {error}")))?;
+    build_json_schema(schema)
+        .map(|_| ())
+        .map_err(|error| invalid(path, format!("value schema cannot be resolved: {error}")))
+}
+
+fn build_json_schema(schema: &Value) -> Result<jsonschema::Validator, String> {
+    jsonschema::draft202012::options()
+        .with_retriever(BuiltinFactSchemaRetriever)
+        .build(schema)
+        .map_err(|error| error.to_string())
 }
 
 fn valid_json_pointer(pointer: &str) -> bool {

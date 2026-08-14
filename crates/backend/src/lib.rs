@@ -2,12 +2,23 @@ mod config;
 mod controller;
 mod engine;
 mod error;
+mod fact;
 mod model;
 mod service;
 mod wire;
 
 pub use engine::{BackendEngine, EngineError};
 pub use error::{BackendError, BackendErrorReason};
+pub use fact::{
+    AbstractionLevel, Actionability, ArtifactReference, EmbeddingArtifactMetadata,
+    EmbeddingMediaType, EmbeddingMetric, EpistemicStatus, FACT_COMMON_SCHEMA_URI, FactLifecycle,
+    FactMetadata, FactMetadataCore, FactOrigin, FactScope, FactTime, KNOWLEDGE_ENTITY_TYPE,
+    KNOWLEDGE_RELATION_ENTITY_TYPE, KNOWLEDGE_RELATION_SCHEMA_URI, KNOWLEDGE_SCHEMA_URI,
+    KnowledgeContent, KnowledgeEntityType, KnowledgeProfile, KnowledgeRef,
+    KnowledgeRelationSchemaVersion, KnowledgeRelationType, KnowledgeRelationValue,
+    KnowledgeSchemaVersion, KnowledgeValue, LifecycleStatus, Ownership, Persistence, Provenance,
+    ProvenanceKind, RetrievalMode, TemporalGrounding,
+};
 pub use model::{
     ChangeCursor, ChangeFilter, ChangeKind, ChangeRecord, CreateEntityData, CreateEntityParams,
     DeleteEntityData, DeleteEntityParams, EntityRef, EntityVersion, Meta, MutationData,

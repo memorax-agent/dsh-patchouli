@@ -77,7 +77,7 @@ fn rust_method_and_error_constants_match_openrpc() {
 fn entity_version_uses_the_json_rpc_field_names() {
     let entity = EntityVersion::Active {
         entity_ref: EntityRef {
-            entity_type: "memory".to_owned(),
+            entity_type: "knowledge".to_owned(),
             id: "entity-1".to_owned(),
         },
         version: "version-1".to_owned(),
@@ -88,7 +88,7 @@ fn entity_version_uses_the_json_rpc_field_names() {
         serde_json::to_value(entity).unwrap(),
         json!({
             "state": "active",
-            "ref": { "type": "memory", "id": "entity-1" },
+            "ref": { "type": "knowledge", "id": "entity-1" },
             "version": "version-1",
             "value": { "text": "hello" }
         })
@@ -103,7 +103,7 @@ fn business_params_have_only_meta_and_data_at_the_top_level() {
             ("causal_token".to_owned(), json!("causal-2")),
         ]),
         data: CreateEntityData {
-            entity_type: "memory".to_owned(),
+            entity_type: "knowledge".to_owned(),
             id: Some("entity-1".to_owned()),
             value: json!({ "text": "hello" }),
         },
@@ -117,7 +117,7 @@ fn business_params_have_only_meta_and_data_at_the_top_level() {
                 "causal_token": "causal-2"
             },
             "data": {
-                "type": "memory",
+                "type": "knowledge",
                 "id": "entity-1",
                 "value": { "text": "hello" }
             }
