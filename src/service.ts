@@ -49,7 +49,7 @@ export class PatchouliService extends Service {
       await this.connect()
     } catch (error) {
       if (!this.config.autoStart || !isUnavailable(error)) throw error
-      await startDaemon(this.config.command, this.config.endpoint)
+      await startDaemon(this.config.command, this.config.endpoint, this.config.databasePath)
       await this.waitForDaemon()
     }
     this.ctx.logger('patchouli').info(
@@ -187,8 +187,8 @@ export class PatchouliService extends Service {
   }
 }
 
-async function startDaemon(command: string, endpoint: string): Promise<void> {
-  const child = spawn(command, ['serve', '--endpoint', endpoint], {
+async function startDaemon(command: string, endpoint: string, databasePath: string): Promise<void> {
+  const child = spawn(command, ['serve', '--endpoint', endpoint, '--database', databasePath], {
     detached: true,
     stdio: 'ignore',
   })

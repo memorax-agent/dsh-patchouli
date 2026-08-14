@@ -3,7 +3,7 @@
   "openrpc": "1.3.2",
   "info": {
     "title": "Patchouli Storage Protocol",
-    "version": "1.0.0-draft.4",
+    "version": "1.0.0-draft.5",
     "description": "Harness-neutral transactional CRUD and reactive change protocol for generic JSON entities.",
     "license": {
       "name": "MIT",
@@ -363,9 +363,10 @@
           "data": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["ready", "pid", "started_at_unix_ms", "active_connections"],
+            "required": ["ready", "provider", "pid", "started_at_unix_ms", "active_connections"],
             "properties": {
               "ready": { "type": "boolean" },
+              "provider": { "type": "string", "minLength": 1 },
               "pid": { "type": "integer", "minimum": 1 },
               "started_at_unix_ms": { "type": "integer", "minimum": 0 },
               "active_connections": { "type": "integer", "minimum": 0 }

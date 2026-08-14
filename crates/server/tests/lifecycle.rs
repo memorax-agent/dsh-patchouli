@@ -1,13 +1,34 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use patchouli_provider::{Provider, ProviderError};
 use patchouli_server::{LocalClient, LocalServer, ServerOptions};
+
+struct HealthyProvider;
+
+#[async_trait]
+impl Provider for HealthyProvider {
+    fn kind(&self) -> &'static str {
+        "test"
+    }
+
+    async fn health_check(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+}
 
 #[tokio::test]
 async fn daemon_accepts_status_and_shutdown_over_local_ipc() {
     let (_directory, endpoint) = test_endpoint();
-    let server = LocalServer::bind(ServerOptions {
-        endpoint: endpoint.clone(),
-        node_id: "node-test".to_owned(),
-        cluster_id: "cluster-test".to_owned(),
-    })
+    let provider = Arc::new(HealthyProvider);
+    let server = LocalServer::bind(
+        ServerOptions {
+            endpoint: endpoint.clone(),
+            node_id: "node-test".to_owned(),
+            cluster_id: "cluster-test".to_owned(),
+        },
+        provider,
+    )
     .await
     .expect("bind daemon");
     let task = tokio::spawn(server.run());
@@ -17,6 +38,7 @@ async fn daemon_accepts_status_and_shutdown_over_local_ipc() {
         .expect("connect client");
     let status = client.status().await.expect("read status");
     assert!(status.data.ready);
+    assert_eq!(status.data.provider, "test");
     assert_eq!(status.data.pid, std::process::id());
     assert_eq!(status.data.active_connections, 1);
 

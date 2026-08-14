@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/backend", "crates/server"]
+members = [
+  "crates/backend",
+  "crates/provider",
+  "crates/provider-sqlite",
+  "crates/server",
+]
 resolver = "3"
 
 [workspace.package]
@@ -17,3 +22,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"] }
+tokio-rusqlite = { version = "0.7", features = ["bundled"] }

@@ -41,6 +41,7 @@ test('registers a daemon service and completes the control handshake', async (t)
               meta: {},
               data: {
                 ready: true,
+                provider: 'sqlite',
                 pid: process.pid,
                 started_at_unix_ms: 1,
                 active_connections: 1,
@@ -74,5 +75,6 @@ test('registers a daemon service and completes the control handshake', async (t)
   assert.equal(ctx.patchouli.server?.server.node_id, 'test')
   const status = await ctx.patchouli.status()
   assert.equal(status.data.ready, true)
+  assert.equal(status.data.provider, 'sqlite')
   assert.equal(status.data.pid, process.pid)
 })

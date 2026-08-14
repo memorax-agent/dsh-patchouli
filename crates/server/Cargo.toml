@@ -10,14 +10,22 @@ publish = false
 [[bin]]
 name = "patchouli"
 path = "src/main.rs"
+required-features = ["sqlite"]
+
+[features]
+default = ["sqlite"]
+sqlite = ["dep:patchouli-provider-sqlite"]
 
 [dependencies]
 clap.workspace = true
 patchouli-backend = { path = "../backend" }
+patchouli-provider = { path = "../provider" }
+patchouli-provider-sqlite = { path = "../provider-sqlite", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 tempfile = "3"

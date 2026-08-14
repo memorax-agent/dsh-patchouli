@@ -1,8 +1,8 @@
 # Patchouli Server
 
-Cross-platform daemon shell and control CLI for Patchouli. It currently owns
-only process lifecycle, local IPC, JSON-RPC handshake, status, and graceful
-shutdown. It does not implement CRUD or open a database yet.
+Cross-platform daemon shell and control CLI for Patchouli. It owns process
+lifecycle, local IPC, JSON-RPC handshake, status, graceful shutdown, and
+composition of the default SQLite provider. It does not implement CRUD yet.
 
 Local transports:
 
@@ -12,8 +12,14 @@ Local transports:
 
 ```bash
 cargo install --path crates/server
-patchouli serve --endpoint <endpoint>
+patchouli serve --endpoint <endpoint> --database <path>
 patchouli status --endpoint <endpoint>
 patchouli stop --endpoint <endpoint>
 patchouli config check config/patchouli.example.json
 ```
+
+The server library accepts the provider contract rather than a SQLite
+connection. The shipped CLI selects the SQLite adapter and reports `sqlite` in
+the control status response. SQLite is the default Cargo feature; consumers
+embedding only the server library may disable default features and inject
+another provider.

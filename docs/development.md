@@ -22,7 +22,8 @@ cargo install --path crates/server
 ```
 
 The Cordis plugin defaults to `autoStart: true` and invokes the `patchouli`
-binary from `PATH` when its endpoint is unavailable. Default endpoints are:
+binary from `PATH` when its endpoint is unavailable. It opens the SQLite file
+at `~/.patchouli/data/patchouli.db` by default. Default endpoints are:
 
 - macOS/Linux: `~/.patchouli/run/patchouli.sock`
 - Windows: `\\.\pipe\patchouli`
@@ -30,7 +31,9 @@ binary from `PATH` when its endpoint is unavailable. Default endpoints are:
 Manual macOS/Linux lifecycle:
 
 ```bash
-patchouli serve --endpoint "$HOME/.patchouli/run/patchouli.sock"
+patchouli serve \
+  --endpoint "$HOME/.patchouli/run/patchouli.sock" \
+  --database "$HOME/.patchouli/data/patchouli.db"
 patchouli status --endpoint "$HOME/.patchouli/run/patchouli.sock"
 patchouli stop --endpoint "$HOME/.patchouli/run/patchouli.sock"
 ```
@@ -39,16 +42,18 @@ Manual PowerShell lifecycle:
 
 ```powershell
 $endpoint = '\\.\pipe\patchouli'
-patchouli serve --endpoint $endpoint
+$database = Join-Path $HOME '.patchouli\data\patchouli.db'
+patchouli serve --endpoint $endpoint --database $database
 patchouli status --endpoint $endpoint
 patchouli stop --endpoint $endpoint
 ```
 
 `serve` remains in the foreground for launchd, systemd, Windows Service
 wrappers, containers, and local development. Plugin auto-start launches the
-same command as a detached process. The current daemon implements only
-handshake, status, and shutdown; CRUD methods intentionally return method not
-found until the engine layer is added.
+same command as a detached process. SQLite is opened and health-checked before
+the daemon begins listening. The current daemon implements only handshake,
+status, and shutdown; CRUD methods intentionally return method not found until
+the engine layer is added.
 
 Validate the existing backend policy file without starting a daemon:
 

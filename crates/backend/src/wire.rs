@@ -99,6 +99,7 @@ pub type ControlStatusParams = RpcParams<EmptyData>;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlStatusResultData {
     pub ready: bool,
+    pub provider: String,
     pub pid: u32,
     pub started_at_unix_ms: u64,
     pub active_connections: u64,

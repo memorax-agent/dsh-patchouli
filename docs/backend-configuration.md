@@ -5,6 +5,10 @@ Except for the handshake, protocol messages use `{ meta, data }`. `data`
 contains method business fields; the backend interprets `meta` through named
 configuration fields.
 
+This policy file does not select or configure a physical database provider.
+Provider connection settings belong to daemon startup; for the initial SQLite
+adapter that setting is the database file path.
+
 The frontend plugin does not select consistency or maintain transaction state.
 The request path is:
 

@@ -13,6 +13,7 @@ use patchouli_backend::{
     ControlStatusResultData, EmptyData, HandshakeParams, HandshakeResult, Meta, PROTOCOL_VERSION,
     RpcParams, RpcResult, ServerIdentity, ServerLimits, methods,
 };
+use patchouli_provider::{Provider, ProviderError};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -45,6 +46,8 @@ pub enum IpcError {
     Rpc { code: i64, message: String },
     #[error("daemon response id does not match request id")]
     ResponseIdMismatch,
+    #[error("database provider is not ready: {0}")]
+    Provider(#[from] ProviderError),
 }
 
 pub struct LocalServer {
@@ -53,10 +56,15 @@ pub struct LocalServer {
     started_at_unix_ms: u64,
     active_connections: Arc<AtomicU64>,
     shutdown_tx: watch::Sender<bool>,
+    provider: Arc<dyn Provider>,
 }
 
 impl LocalServer {
-    pub async fn bind(options: ServerOptions) -> Result<Self, IpcError> {
+    pub async fn bind(
+        options: ServerOptions,
+        provider: Arc<dyn Provider>,
+    ) -> Result<Self, IpcError> {
+        provider.health_check().await?;
         let listener = transport::Listener::bind(&options.endpoint).await?;
         let (shutdown_tx, _) = watch::channel(false);
         Ok(Self {
@@ -65,6 +73,7 @@ impl LocalServer {
             started_at_unix_ms: unix_time_ms(),
             active_connections: Arc::new(AtomicU64::new(0)),
             shutdown_tx,
+            provider,
         })
     }
 
@@ -79,6 +88,7 @@ impl LocalServer {
                         self.started_at_unix_ms,
                         Arc::clone(&self.active_connections),
                         self.shutdown_tx.clone(),
+                        self.provider.kind(),
                     );
                     tokio::spawn(async move {
                         let _ = connection.serve(stream).await;
@@ -104,6 +114,7 @@ struct ConnectionState {
     started_at_unix_ms: u64,
     active_connections: Arc<AtomicU64>,
     shutdown_tx: watch::Sender<bool>,
+    provider_kind: &'static str,
 }
 
 impl ConnectionState {
@@ -112,12 +123,14 @@ impl ConnectionState {
         started_at_unix_ms: u64,
         active_connections: Arc<AtomicU64>,
         shutdown_tx: watch::Sender<bool>,
+        provider_kind: &'static str,
     ) -> Self {
         Self {
             options,
             started_at_unix_ms,
             active_connections,
             shutdown_tx,
+            provider_kind,
         }
     }
 
@@ -225,6 +238,7 @@ impl ConnectionState {
                     meta: Meta::new(),
                     data: ControlStatusResultData {
                         ready: true,
+                        provider: self.provider_kind.to_owned(),
                         pid: std::process::id(),
                         started_at_unix_ms: self.started_at_unix_ms,
                         active_connections: self.active_connections.load(Ordering::Relaxed),

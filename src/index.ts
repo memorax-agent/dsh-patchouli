@@ -20,6 +20,8 @@ export interface Config {
   endpoint: string
   /** Patchouli executable used when auto-start is enabled. */
   command: string
+  /** SQLite database file passed to a daemon started by this plugin. */
+  databasePath: string
   /** Start a detached daemon when no existing daemon can be reached. */
   autoStart: boolean
   /** Maximum time to wait for a newly started daemon. */
@@ -33,6 +35,7 @@ const defaultEndpoint = process.platform === 'win32'
 export const Config: z<Config> = z.object({
   endpoint: z.string().default(defaultEndpoint),
   command: z.string().default('patchouli'),
+  databasePath: z.string().default(join(homedir(), '.patchouli', 'data', 'patchouli.db')),
   autoStart: z.boolean().default(true),
   startupTimeoutMs: z.natural().min(1).default(5_000),
 })

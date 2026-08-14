@@ -1,0 +1,18 @@
+[package]
+name = "patchouli-provider-sqlite"
+description = "SQLite database provider for Patchouli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+patchouli-provider = { path = "../provider" }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

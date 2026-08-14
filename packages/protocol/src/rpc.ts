@@ -94,6 +94,7 @@ export type ControlStatusParams = RpcParams<EmptyData>
 
 export interface ControlStatusResultData {
   readonly ready: boolean
+  readonly provider: string
   readonly pid: number
   readonly started_at_unix_ms: number
   readonly active_connections: number

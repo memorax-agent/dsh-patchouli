@@ -1,0 +1,12 @@
+[package]
+name = "patchouli-provider"
+description = "Database provider contract for Patchouli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
