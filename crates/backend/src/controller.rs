@@ -3,86 +3,98 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{BackendConfig, ConsistencyBehavior};
+use crate::{BackendConfig, BaselinePolicy, Behavior, IdempotencyPolicy, PublicationPolicy};
 
 #[derive(Clone, Debug)]
-pub struct PolicyEngine {
+pub struct PolicySelector {
     config: BackendConfig,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PolicyDecision {
+pub struct PolicySelection {
     pub rule: Option<String>,
     pub fields: BTreeMap<String, Value>,
-    pub identity: BTreeMap<String, Value>,
-    pub group: BTreeMap<String, Value>,
-    pub behavior: ConsistencyBehavior,
+    pub scope: BTreeMap<String, Value>,
+    pub baseline_key: Option<BTreeMap<String, Value>>,
+    pub idempotency_key: Option<BTreeMap<String, Value>>,
+    pub publication_key: Option<BTreeMap<String, Value>>,
+    pub behavior: Behavior,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolicyError {
     #[error("entity type {0:?} is not configured")]
     UnknownEntityType(String),
-    #[error("required configured field {field:?} is absent for entity type {entity_type:?}")]
+    #[error("required metadata field {field:?} is absent for entity type {entity_type:?}")]
     MissingField { entity_type: String, field: String },
 }
 
-impl PolicyEngine {
+impl PolicySelector {
     pub fn new(config: BackendConfig) -> Self {
         Self { config }
     }
 
-    pub fn decide(
-        &self,
-        entity_type: &str,
-        operation: &Value,
-    ) -> Result<PolicyDecision, PolicyError> {
+    pub fn select(&self, entity_type: &str, meta: &Value) -> Result<PolicySelection, PolicyError> {
         let policy = self
             .config
             .entity_types
             .get(entity_type)
             .ok_or_else(|| PolicyError::UnknownEntityType(entity_type.to_owned()))?;
 
-        let mut fields = BTreeMap::new();
-        for (name, selector) in &policy.fields {
-            match selector.select(operation) {
-                Some(value) => {
-                    fields.insert(name.clone(), value.clone());
-                }
-                None if selector.required => {
-                    return Err(PolicyError::MissingField {
-                        entity_type: entity_type.to_owned(),
-                        field: name.clone(),
-                    });
-                }
-                None => {}
-            }
-        }
+        let fields = self
+            .config
+            .meta_fields
+            .iter()
+            .filter_map(|(name, selector)| {
+                selector
+                    .select(meta)
+                    .cloned()
+                    .map(|value| (name.clone(), value))
+            })
+            .collect::<BTreeMap<_, _>>();
 
-        let matched_rule = policy.consistency.rules.iter().find(|rule| {
-            rule.when_all_present
+        let matched_rule = policy.rules.iter().find(|rule| {
+            rule.when
+                .all_present
                 .iter()
                 .all(|field| fields.contains_key(field))
         });
         let (rule, behavior) = matched_rule.map_or_else(
-            || (None, &policy.consistency.fallback),
+            || (None, &policy.fallback),
             |rule| (Some(rule.name.clone()), &rule.behavior),
         );
 
-        let identity = select_fields(entity_type, &fields, &behavior.identity)?;
-        let group = select_fields(entity_type, &fields, &behavior.group_by)?;
+        let scope = select_key(entity_type, &fields, &self.config.entity_identity.scope_by)?;
+        let baseline_key = match &behavior.baseline {
+            BaselinePolicy::Request { .. } => None,
+            BaselinePolicy::Shared { key_by, .. } => {
+                Some(select_key(entity_type, &fields, key_by)?)
+            }
+        };
+        let idempotency_key = match &behavior.idempotency {
+            IdempotencyPolicy::Disabled => None,
+            IdempotencyPolicy::Keyed { key_by } => Some(select_key(entity_type, &fields, key_by)?),
+        };
+        let publication_key = match &behavior.publication {
+            PublicationPolicy::Immediate => None,
+            PublicationPolicy::Batch { key_by, .. } => {
+                Some(select_key(entity_type, &fields, key_by)?)
+            }
+        };
 
-        Ok(PolicyDecision {
+        Ok(PolicySelection {
             rule,
             fields,
-            identity,
-            group,
+            scope,
+            baseline_key,
+            idempotency_key,
+            publication_key,
             behavior: behavior.clone(),
         })
     }
 }
 
-fn select_fields(
+fn select_key(
     entity_type: &str,
     fields: &BTreeMap<String, Value>,
     names: &[String],

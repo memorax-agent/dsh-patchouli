@@ -36,8 +36,8 @@ pub mod methods {
 }
 pub use config::{
     BackendConfig, BaselinePolicy, BaselineSource, BatchCloseCondition, BatchExpiryPolicy,
-    BatchPolicy, BatchVisibility, ConfigError, ConfiguredConsistency, ConflictPolicy,
-    ConflictStrategy, ConsistencyBehavior, ConsistencyPolicy, ConsistencyRule, EntityPolicy,
-    FieldSelector,
+    Behavior, ConfigError, ConfiguredConsistency, ConflictPolicy, ConflictStrategy,
+    EntityIdentityPolicy, EntityPolicy, IdempotencyPolicy, MetaField, PolicyRule,
+    PublicationPolicy, RuleMatch,
 };
-pub use controller::{PolicyDecision, PolicyEngine, PolicyError};
+pub use controller::{PolicyError, PolicySelection, PolicySelector};

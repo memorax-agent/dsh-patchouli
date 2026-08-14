@@ -2,109 +2,120 @@
 
 Database policy is deployment configuration, not part of the CRUD wire schema.
 Except for the handshake, protocol messages use `{ meta, data }`. `data`
-contains only method business fields; `meta` is open JSON interpreted by the
-backend for entity types configured locally.
+contains method business fields; the backend interprets `meta` through named
+configuration fields.
 
-The frontend plugin is stateless with respect to this policy. The request path
-is:
+The frontend plugin does not select consistency or maintain transaction state.
+The request path is:
 
 ```text
-JSON-RPC adapter -> Rust backend controller -> policy engine -> database provider
+JSON-RPC adapter -> backend engine -> policy selector -> database provider
 ```
 
-The controller, not the frontend or provider, owns validation, rule selection,
-logical baselines, durable group state, closing timers, conflicts, publication,
-and construction of the protocol response. The provider only supplies storage,
-snapshot, transaction, and change-log primitives.
+The normative configuration shape is
+[`config/patchouli.schema.json`](../config/patchouli.schema.json). A complete
+deployment example is
+[`config/patchouli.example.json`](../config/patchouli.example.json).
 
-The example configuration is [`config/patchouli.example.json`](../config/patchouli.example.json).
+## Validation
 
-## Normalized operation document
+Configuration is checked in two layers at backend startup:
 
-Named fields use RFC 6901 JSON Pointers over the received `{ meta, data }`
-document:
+1. JSON Schema rejects missing properties, invalid enums, invalid shapes, and
+   unknown properties.
+2. Rust semantic validation checks JSON Pointer syntax, embedded JSON Schemas,
+   duplicate names, and every metadata alias referenced by a rule.
+
+Invalid configuration prevents the backend from starting. There is no runtime
+fallback to a partially valid policy.
+
+## Metadata fields
+
+`meta_fields` gives deployment-specific metadata stable aliases. Each pointer
+is relative to the request `meta` object, not to the full JSON-RPC envelope.
+Each field also contains a JSON Schema for its runtime value.
 
 ```json
 {
-  "meta": {
-    "channel_id": "channel-7",
-    "transaction_id": "transaction-3",
-    "event_time": "2026-08-14T08:00:00Z",
-    "plugin_route_id": "route-a",
-    "causal_token": "causal-2",
-    "idempotency_key": "request-9",
-    "base_versions": ["version-1"]
+  "channel_id": {
+    "pointer": "/channel_id",
+    "schema": { "type": "string", "minLength": 1 }
   },
-  "data": {
-    "type": "event",
-    "id": "event-42",
-    "value": { "payload": {} }
+  "causal_token": {
+    "pointer": "/causal_token",
+    "schema": { "type": "string", "minLength": 1 }
   }
 }
 ```
 
-For create and update, `data.value` is the proposed entity value. Read and
-delete contain only `data.ref`. A required selector that cannot be resolved
-makes the operation invalid. Identity and consistency rules refer to field
-aliases, never directly to hard-coded metadata names.
+Channel, transaction, timestamp, routed-plugin, request, causal, and
+base-version values are ordinary configured metadata. Renaming one changes only
+the deployment configuration and frontend metadata mapping, not CRUD `data` or
+the JSON-RPC method family.
 
-## Schema and identity
+## Key roles
 
-Each configured entity type contains an inline JSON Schema for `data.value`.
-The controller validates a proposed value before persistence. Every selected
-consistency behavior has its own ordered `identity` list, so a mixed model may
-use different identities without altering the wire-level `EntityRef`.
+The configuration deliberately separates identities by engine role:
 
-Channel, transaction, timestamp, routed-plugin, causal, idempotency, and
-base-version values are therefore ordinary configured metadata fields. Another
-deployment may choose different names and pointers without changing CRUD
-`data` or an RPC method.
+- `entity_identity.scope_by` optionally namespaces every entity and change
+  record. The storage identity is `configured scope + (type, id)`.
+- shared `baseline.key_by` identifies requests that share database baseline
+  state.
+- keyed `idempotency.key_by` identifies one logical mutation for retry
+  deduplication.
+- batch `publication.key_by` identifies candidates published together.
 
-## Mixed consistency rules
+Every `key_by` is complete and used exactly as written; the engine never adds
+the entity scope implicitly. A plugin participant ID can therefore identify a
+mutation without entering the entity storage key. Concurrent plugins still
+address the same entity and enter the configured conflict policy.
 
-Rules are evaluated in file order. The first rule whose
-`when_all_present` selectors resolve is applied; otherwise `fallback` is used.
+## Entity policies and rules
 
-- `group_by` identifies operations sharing one logical baseline or batch.
-- `baseline.consistency` chooses eventual, causal, or linearizable acquisition.
-- `baseline.source` chooses any node, an authority, or a replica.
-- `baseline.at_field` optionally anchors the baseline to a configured logical
-  time field. The actual database snapshot token remains server-owned and
-  opaque.
-- `baseline.causal_field` optionally names the configured metadata field that
-  carries opaque causal progress.
-- `conflict.strategy: reject` rejects a conflicting publication.
-- `conflict.strategy: preserve_heads` retains concurrent candidates for
-  explicit later resolution.
-- `conflict.base_versions_field` optionally names the configured metadata field
-  containing the candidate's base versions.
+Each entity type declares:
 
-Consistency rules cannot infer when an open batch is complete. A batch must
-declare exactly one close condition:
+- `value_schema`, applied to proposed `data.value` on create and update;
+- ordered `rules` selected from metadata presence;
+- one explicit `fallback` behavior.
 
-- `marker`: a configured field equals a configured JSON value;
-- `expected_count`: the configured field gives the expected member count;
-- `time_window`: event time crosses a fixed window plus allowed lateness.
+Rules are evaluated in file order. The first rule whose `when.all_present`
+aliases are present is selected. A selected behavior references fields by alias;
+missing fields required by the operation produce an error rather than selecting
+another policy.
 
-`staging_ttl_ms` bounds abandoned controller state. `on_expire` explicitly
-chooses whether an incomplete batch is discarded or published under its normal
-conflict policy. The controller persists group membership, selected baseline,
-candidates, close state, and conflicts; the frontend does not reconstruct them
-after reconnecting.
+## Behavior
 
-## Durability and visibility
+Every behavior maps directly to an engine phase:
 
-Every CRUD mutation is atomically appended to the durable operation journal
-together with its idempotency result. Without a batch, the same database
-transaction also publishes the entity head and change record.
+- `baseline.mode: request` creates no persistent baseline key.
+- `baseline.mode: shared` requires the complete `key_by` used for persistent
+  baseline state.
+- `baseline.consistency` selects eventual, causal, or linearizable reads.
+- `baseline.source` selects any node, an authority, or a replica.
+- `baseline.at` optionally anchors a new baseline to configured logical time.
+- `baseline.causal_token` identifies the opaque token field read from request
+  `meta` and written to result/event `meta`.
+- `idempotency.mode: disabled` creates no idempotency record or key.
+- `idempotency.mode: keyed` requires the complete `key_by` for a mutation and
+  its stored result.
+- `conflict.strategy` selects rejection or preservation of concurrent heads.
+- `conflict.base_versions` identifies the metadata field containing the
+  candidate's base version set.
+- `publication.mode` is explicitly `immediate` or `batch`.
 
-With `visibility: on_close`, individual mutations are durable candidates but
-are not published as visible heads or subscription changes until the close
-condition fires. Closing a batch publishes all accepted candidates and their
-change records in one short database transaction. The backend never keeps a
-database connection transaction open between RPC calls.
+A batch publication additionally declares its `key_by`, exactly one
+`close_when` condition, a positive `staging_ttl_ms`, and `on_expire` behavior.
+Close conditions are marker equality, expected member count, or an event-time
+window.
 
-A successful mutation response means durable acceptance. Configuration decides
-whether publication is immediate or deferred. Consumers that use deferred
-profiles must treat the change stream or the configured batch-control entity as
-the publication result.
+## Transaction boundary
+
+Every CRUD mutation uses one short database transaction. It atomically records
+the immutable candidate or tombstone, enabled idempotency and causal/group
+state, and—when publication is immediate—the visible head and change record.
+
+Batch mode persists candidates and group state instead of keeping a database
+transaction open between RPC calls. The closing mutation publishes all accepted
+candidates and their change records in one short transaction. A successful
+mutation response means durable acceptance; the change stream reports
+publication.

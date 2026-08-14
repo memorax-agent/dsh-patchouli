@@ -54,12 +54,13 @@ conflict handling, publication, and response construction. A database provider
 exposes storage primitives and MUST NOT independently reinterpret business
 fields.
 
-Configuration MAY define, per entity type:
+Configuration MAY define:
 
-- a JSON Schema for `value`;
-- named fields extracted from `meta` or method `data`;
-- identity fields and consistency rules selected by field presence;
-- logical grouping, baseline, batch-close, timestamp, and conflict policies.
+- named fields extracted from `meta` and validated by their own JSON Schemas;
+- a global scope that namespaces `(type, id)` and change records;
+- a JSON Schema for each entity type's `value`;
+- ordered rules selected by metadata presence;
+- separate baseline, idempotency, conflict, and publication keys and policies.
 
 Channel IDs, transaction IDs, timestamps, causal tokens, idempotency keys,
 deadlines, and plugin-route IDs remain ordinary configured metadata. They MUST
@@ -72,7 +73,7 @@ Each create, update, and delete request is accepted using one short database
 transaction. The following effects MUST commit atomically:
 
 1. the immutable entity candidate or tombstone;
-2. the idempotency record and serialized successful result;
+2. the idempotency record and serialized successful result, when enabled;
 3. assignment to the configured logical group, if any.
 
 Without a configured deferred batch, the same transaction MUST publish the
@@ -86,12 +87,13 @@ A successful mutation response means durable acceptance. Publication may be
 immediate or deferred. A stateless client observes publication through a causal
 read or the change stream; it does not maintain batch state itself.
 
-When a policy configures idempotency fields, the controller derives the
-idempotency identity from `meta`. Repeating the same identity and mutation data
-MUST return the original accepted result without another candidate or change
-event. Reusing the identity with different mutation data MUST return
-`IDEMPOTENCY_CONFLICT`. The guarantee lasts at least
-`idempotency_retention_seconds` reported by the handshake.
+When the selected behavior enables keyed idempotency, the controller derives
+its identity from configured `meta` fields. Repeating the same identity and
+mutation data MUST return the original accepted result without another
+candidate or change event. Reusing the identity with different mutation data
+MUST return `IDEMPOTENCY_CONFLICT`. The guarantee lasts at least
+`idempotency_retention_seconds` reported by the handshake. With idempotency
+disabled, clients MUST NOT assume that retrying a mutation is deduplicated.
 
 Cancellation or deadline expiry before acceptance commits MUST roll back and
 return the corresponding error. If acceptance wins the race, the operation is
@@ -105,9 +107,9 @@ per request.
 
 ## 5. Versions and conflicts
 
-When a conflict policy configures a base-version metadata field, that field MUST
-contain a non-empty set without duplicates. It declares the versions on which
-the candidate is based:
+The selected conflict policy identifies a base-version metadata field. For
+update and delete that field MUST contain a non-empty set without duplicates.
+It declares the versions on which the candidate is based:
 
 - `reject` requires exact equality with the complete current head set and
   otherwise returns `VERSION_CONFLICT`;

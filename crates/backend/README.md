@@ -6,8 +6,9 @@ independent of DeepSeek Harness and Cordis.
 The current layer contains the backend-service CRUD contract, wire-compatible
 request and response types, the configuration model, and the reactive
 change-stream contract. The RPC adapter calls a Rust backend controller through
-`BackendService`. The controller evaluates `PolicyEngine`, persists control
-state, and only then uses a database provider's storage primitives.
+`BackendService`. The controller uses `PolicySelector` to derive scope,
+baseline, idempotency, and publication keys, persists control state, and only
+then uses a database provider's storage primitives.
 
 Entity kinds are opaque strings. `memory`, `relation`, and future kinds all use
 the same methods and storage interface.

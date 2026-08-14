@@ -1,8 +1,51 @@
 {
+  "$schema": "./patchouli.schema.json",
   "version": 1,
+  "meta_fields": {
+    "channel_id": {
+      "pointer": "/channel_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "transaction_id": {
+      "pointer": "/transaction_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "event_time": {
+      "pointer": "/event_time",
+      "schema": { "type": "string", "format": "date-time" }
+    },
+    "participant_id": {
+      "pointer": "/plugin_route_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "request_id": {
+      "pointer": "/request_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "transaction_state": {
+      "pointer": "/transaction_state",
+      "schema": { "type": "string" }
+    },
+    "causal_token": {
+      "pointer": "/causal_token",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "base_versions": {
+      "pointer": "/base_versions",
+      "schema": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1,
+        "uniqueItems": true
+      }
+    }
+  },
+  "entity_identity": {
+    "scope_by": ["channel_id"]
+  },
   "entity_types": {
     "event": {
-      "schema": {
+      "value_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "required": ["payload"],
@@ -11,30 +54,32 @@
         },
         "additionalProperties": false
       },
-      "fields": {
-        "channel_id": { "pointer": "/meta/channel_id", "required": true },
-        "transaction_id": { "pointer": "/meta/transaction_id" },
-        "event_time": { "pointer": "/meta/event_time" },
-        "participant_id": { "pointer": "/meta/plugin_route_id" },
-        "transaction_state": { "pointer": "/meta/transaction_state" },
-        "causal_token": { "pointer": "/meta/causal_token" },
-        "base_versions": { "pointer": "/meta/base_versions" }
-      },
-      "consistency": {
-        "rules": [
-          {
-            "name": "transaction_batch",
-            "when_all_present": ["transaction_id", "event_time", "participant_id"],
-            "identity": ["channel_id", "transaction_id", "event_time", "participant_id"],
-            "group_by": ["channel_id", "transaction_id"],
+      "rules": [
+        {
+          "name": "transaction_batch",
+          "when": {
+            "all_present": ["transaction_id", "event_time", "participant_id"]
+          },
+          "behavior": {
             "baseline": {
+              "mode": "shared",
               "consistency": "causal",
               "source": "replica",
-              "at_field": "event_time",
-              "causal_field": "causal_token"
+              "key_by": ["channel_id", "transaction_id"],
+              "at": "event_time",
+              "causal_token": "causal_token"
             },
-            "batch": {
-              "visibility": "on_close",
+            "idempotency": {
+              "mode": "keyed",
+              "key_by": ["channel_id", "transaction_id", "participant_id", "request_id"]
+            },
+            "conflict": {
+              "strategy": "preserve_heads",
+              "base_versions": "base_versions"
+            },
+            "publication": {
+              "mode": "batch",
+              "key_by": ["channel_id", "transaction_id"],
               "close_when": {
                 "kind": "marker",
                 "field": "transaction_state",
@@ -42,23 +87,25 @@
               },
               "staging_ttl_ms": 3600000,
               "on_expire": "discard"
-            },
-            "conflict": {
-              "strategy": "preserve_heads",
-              "base_versions_field": "base_versions"
             }
           }
-        ],
-        "fallback": {
-          "identity": ["channel_id"],
-          "baseline": {
-            "consistency": "linearizable",
-            "source": "authority"
-          },
-          "conflict": {
-            "strategy": "reject",
-            "base_versions_field": "base_versions"
-          }
+        }
+      ],
+      "fallback": {
+        "baseline": {
+          "mode": "request",
+          "consistency": "linearizable",
+          "source": "authority"
+        },
+        "idempotency": {
+          "mode": "disabled"
+        },
+        "conflict": {
+          "strategy": "reject",
+          "base_versions": "base_versions"
+        },
+        "publication": {
+          "mode": "immediate"
         }
       }
     }
