@@ -11,6 +11,10 @@ publish = false
 async-trait.workspace = true
 futures-core.workspace = true
 jsonschema.workspace = true
+patchouli-provider = { path = "../provider" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

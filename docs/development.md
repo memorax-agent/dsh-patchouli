@@ -23,7 +23,16 @@ cargo install --path crates/server
 
 The Cordis plugin defaults to `autoStart: true` and invokes the `patchouli`
 binary from `PATH` when its endpoint is unavailable. It opens the SQLite file
-at `~/.patchouli/data/patchouli.db` by default. Default endpoints are:
+at `~/.patchouli/data/patchouli.db` and loads backend policy from
+`~/.patchouli/config.json` by default. Copy the development policy before the
+first automatic start:
+
+```bash
+mkdir -p "$HOME/.patchouli"
+cp config/patchouli.example.json "$HOME/.patchouli/config.json"
+```
+
+Default endpoints are:
 
 - macOS/Linux: `~/.patchouli/run/patchouli.sock`
 - Windows: `\\.\pipe\patchouli`
@@ -33,7 +42,8 @@ Manual macOS/Linux lifecycle:
 ```bash
 patchouli serve \
   --endpoint "$HOME/.patchouli/run/patchouli.sock" \
-  --database "$HOME/.patchouli/data/patchouli.db"
+  --database "$HOME/.patchouli/data/patchouli.db" \
+  --config "$HOME/.patchouli/config.json"
 patchouli status --endpoint "$HOME/.patchouli/run/patchouli.sock"
 patchouli stop --endpoint "$HOME/.patchouli/run/patchouli.sock"
 ```
@@ -43,17 +53,18 @@ Manual PowerShell lifecycle:
 ```powershell
 $endpoint = '\\.\pipe\patchouli'
 $database = Join-Path $HOME '.patchouli\data\patchouli.db'
-patchouli serve --endpoint $endpoint --database $database
+$config = Join-Path $HOME '.patchouli\config.json'
+patchouli serve --endpoint $endpoint --database $database --config $config
 patchouli status --endpoint $endpoint
 patchouli stop --endpoint $endpoint
 ```
 
 `serve` remains in the foreground for launchd, systemd, Windows Service
 wrappers, containers, and local development. Plugin auto-start launches the
-same command as a detached process. SQLite is opened and health-checked before
-the daemon begins listening. The current daemon implements only handshake,
-status, and shutdown; CRUD methods intentionally return method not found until
-the engine layer is added.
+same command as a detached process. Policy validation and the SQLite health
+check both complete before the daemon begins listening. CRUD calls are decoded
+and routed through `BackendEngine`; until transactional storage is implemented,
+they return `UNSUPPORTED_CAPABILITY` rather than reporting success.
 
 Validate the existing backend policy file without starting a daemon:
 

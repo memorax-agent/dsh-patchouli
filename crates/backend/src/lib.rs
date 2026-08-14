@@ -1,10 +1,12 @@
 mod config;
 mod controller;
+mod engine;
 mod error;
 mod model;
 mod service;
 mod wire;
 
+pub use engine::{BackendEngine, EngineError};
 pub use error::{BackendError, BackendErrorReason};
 pub use model::{
     ChangeCursor, ChangeFilter, ChangeKind, ChangeRecord, CreateEntityData, CreateEntityParams,

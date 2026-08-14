@@ -10,6 +10,7 @@ pub enum BackendErrorReason {
     IdempotencyConflict,
     NotFound,
     Overloaded,
+    UnsupportedCapability,
     VersionConflict,
 }
 

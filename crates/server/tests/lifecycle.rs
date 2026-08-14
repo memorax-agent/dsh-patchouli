@@ -1,8 +1,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use patchouli_backend::{BackendConfig, BackendEngine, CreateEntityData, RpcParams};
 use patchouli_provider::{Provider, ProviderError};
-use patchouli_server::{LocalClient, LocalServer, ServerOptions};
+use patchouli_server::{IpcError, LocalClient, LocalServer, ServerOptions};
+use serde_json::json;
+
+const EXAMPLE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../config/patchouli.example.json"
+));
 
 struct HealthyProvider;
 
@@ -21,13 +28,21 @@ impl Provider for HealthyProvider {
 async fn daemon_accepts_status_and_shutdown_over_local_ipc() {
     let (_directory, endpoint) = test_endpoint();
     let provider = Arc::new(HealthyProvider);
+    let engine = Arc::new(
+        BackendEngine::start(
+            BackendConfig::from_json(EXAMPLE).expect("valid config"),
+            provider,
+        )
+        .await
+        .expect("start engine"),
+    );
     let server = LocalServer::bind(
         ServerOptions {
             endpoint: endpoint.clone(),
             node_id: "node-test".to_owned(),
             cluster_id: "cluster-test".to_owned(),
         },
-        provider,
+        engine,
     )
     .await
     .expect("bind daemon");
@@ -41,6 +56,19 @@ async fn daemon_accepts_status_and_shutdown_over_local_ipc() {
     assert_eq!(status.data.provider, "test");
     assert_eq!(status.data.pid, std::process::id());
     assert_eq!(status.data.active_connections, 1);
+
+    let error = client
+        .create(&RpcParams {
+            meta: Default::default(),
+            data: CreateEntityData {
+                entity_type: "event".to_owned(),
+                id: Some("event-1".to_owned()),
+                value: json!({ "payload": "hello" }),
+            },
+        })
+        .await
+        .expect_err("CRUD is routed to the engine placeholder");
+    assert!(matches!(error, IpcError::Rpc { code: -32006, .. }));
 
     let stopped = client.shutdown().await.expect("request shutdown");
     assert!(stopped.data.accepted);

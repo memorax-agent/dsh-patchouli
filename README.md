@@ -2,7 +2,7 @@
 
 Patchouli 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地知识依赖。目标是在不要求模型发起 Tool Call 的前提下，按当前任务检索相关知识，并通过 Harness 原生、可记录的上下文链路注入模型请求。
 
-> 当前状态：已经具备可加载的 Cordis 插件、Rust 常驻服务、本地 IPC、控制 CLI 和 SQLite provider 启动适配。macOS/Linux 使用 Unix socket，Windows 使用 named pipe。CRUD、知识采集、索引和召回尚未实现。
+> 当前状态：已经具备可加载的 Cordis 插件、Rust `BackendEngine`、本地 IPC、控制 CLI 和 SQLite provider 启动适配。macOS/Linux 使用 Unix socket，Windows 使用 named pipe。CRUD 已经完成前后端接线，但存储业务逻辑仍为明确的未实现占位；知识采集、索引和召回尚未实现。
 
 ## 设计方向
 
@@ -52,9 +52,16 @@ dsh --profile web --dump-config
 cargo install --path crates/server
 ```
 
+将 backend policy 放到插件的默认配置位置：
+
+```bash
+mkdir -p "$HOME/.patchouli"
+cp config/patchouli.example.json "$HOME/.patchouli/config.json"
+```
+
 插件加载时会连接默认本地 endpoint；若 daemon 不存在，则执行
-`patchouli serve`，打开默认的 `~/.patchouli/data/patchouli.db` 后等待
-handshake。插件卸载只关闭自身连接，daemon 由
+`patchouli serve`，加载 `~/.patchouli/config.json` 并打开默认的
+`~/.patchouli/data/patchouli.db` 后等待 handshake。插件卸载只关闭自身连接，daemon 由
 `patchouli stop --endpoint <endpoint>` 显式停止。详细的三平台命令见
 [开发文档](docs/development.md)。
 

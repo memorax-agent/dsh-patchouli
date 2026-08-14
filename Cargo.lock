@@ -756,9 +756,11 @@ dependencies = [
  "async-trait",
  "futures-core",
  "jsonschema",
+ "patchouli-provider",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

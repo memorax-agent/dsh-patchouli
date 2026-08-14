@@ -1,7 +1,7 @@
 use std::{error::Error, path::PathBuf, sync::Arc};
 
 use clap::{Parser, Subcommand};
-use patchouli_backend::BackendConfig;
+use patchouli_backend::{BackendConfig, BackendEngine};
 use patchouli_provider_sqlite::SqliteProvider;
 use patchouli_server::{LocalClient, LocalServer, ServerOptions};
 
@@ -25,6 +25,9 @@ enum Command {
         /// SQLite database file opened by this daemon.
         #[arg(long)]
         database: PathBuf,
+        /// Backend policy configuration loaded by the engine.
+        #[arg(long)]
+        config: PathBuf,
         #[arg(long, default_value = "local")]
         node_id: String,
         #[arg(long, default_value = "local")]
@@ -59,17 +62,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::Serve {
             endpoint,
             database,
+            config,
             node_id,
             cluster_id,
         } => {
+            let input = std::fs::read_to_string(&config)?;
+            let config = BackendConfig::from_json(&input)?;
             let provider = Arc::new(SqliteProvider::open(&database).await?);
+            let engine = Arc::new(BackendEngine::start(config, provider).await?);
             let server = LocalServer::bind(
                 ServerOptions {
                     endpoint: endpoint.clone(),
                     node_id,
                     cluster_id,
                 },
-                provider,
+                engine,
             )
             .await?;
             eprintln!("Patchouli daemon listening on {endpoint}");

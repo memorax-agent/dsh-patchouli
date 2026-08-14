@@ -9,11 +9,13 @@ use std::{
 };
 
 use patchouli_backend::{
-    ClientIdentity, ControlShutdownResult, ControlShutdownResultData, ControlStatusResult,
-    ControlStatusResultData, EmptyData, HandshakeParams, HandshakeResult, Meta, PROTOCOL_VERSION,
-    RpcParams, RpcResult, ServerIdentity, ServerLimits, methods,
+    BackendEngine, BackendError, BackendErrorReason, BackendService, ClientIdentity,
+    ControlShutdownResult, ControlShutdownResultData, ControlStatusResult, ControlStatusResultData,
+    CreateEntityParams, DeleteEntityParams, EmptyData, HandshakeParams, HandshakeResult, Meta,
+    PROTOCOL_VERSION, ProtocolErrorData, ProtocolErrorReason, ReadEntityParams, RpcParams,
+    RpcResult, ServerIdentity, ServerLimits, SubscribeChangesParams, UnsubscribeChangesParams,
+    UpdateEntityParams, error_codes, methods,
 };
-use patchouli_provider::{Provider, ProviderError};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -46,8 +48,6 @@ pub enum IpcError {
     Rpc { code: i64, message: String },
     #[error("daemon response id does not match request id")]
     ResponseIdMismatch,
-    #[error("database provider is not ready: {0}")]
-    Provider(#[from] ProviderError),
 }
 
 pub struct LocalServer {
@@ -56,15 +56,14 @@ pub struct LocalServer {
     started_at_unix_ms: u64,
     active_connections: Arc<AtomicU64>,
     shutdown_tx: watch::Sender<bool>,
-    provider: Arc<dyn Provider>,
+    engine: Arc<BackendEngine>,
 }
 
 impl LocalServer {
     pub async fn bind(
         options: ServerOptions,
-        provider: Arc<dyn Provider>,
+        engine: Arc<BackendEngine>,
     ) -> Result<Self, IpcError> {
-        provider.health_check().await?;
         let listener = transport::Listener::bind(&options.endpoint).await?;
         let (shutdown_tx, _) = watch::channel(false);
         Ok(Self {
@@ -73,7 +72,7 @@ impl LocalServer {
             started_at_unix_ms: unix_time_ms(),
             active_connections: Arc::new(AtomicU64::new(0)),
             shutdown_tx,
-            provider,
+            engine,
         })
     }
 
@@ -88,7 +87,7 @@ impl LocalServer {
                         self.started_at_unix_ms,
                         Arc::clone(&self.active_connections),
                         self.shutdown_tx.clone(),
-                        self.provider.kind(),
+                        Arc::clone(&self.engine),
                     );
                     tokio::spawn(async move {
                         let _ = connection.serve(stream).await;
@@ -114,7 +113,7 @@ struct ConnectionState {
     started_at_unix_ms: u64,
     active_connections: Arc<AtomicU64>,
     shutdown_tx: watch::Sender<bool>,
-    provider_kind: &'static str,
+    engine: Arc<BackendEngine>,
 }
 
 impl ConnectionState {
@@ -123,14 +122,14 @@ impl ConnectionState {
         started_at_unix_ms: u64,
         active_connections: Arc<AtomicU64>,
         shutdown_tx: watch::Sender<bool>,
-        provider_kind: &'static str,
+        engine: Arc<BackendEngine>,
     ) -> Self {
         Self {
             options,
             started_at_unix_ms,
             active_connections,
             shutdown_tx,
-            provider_kind,
+            engine,
         }
     }
 
@@ -142,7 +141,7 @@ impl ConnectionState {
         let mut handshaken = false;
 
         while let Some(line) = lines.next_line().await? {
-            let (response, shutdown) = self.dispatch(&line, &mut handshaken);
+            let (response, shutdown) = self.dispatch(&line, &mut handshaken).await;
             write_json_line(&mut write_half, &response).await?;
             if shutdown {
                 let _ = self.shutdown_tx.send(true);
@@ -152,7 +151,7 @@ impl ConnectionState {
         Ok(())
     }
 
-    fn dispatch(&self, line: &str, handshaken: &mut bool) -> (Value, bool) {
+    async fn dispatch(&self, line: &str, handshaken: &mut bool) -> (Value, bool) {
         if line.len() > MAX_REQUEST_BYTES {
             return (
                 rpc_error(Value::Null, -32600, "request exceeds server limit"),
@@ -238,7 +237,7 @@ impl ConnectionState {
                     meta: Meta::new(),
                     data: ControlStatusResultData {
                         ready: true,
-                        provider: self.provider_kind.to_owned(),
+                        provider: self.engine.provider_kind().to_owned(),
                         pid: std::process::id(),
                         started_at_unix_ms: self.started_at_unix_ms,
                         active_connections: self.active_connections.load(Ordering::Relaxed),
@@ -255,6 +254,74 @@ impl ConnectionState {
                     data: ControlShutdownResultData { accepted: true },
                 };
                 (rpc_success(id, result), true)
+            }
+            methods::ENTITY_CREATE => {
+                let params = match serde_json::from_value::<CreateEntityParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                match self.engine.create(params).await {
+                    Ok(result) => (rpc_success(id, result), false),
+                    Err(error) => (rpc_backend_error(id, error), false),
+                }
+            }
+            methods::ENTITY_READ => {
+                let params = match serde_json::from_value::<ReadEntityParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                match self.engine.read(params).await {
+                    Ok(result) => (rpc_success(id, result), false),
+                    Err(error) => (rpc_backend_error(id, error), false),
+                }
+            }
+            methods::ENTITY_UPDATE => {
+                let params = match serde_json::from_value::<UpdateEntityParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                match self.engine.update(params).await {
+                    Ok(result) => (rpc_success(id, result), false),
+                    Err(error) => (rpc_backend_error(id, error), false),
+                }
+            }
+            methods::ENTITY_DELETE => {
+                let params = match serde_json::from_value::<DeleteEntityParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                match self.engine.delete(params).await {
+                    Ok(result) => (rpc_success(id, result), false),
+                    Err(error) => (rpc_backend_error(id, error), false),
+                }
+            }
+            methods::CHANGES_SUBSCRIBE => {
+                let params = match serde_json::from_value::<SubscribeChangesParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                match self.engine.subscribe(params).await {
+                    Ok(_) => (
+                        rpc_error(id, -32603, "subscription delivery is not wired"),
+                        false,
+                    ),
+                    Err(error) => (rpc_backend_error(id, error), false),
+                }
+            }
+            methods::CHANGES_UNSUBSCRIBE => {
+                if let Err(error) = serde_json::from_value::<UnsubscribeChangesParams>(params) {
+                    return (rpc_error(id, -32602, &error.to_string()), false);
+                }
+                (
+                    rpc_protocol_error(
+                        id,
+                        error_codes::UNSUPPORTED_CAPABILITY,
+                        "change subscription is not implemented by the backend engine",
+                        ProtocolErrorReason::UnsupportedCapability,
+                        None,
+                    ),
+                    false,
+                )
             }
             _ => (rpc_error(id, -32601, "method not found"), false),
         }
@@ -323,6 +390,34 @@ impl LocalClient {
         .await
     }
 
+    pub async fn create(
+        &mut self,
+        params: &CreateEntityParams,
+    ) -> Result<patchouli_backend::MutationResult, IpcError> {
+        self.call(methods::ENTITY_CREATE, params).await
+    }
+
+    pub async fn read(
+        &mut self,
+        params: &ReadEntityParams,
+    ) -> Result<patchouli_backend::ReadEntityResult, IpcError> {
+        self.call(methods::ENTITY_READ, params).await
+    }
+
+    pub async fn update(
+        &mut self,
+        params: &UpdateEntityParams,
+    ) -> Result<patchouli_backend::MutationResult, IpcError> {
+        self.call(methods::ENTITY_UPDATE, params).await
+    }
+
+    pub async fn delete(
+        &mut self,
+        params: &DeleteEntityParams,
+    ) -> Result<patchouli_backend::MutationResult, IpcError> {
+        self.call(methods::ENTITY_DELETE, params).await
+    }
+
     async fn call<TParams: Serialize, TResult: DeserializeOwned>(
         &mut self,
         method: &str,
@@ -382,6 +477,56 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
         "jsonrpc": "2.0",
         "id": id,
         "error": { "code": code, "message": message },
+    })
+}
+
+fn rpc_backend_error(id: Value, error: BackendError) -> Value {
+    let (code, reason) = match error.reason {
+        BackendErrorReason::Cancelled => (error_codes::CANCELLED, ProtocolErrorReason::Cancelled),
+        BackendErrorReason::CursorExpired => (
+            error_codes::CURSOR_EXPIRED,
+            ProtocolErrorReason::CursorExpired,
+        ),
+        BackendErrorReason::DeadlineExceeded => (
+            error_codes::DEADLINE_EXCEEDED,
+            ProtocolErrorReason::DeadlineExceeded,
+        ),
+        BackendErrorReason::IdempotencyConflict => (
+            error_codes::IDEMPOTENCY_CONFLICT,
+            ProtocolErrorReason::IdempotencyConflict,
+        ),
+        BackendErrorReason::NotFound => (error_codes::NOT_FOUND, ProtocolErrorReason::NotFound),
+        BackendErrorReason::Overloaded => {
+            (error_codes::OVERLOADED, ProtocolErrorReason::Overloaded)
+        }
+        BackendErrorReason::UnsupportedCapability => (
+            error_codes::UNSUPPORTED_CAPABILITY,
+            ProtocolErrorReason::UnsupportedCapability,
+        ),
+        BackendErrorReason::VersionConflict => (
+            error_codes::VERSION_CONFLICT,
+            ProtocolErrorReason::VersionConflict,
+        ),
+    };
+    let current_versions = (!error.current_versions.is_empty()).then_some(error.current_versions);
+    rpc_protocol_error(id, code, &error.message, reason, current_versions)
+}
+
+fn rpc_protocol_error(
+    id: Value,
+    code: i32,
+    message: &str,
+    reason: ProtocolErrorReason,
+    current_versions: Option<Vec<String>>,
+) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message,
+            "data": ProtocolErrorData { reason, current_versions },
+        },
     })
 }
 

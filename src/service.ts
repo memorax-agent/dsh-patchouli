@@ -4,15 +4,20 @@ import { createConnection, type Socket } from 'node:net'
 
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
+  type CreateEntityParams,
+  type DeleteEntityParams,
+  type JsonValue,
+  type MutationResult,
   methods,
   protocolVersion,
   type ControlStatusResult,
   type HandshakeResult,
-  type JsonObject,
   type JsonRpcFailure,
   type JsonRpcId,
   type JsonRpcSuccess,
-  type JsonValue,
+  type ReadEntityParams,
+  type ReadEntityResult,
+  type UpdateEntityParams,
 } from '@memorax-agent/patchouli-protocol'
 
 import type { Config } from './index.js'
@@ -49,7 +54,12 @@ export class PatchouliService extends Service {
       await this.connect()
     } catch (error) {
       if (!this.config.autoStart || !isUnavailable(error)) throw error
-      await startDaemon(this.config.command, this.config.endpoint, this.config.databasePath)
+      await startDaemon(
+        this.config.command,
+        this.config.endpoint,
+        this.config.databasePath,
+        this.config.backendConfigPath,
+      )
       await this.waitForDaemon()
     }
     this.ctx.logger('patchouli').info(
@@ -60,7 +70,31 @@ export class PatchouliService extends Service {
   }
 
   async status(): Promise<ControlStatusResult> {
-    return this.call(methods.controlStatus, { meta: {}, data: {} })
+    return this.call<ControlStatusResult>(methods.controlStatus, { meta: {}, data: {} })
+  }
+
+  async create<TType extends string = string, TValue extends JsonValue = JsonValue>(
+    params: CreateEntityParams<TType, TValue>,
+  ): Promise<MutationResult<TType, TValue>> {
+    return this.call<MutationResult<TType, TValue>>(methods.entityCreate, params)
+  }
+
+  async read<TType extends string = string, TValue extends JsonValue = JsonValue>(
+    params: ReadEntityParams<TType>,
+  ): Promise<ReadEntityResult<TType, TValue>> {
+    return this.call<ReadEntityResult<TType, TValue>>(methods.entityRead, params)
+  }
+
+  async update<TType extends string = string, TValue extends JsonValue = JsonValue>(
+    params: UpdateEntityParams<TType, TValue>,
+  ): Promise<MutationResult<TType, TValue>> {
+    return this.call<MutationResult<TType, TValue>>(methods.entityUpdate, params)
+  }
+
+  async delete<TType extends string = string>(
+    params: DeleteEntityParams<TType>,
+  ): Promise<MutationResult<TType, JsonValue>> {
+    return this.call<MutationResult<TType, JsonValue>>(methods.entityDelete, params)
   }
 
   async close(): Promise<void> {
@@ -110,7 +144,7 @@ export class PatchouliService extends Service {
     this.socket = socket
 
     try {
-      this.handshake = await this.call(methods.handshake, {
+      this.handshake = await this.call<HandshakeResult>(methods.handshake, {
         client: {
           name: 'dsh-patchouli',
           version: '0.1.0',
@@ -126,7 +160,7 @@ export class PatchouliService extends Service {
     }
   }
 
-  private call<TResult>(method: string, params: JsonObject): Promise<TResult> {
+  private call<TResult>(method: string, params: unknown): Promise<TResult> {
     const socket = this.socket
     if (!socket || socket.destroyed) {
       return Promise.reject(unavailable('Patchouli daemon is not connected'))
@@ -187,8 +221,18 @@ export class PatchouliService extends Service {
   }
 }
 
-async function startDaemon(command: string, endpoint: string, databasePath: string): Promise<void> {
-  const child = spawn(command, ['serve', '--endpoint', endpoint, '--database', databasePath], {
+async function startDaemon(
+  command: string,
+  endpoint: string,
+  databasePath: string,
+  backendConfigPath: string,
+): Promise<void> {
+  const child = spawn(command, [
+    'serve',
+    '--endpoint', endpoint,
+    '--database', databasePath,
+    '--config', backendConfigPath,
+  ], {
     detached: true,
     stdio: 'ignore',
   })

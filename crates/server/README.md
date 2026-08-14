@@ -2,7 +2,8 @@
 
 Cross-platform daemon shell and control CLI for Patchouli. It owns process
 lifecycle, local IPC, JSON-RPC handshake, status, graceful shutdown, and
-composition of the default SQLite provider. It does not implement CRUD yet.
+composition of `BackendEngine` with the default SQLite provider. CRUD requests
+are routed to the engine, whose storage behavior is currently a placeholder.
 
 Local transports:
 
@@ -12,7 +13,7 @@ Local transports:
 
 ```bash
 cargo install --path crates/server
-patchouli serve --endpoint <endpoint> --database <path>
+patchouli serve --endpoint <endpoint> --database <path> --config <policy-path>
 patchouli status --endpoint <endpoint>
 patchouli stop --endpoint <endpoint>
 patchouli config check config/patchouli.example.json

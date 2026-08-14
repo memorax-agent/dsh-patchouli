@@ -4,8 +4,9 @@
 
 Patchouli currently provides an installable Cordis plugin, a local Rust daemon,
 cross-platform IPC bootstrap, control CLI, a database-provider boundary, and a
-SQLite startup adapter. CRUD execution, retrieval, and context injection are
-not implemented yet.
+SQLite startup adapter. A validated `BackendEngine` is connected to the daemon
+and CRUD methods reach its explicit placeholder implementation. Transactional
+CRUD execution, retrieval, and context injection are not implemented yet.
 
 ## Goal
 
@@ -47,6 +48,11 @@ JSON-RPC adapter
 ```
 
 The controller owns schemas, identity extraction, consistency selection, logical transaction/batch state, conflicts and publication. A database provider does not interpret business fields and is never called directly by the frontend adapter.
+
+`BackendEngine` is the runtime owner of the immutable validated policy and one
+injected provider. JSON-RPC sessions call it only through `BackendService`.
+Cross-request business facts will live in the provider; the engine retains no
+in-memory transaction or batch map.
 
 Database providers are compile-time Rust adapters rather than dynamically
 loaded plugins. `patchouli-provider` owns the common contract,

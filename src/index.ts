@@ -22,6 +22,8 @@ export interface Config {
   command: string
   /** SQLite database file passed to a daemon started by this plugin. */
   databasePath: string
+  /** Backend policy configuration loaded by a daemon started by this plugin. */
+  backendConfigPath: string
   /** Start a detached daemon when no existing daemon can be reached. */
   autoStart: boolean
   /** Maximum time to wait for a newly started daemon. */
@@ -36,6 +38,7 @@ export const Config: z<Config> = z.object({
   endpoint: z.string().default(defaultEndpoint),
   command: z.string().default('patchouli'),
   databasePath: z.string().default(join(homedir(), '.patchouli', 'data', 'patchouli.db')),
+  backendConfigPath: z.string().default(join(homedir(), '.patchouli', 'config.json')),
   autoStart: z.boolean().default(true),
   startupTimeoutMs: z.natural().min(1).default(5_000),
 })

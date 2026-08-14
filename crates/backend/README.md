@@ -3,16 +3,17 @@
 Rust implementation boundary for Patchouli persistence. This crate is
 independent of DeepSeek Harness and Cordis.
 
-The runnable process shell lives in `crates/server`. It currently exposes only
-handshake, status, and shutdown over Unix sockets on macOS/Linux and named
-pipes on Windows; storage methods remain unimplemented.
+The runnable process shell lives in `crates/server`. It exposes handshake,
+control, and typed CRUD routing over Unix sockets on macOS/Linux and named pipes
+on Windows. Storage methods currently return an explicit
+`UNSUPPORTED_CAPABILITY` placeholder.
 
-The current layer contains the backend-service CRUD contract, wire-compatible
-request and response types, the configuration model, and the reactive
-change-stream contract. The RPC adapter calls a Rust backend controller through
-`BackendService`. The controller uses `PolicySelector` to derive scope,
-baseline, idempotency, and publication keys, persists control state, and only
-then uses a database provider's storage primitives.
+The current layer contains `BackendEngine`, the backend-service CRUD contract,
+wire-compatible request and response types, the configuration model, and the
+reactive change-stream contract. Engine startup retains a validated immutable
+policy and a healthy injected provider. The next storage layer will use
+`PolicySelector` to derive scope, baseline, idempotency, and publication keys
+before invoking provider transaction primitives.
 
 Entity kinds are opaque strings. `memory`, `relation`, and future kinds all use
 the same methods and storage interface.

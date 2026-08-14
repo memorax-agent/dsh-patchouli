@@ -25,6 +25,18 @@ test('registers a daemon service and completes the control handshake', async (t)
         if (newline < 0) return
         const request = JSON.parse(buffer.slice(0, newline))
         buffer = buffer.slice(newline + 1)
+        if (request.method === 'patchouli.entity.create@1') {
+          socket.write(JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.id,
+            error: {
+              code: -32006,
+              message: 'entity create is not implemented by the backend engine',
+              data: { reason: 'UNSUPPORTED_CAPABILITY' },
+            },
+          }) + '\n')
+          continue
+        }
         const result = request.method === 'patchouli.protocol.handshake@1'
           ? {
               protocol_version: 1,
@@ -77,4 +89,11 @@ test('registers a daemon service and completes the control handshake', async (t)
   assert.equal(status.data.ready, true)
   assert.equal(status.data.provider, 'sqlite')
   assert.equal(status.data.pid, process.pid)
+  await assert.rejects(
+    ctx.patchouli.create({
+      meta: {},
+      data: { type: 'event', id: 'event-1', value: { payload: 'hello' } },
+    }),
+    /RPC -32006: entity create is not implemented/,
+  )
 })
