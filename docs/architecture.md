@@ -32,7 +32,18 @@ Expected responsibilities:
 
 ### Service Provider
 
-The first Provider will own local persistence and retrieval. Provider code must not depend on Agent lifecycle or prompt assembly. A different Provider should be selectable without changing the Consumer.
+The database backend is implemented in Rust and owns persistence plus the generic entity CRUD/change stream. It must not depend on Agent lifecycle, prompt assembly, DeepSeek Harness, or Cordis. Provider and retrieval code consume this backend through the versioned JSON-RPC contract.
+
+The frontend binding is stateless with respect to database policy. Backend calls follow this boundary:
+
+```text
+JSON-RPC adapter
+    -> backend controller
+    -> configured policy engine
+    -> database provider primitives
+```
+
+The controller owns schemas, identity extraction, consistency selection, logical transaction/batch state, conflicts and publication. A database provider does not interpret business fields and is never called directly by the frontend adapter.
 
 ### Context Consumer
 
@@ -56,4 +67,4 @@ Patchouli will not expose knowledge retrieval as a model tool by default. Human 
 2. Durable ingestion and incremental indexing.
 3. Operational surfaces such as status, rebuild, and inspection.
 
-Roles should be split into separate packages only when they need independent lifecycle or replacement. Until then, the repository keeps one package and clear module boundaries.
+The repository is a monorepo. Rust backend crates live under `crates/`; JavaScript/TypeScript protocol and Harness packages live under `packages/`. The root package remains the DeepSeek Harness plugin until it is moved into its own package.

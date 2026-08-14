@@ -6,11 +6,13 @@ Patchouli 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-h
 
 ## 设计方向
 
-Patchouli 将围绕三个边界逐步实现：
+Patchouli 将以 monorepo 形式围绕三个边界逐步实现：
 
 1. **Knowledge Service**：定义稳定的知识检索契约，供其他 Cordis 插件通过 `ctx` 使用。
 2. **Provider**：负责本地知识的采集、索引和检索，不依赖 Agent 或 Prompt。
 3. **Context Consumer**：在 `agent/pre-step` 阶段异步检索，并把带来源信息的有界结果追加到下一次模型请求。
+
+数据库后端使用 Rust 实现，独立于 DeepSeek Harness；TypeScript 仅承担插件和客户端协议类型。
 
 默认模型界面是自动上下文注入，而不是知识库工具。详细约束见 [架构文档](docs/architecture.md)。
 
@@ -18,6 +20,7 @@ Patchouli 将围绕三个边界逐步实现：
 
 - Node.js `^22.19.0` 或 `>=24.0.0`
 - pnpm `11`
+- Rust stable
 - DeepSeek Harness `0.1.0-rc.6` 或兼容版本
 
 ## 本地开发
@@ -25,9 +28,10 @@ Patchouli 将围绕三个边界逐步实现：
 ```bash
 pnpm install
 pnpm check
+cargo test --workspace
 ```
 
-构建产物位于 `lib/`。生成可安装的 npm tarball：
+根插件和各 package 的构建产物位于各自的 `lib/`。生成可安装的 npm tarball：
 
 ```bash
 pnpm pack
@@ -48,6 +52,10 @@ dsh --profile web --dump-config
 .
 ├── .github/workflows/ci.yml  # 验证与交付物打包
 ├── docs/                     # 架构和开发文档
+├── crates/
+│   └── backend/              # Rust 数据库后端核心
+├── packages/
+│   └── protocol/             # 与 Harness 无关的数据库 JSON-RPC 契约
 ├── src/                      # Cordis 插件源码
 ├── test/                     # 最小契约测试
 ├── cordis.patch.yml          # DeepSeek Harness bundle 配置层

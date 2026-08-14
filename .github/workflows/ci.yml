@@ -31,11 +31,25 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Check project
         run: pnpm check
+
+      - name: Check Rust formatting
+        run: cargo fmt --check
+
+      - name: Lint Rust backend
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test Rust backend
+        run: cargo test --workspace
 
   deliver:
     name: Build delivery artifact

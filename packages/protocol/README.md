@@ -1,0 +1,99 @@
+# Patchouli Protocol
+
+This package defines the harness-neutral JSON-RPC contract between Patchouli
+clients and the database backend. Entity kinds such as memories, relations, or
+future records are values of the generic `type` parameter; they do not create
+separate RPC method families.
+
+This TypeScript package is the client-side binding. The database backend is
+implemented in Rust under `crates/backend`.
+
+The language-neutral source of truth is [`openrpc.json`](openrpc.json). Exact
+transaction, idempotency, consistency, error, and subscription behavior is
+defined in [`SPEC.md`](SPEC.md). TypeScript and Rust tests check their method
+identities against the OpenRPC document.
+
+## Scope
+
+Version 1 contains:
+
+- generic entity create, read, update, and delete methods;
+- an open `meta` envelope plus strict CRUD business data;
+- configuration-selected preconditions, consistency, and causal metadata;
+- resumable change subscriptions through opaque cursors;
+- cluster and node identity in the connection handshake.
+
+It does not define entity payload schemas, storage tables, replication,
+conflict-resolution algorithms, or a Harness binding.
+
+## Methods
+
+```text
+patchouli.protocol.handshake@1
+patchouli.entity.create@1
+patchouli.entity.read@1
+patchouli.entity.update@1
+patchouli.entity.delete@1
+patchouli.changes.subscribe@1
+patchouli.changes.unsubscribe@1
+patchouli.changes.event@1
+```
+
+Mutations are JSON-RPC requests and always receive a response. The change event
+is a server notification and has no JSON-RPC `id`.
+
+Except for the protocol handshake, every method uses `params: { meta, data }`
+and every successful result uses `{ meta, data }`. `data` contains only the
+method's business fields. `meta` is an open JSON object whose recognized fields
+are selected by backend configuration.
+
+Each create, update, or delete is accepted atomically by the Rust backend
+controller. Configuration determines whether the accepted version is published
+immediately or as part of a logical batch. Only published versions produce
+change notifications.
+
+## Generic entities
+
+An adapter supplies its own entity type and JSON payload vocabulary:
+
+```ts
+type EntityType = 'memory' | 'relation'
+type EntityValue = MemoryValue | RelationValue
+type Contract = PatchouliProtocol<EntityType, EntityValue>
+```
+
+The protocol treats `type` as an opaque string. Authorization and schema
+validation belong to the backend configuration for that type.
+
+Named identity fields and mixed consistency rules also belong to backend
+configuration. See [backend configuration](../../docs/backend-configuration.md).
+The frontend plugin does not evaluate these rules or maintain transaction state.
+
+## Concurrency
+
+Every stored version is an opaque string. A deployment may configure a metadata
+field containing the versions on which an update or delete is based. A
+single-primary backend normally expects one base version; a multi-node backend
+may accept several heads without changing the CRUD `data` schema.
+
+Clients must not parse version or causal tokens. When configured, causal input
+and output live in `meta` alongside channel, transaction, plugin-route, and
+other deployment-specific identities. The controller retains causal progress
+for configured identities; CRUD requests do not select a consistency mode.
+
+## Reactive delivery
+
+Subscriptions deliver ordered, at-least-once change notifications. The cursor
+is the replay position and is distinct from the causal token. Clients dedupe by
+cursor, persist the last applied cursor, and pass it as `after_cursor` after a
+reconnect.
+
+The server may reject a cursor outside its retention window with
+`CURSOR_EXPIRED`. Disconnecting removes the connection-local subscription but
+does not invalidate the cursor.
+
+## Transport binding
+
+The first binding is JSON-RPC 2.0 over WebSocket. One WebSocket text frame
+contains one complete JSON-RPC object. Batch requests are not part of protocol
+version 1.

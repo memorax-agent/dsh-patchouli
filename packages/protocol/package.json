@@ -1,0 +1,42 @@
+{
+  "name": "@memorax-agent/patchouli-protocol",
+  "version": "0.1.0",
+  "description": "Harness-neutral JSON-RPC contracts for Patchouli storage",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "SPEC.md",
+    "openrpc.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm run build && node --test"
+  },
+  "devDependencies": {
+    "@json-schema-tools/meta-schema": "1.8.0",
+    "@open-rpc/meta-schema": "1.14.9",
+    "ajv": "8.20.0"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/memorax-agent/dsh-patchouli.git",
+    "directory": "packages/protocol"
+  }
+}

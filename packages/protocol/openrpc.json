@@ -1,0 +1,570 @@
+{
+  "$schema": "https://meta.open-rpc.org/",
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "Patchouli Storage Protocol",
+    "version": "1.0.0-draft.3",
+    "description": "Harness-neutral transactional CRUD and reactive change protocol for generic JSON entities.",
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/license/mit"
+    }
+  },
+  "methods": [
+    {
+      "name": "patchouli.protocol.handshake@1",
+      "summary": "Negotiate protocol version and capabilities",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "client",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/ClientIdentity" }
+        },
+        {
+          "name": "protocol_versions",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1 },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        {
+          "name": "capabilities",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/CapabilityList" }
+        }
+      ],
+      "result": {
+        "name": "handshake",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/HandshakeResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/UnsupportedCapability" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.entity.create@1",
+      "summary": "Durably accept one generic entity creation",
+      "description": "The Rust backend controller validates and records the candidate plus idempotency result atomically. Configured policy decides whether publication is immediate or deferred.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/CreateEntityData" }
+      ],
+      "result": {
+        "name": "mutation",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/MutationResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/VersionConflict" },
+        { "$ref": "#/components/errors/IdempotencyConflict" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Cancelled" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.entity.read@1",
+      "summary": "Read the current versions of one entity",
+      "description": "The result is read from one database snapshot. A missing identity returns NOT_FOUND; a retained tombstone returns state deleted.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/ReadEntityData" }
+      ],
+      "result": {
+        "name": "entity",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ReadEntityResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/NotFound" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Cancelled" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.entity.update@1",
+      "summary": "Durably accept one generic entity replacement",
+      "description": "Configured conflict metadata must satisfy the controller's selected policy. The candidate and idempotency result are recorded atomically; configured policy decides publication.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/UpdateEntityData" }
+      ],
+      "result": {
+        "name": "mutation",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/MutationResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/NotFound" },
+        { "$ref": "#/components/errors/VersionConflict" },
+        { "$ref": "#/components/errors/IdempotencyConflict" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Cancelled" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.entity.delete@1",
+      "summary": "Durably accept one generic entity tombstone",
+      "description": "Delete is logical. The tombstone candidate and idempotency result are recorded atomically; configured policy decides publication.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/DeleteEntityData" }
+      ],
+      "result": {
+        "name": "mutation",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/MutationResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/NotFound" },
+        { "$ref": "#/components/errors/VersionConflict" },
+        { "$ref": "#/components/errors/IdempotencyConflict" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Cancelled" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.changes.subscribe@1",
+      "summary": "Start or resume a change stream",
+      "description": "The server returns the stream boundary cursor before sending events for this subscription.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/SubscribeChangesData" }
+      ],
+      "result": {
+        "name": "subscription",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/SubscribeChangesResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/CursorExpired" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Cancelled" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.changes.unsubscribe@1",
+      "summary": "Stop a connection-local subscription",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/UnsubscribeChangesData" }
+      ],
+      "result": {
+        "name": "unsubscription",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/UnsubscribeChangesResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" }
+      ]
+    },
+    {
+      "name": "patchouli.changes.event@1",
+      "summary": "Deliver one published change",
+      "description": "Server-to-client JSON-RPC notification. It has no id and no result.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/ChangesEventData" }
+      ]
+    }
+  ],
+  "components": {
+    "contentDescriptors": {
+      "Meta": {
+        "name": "meta",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/Meta" }
+      },
+      "CreateEntityData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/CreateEntityData" }
+      },
+      "ReadEntityData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ReadEntityData" }
+      },
+      "UpdateEntityData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/UpdateEntityData" }
+      },
+      "DeleteEntityData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/DeleteEntityData" }
+      },
+      "SubscribeChangesData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/SubscribeChangesData" }
+      },
+      "UnsubscribeChangesData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/UnsubscribeChangesData" }
+      },
+      "ChangesEventData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ChangesEventData" }
+      }
+    },
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "OpaqueToken": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Opaque to clients; equality is the only supported operation."
+      },
+      "Meta": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Controller metadata interpreted only by backend configuration."
+      },
+      "CapabilityList": {
+        "type": "array",
+        "items": { "$ref": "#/components/schemas/NonEmptyString" },
+        "uniqueItems": true,
+        "description": "Capability names supported or negotiated by both peers."
+      },
+      "ClientIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "version", "instance_id"],
+        "properties": {
+          "name": { "$ref": "#/components/schemas/NonEmptyString" },
+          "version": { "$ref": "#/components/schemas/NonEmptyString" },
+          "instance_id": { "$ref": "#/components/schemas/NonEmptyString" }
+        }
+      },
+      "HandshakeResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["protocol_version", "server", "capabilities", "limits"],
+        "properties": {
+          "protocol_version": { "const": 1 },
+          "server": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["version", "cluster_id", "node_id"],
+            "properties": {
+              "version": { "$ref": "#/components/schemas/NonEmptyString" },
+              "cluster_id": { "$ref": "#/components/schemas/NonEmptyString" },
+              "node_id": { "$ref": "#/components/schemas/NonEmptyString" }
+            }
+          },
+          "capabilities": { "$ref": "#/components/schemas/CapabilityList" },
+          "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "max_request_bytes",
+              "max_result_items",
+              "idempotency_retention_seconds",
+              "change_retention_seconds"
+            ],
+            "properties": {
+              "max_request_bytes": { "type": "integer", "minimum": 1 },
+              "max_result_items": { "type": "integer", "minimum": 1 },
+              "idempotency_retention_seconds": { "type": "integer", "minimum": 1 },
+              "change_retention_seconds": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      },
+      "EntityRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "id"],
+        "properties": {
+          "type": { "$ref": "#/components/schemas/NonEmptyString" },
+          "id": { "$ref": "#/components/schemas/NonEmptyString" }
+        }
+      },
+      "CreateEntityData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "value"],
+        "properties": {
+          "type": { "$ref": "#/components/schemas/NonEmptyString" },
+          "id": { "$ref": "#/components/schemas/NonEmptyString" },
+          "value": {}
+        }
+      },
+      "ReadEntityData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref"],
+        "properties": {
+          "ref": { "$ref": "#/components/schemas/EntityRef" }
+        }
+      },
+      "UpdateEntityData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "value"],
+        "properties": {
+          "ref": { "$ref": "#/components/schemas/EntityRef" },
+          "value": {}
+        }
+      },
+      "DeleteEntityData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref"],
+        "properties": {
+          "ref": { "$ref": "#/components/schemas/EntityRef" }
+        }
+      },
+      "ActiveEntityVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "version", "state", "value"],
+        "properties": {
+          "ref": { "$ref": "#/components/schemas/EntityRef" },
+          "version": { "$ref": "#/components/schemas/OpaqueToken" },
+          "state": { "const": "active" },
+          "value": {}
+        }
+      },
+      "DeletedEntityVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "version", "state"],
+        "properties": {
+          "ref": { "$ref": "#/components/schemas/EntityRef" },
+          "version": { "$ref": "#/components/schemas/OpaqueToken" },
+          "state": { "const": "deleted" }
+        }
+      },
+      "EntityVersion": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/ActiveEntityVersion" },
+          { "$ref": "#/components/schemas/DeletedEntityVersion" }
+        ]
+      },
+      "MutationResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["entity"],
+            "properties": {
+              "entity": { "$ref": "#/components/schemas/EntityVersion" }
+            }
+          }
+        }
+      },
+      "ReadEntityResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "variants"],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": ["active", "conflicted", "deleted"]
+              },
+              "variants": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/EntityVersion" },
+                "minItems": 1
+              }
+            }
+          }
+        }
+      },
+      "ChangeFilter": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "types": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/NonEmptyString" },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "ids": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/NonEmptyString" },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        }
+      },
+      "SubscribeChangesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subscription_id", "cursor"],
+            "properties": {
+              "subscription_id": { "$ref": "#/components/schemas/NonEmptyString" },
+              "cursor": { "$ref": "#/components/schemas/OpaqueToken" }
+            }
+          }
+        }
+      },
+      "UnsubscribeChangesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["removed"],
+            "properties": {
+              "removed": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "SubscribeChangesData": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "filter": { "$ref": "#/components/schemas/ChangeFilter" },
+          "after_cursor": { "$ref": "#/components/schemas/OpaqueToken" }
+        }
+      },
+      "UnsubscribeChangesData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["subscription_id"],
+        "properties": {
+          "subscription_id": { "$ref": "#/components/schemas/NonEmptyString" }
+        }
+      },
+      "ChangeRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cursor", "ref", "kind", "head_versions"],
+        "properties": {
+          "cursor": { "$ref": "#/components/schemas/OpaqueToken" },
+          "ref": { "$ref": "#/components/schemas/EntityRef" },
+          "kind": {
+            "type": "string",
+            "enum": ["conflicted", "created", "deleted", "resolved", "updated"]
+          },
+          "head_versions": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/OpaqueToken" },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        }
+      },
+      "ChangesEventData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["subscription_id", "change"],
+        "properties": {
+          "subscription_id": { "$ref": "#/components/schemas/NonEmptyString" },
+          "change": { "$ref": "#/components/schemas/ChangeRecord" }
+        }
+      }
+    },
+    "errors": {
+      "Unauthenticated": {
+        "code": -32001,
+        "message": "Authentication is required.",
+        "data": { "reason": "UNAUTHENTICATED" }
+      },
+      "Forbidden": {
+        "code": -32002,
+        "message": "The operation is not permitted.",
+        "data": { "reason": "FORBIDDEN" }
+      },
+      "NotFound": {
+        "code": -32003,
+        "message": "The entity does not exist.",
+        "data": { "reason": "NOT_FOUND" }
+      },
+      "VersionConflict": {
+        "code": -32004,
+        "message": "The supplied base versions do not match the current heads.",
+        "data": { "reason": "VERSION_CONFLICT", "current_versions": ["opaque-version"] }
+      },
+      "IdempotencyConflict": {
+        "code": -32005,
+        "message": "The idempotency key was used for a different request.",
+        "data": { "reason": "IDEMPOTENCY_CONFLICT" }
+      },
+      "UnsupportedCapability": {
+        "code": -32006,
+        "message": "A requested protocol capability is unsupported.",
+        "data": { "reason": "UNSUPPORTED_CAPABILITY" }
+      },
+      "DeadlineExceeded": {
+        "code": -32007,
+        "message": "The request deadline elapsed before completion.",
+        "data": { "reason": "DEADLINE_EXCEEDED" }
+      },
+      "Cancelled": {
+        "code": -32008,
+        "message": "The request was cancelled before completion.",
+        "data": { "reason": "CANCELLED" }
+      },
+      "Overloaded": {
+        "code": -32009,
+        "message": "The server cannot accept the request now.",
+        "data": { "reason": "OVERLOADED" }
+      },
+      "CursorExpired": {
+        "code": -32010,
+        "message": "The cursor is outside the retained change history.",
+        "data": { "reason": "CURSOR_EXPIRED" }
+      }
+    }
+  }
+}

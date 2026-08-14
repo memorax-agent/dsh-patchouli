@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "entity_types": {
+    "event": {
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": ["payload"],
+        "properties": {
+          "payload": {}
+        },
+        "additionalProperties": false
+      },
+      "fields": {
+        "channel_id": { "pointer": "/meta/channel_id", "required": true },
+        "transaction_id": { "pointer": "/meta/transaction_id" },
+        "event_time": { "pointer": "/meta/event_time" },
+        "participant_id": { "pointer": "/meta/plugin_route_id" },
+        "transaction_state": { "pointer": "/meta/transaction_state" },
+        "causal_token": { "pointer": "/meta/causal_token" },
+        "base_versions": { "pointer": "/meta/base_versions" }
+      },
+      "consistency": {
+        "rules": [
+          {
+            "name": "transaction_batch",
+            "when_all_present": ["transaction_id", "event_time", "participant_id"],
+            "identity": ["channel_id", "transaction_id", "event_time", "participant_id"],
+            "group_by": ["channel_id", "transaction_id"],
+            "baseline": {
+              "consistency": "causal",
+              "source": "replica",
+              "at_field": "event_time",
+              "causal_field": "causal_token"
+            },
+            "batch": {
+              "visibility": "on_close",
+              "close_when": {
+                "kind": "marker",
+                "field": "transaction_state",
+                "equals": "commit"
+              },
+              "staging_ttl_ms": 3600000,
+              "on_expire": "discard"
+            },
+            "conflict": {
+              "strategy": "preserve_heads",
+              "base_versions_field": "base_versions"
+            }
+          }
+        ],
+        "fallback": {
+          "identity": ["channel_id"],
+          "baseline": {
+            "consistency": "linearizable",
+            "source": "authority"
+          },
+          "conflict": {
+            "strategy": "reject",
+            "base_versions_field": "base_versions"
+          }
+        }
+      }
+    }
+  }
+}

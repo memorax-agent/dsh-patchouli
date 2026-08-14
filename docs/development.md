@@ -6,9 +6,11 @@
 corepack enable
 pnpm install
 pnpm check
+cargo test --workspace
 ```
 
 `pnpm check` performs strict TypeScript validation, builds `lib/`, and runs the Node test suite.
+The Rust backend is checked independently with Cargo.
 
 The two entries in `pnpm-workspace.yaml` are explicit exceptions to pnpm's minimum-release-age policy. DeepSeek Harness and its Cordis dependency were newly published when this repository was initialized; all other dependencies remain subject to the active supply-chain policy.
 
