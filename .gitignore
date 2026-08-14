@@ -6,6 +6,8 @@ lib/
 target/
 artifacts/
 *.tgz
+packages/memory-ui/src/**/*.d.ts
+packages/memory-ui/src/**/*.d.ts.map
 
 # Test output
 coverage/
@@ -22,6 +24,9 @@ coverage/
 .env.*
 !.env.example
 *.local
+
+# Local product context
+PRODUCT.md
 
 # Logs
 *.log

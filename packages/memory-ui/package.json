@@ -1,0 +1,24 @@
+{
+  "name": "@memorax-agent/dsh-memory-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./client": "./src/client/index.tsx"
+  },
+  "peerDependencies": {
+    "@ch4acko3/dsh-ui-container": "^0.1.0",
+    "@ch4acko3/dsh-ui-workspace": "^0.1.0",
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-locale": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@ch4acko3/dsh-ui-container": "github:CH4ACKO3/dsh-ui-container#e0046c6f2eb684776d615297fdcf3f3321e64c3a",
+    "@ch4acko3/dsh-ui-workspace": "github:CH4ACKO3/dsh-ui-workspace#890a7602a31a65a5fdf0a3682c0d7bac2d1d21ce"
+  }
+}

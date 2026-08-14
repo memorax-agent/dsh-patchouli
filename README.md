@@ -40,11 +40,35 @@ pnpm pack
 在本地 DeepSeek Harness profile 中安装当前 checkout：
 
 ```bash
+dsh plugin --profile web add github:CH4ACKO3/dsh-ui-container
+dsh plugin --profile web add github:CH4ACKO3/dsh-ui-workspace
 dsh plugin --profile web add .
 dsh --profile web --dump-config
 ```
 
-配置中应出现 `patchouli` 插件行。当前插件不会向模型注入任何内容。
+三个客户端 bundle 都是运行时必需项，必须安装在同一个 profile；缺少 Container 或
+Workspace 时 Patchouli 会拒绝安装或保持未激活。配置中应各出现一个对应插件行。
+当前插件不会向模型注入任何内容。
+
+浏览器端分为 UI 容器、Workspace 预设和记忆前端。容器通过 Cordis 的
+`uiContainer` service 接受多个具名 surface；每个前端取得隔离的
+`UiSurfaceConnection`，共享文档 provider 与响应式数据源，但分别维护入口、布局和会话 Host。
+同一 package 还提供可递归嵌套的 `SurfaceHost` 视觉边界；子 Host 默认继承父级的
+surface 与 session，也可以切换到另一条连接。该组件只在浏览器本地建立 React 上下文和 DOM
+边界，不预渲染或远程传输组件树。
+容器同时提供 MessagePort 与 WebSocket 远程通道：跨进程或远程前端只接收 URI 文档投影与
+变更失效通知，仍在本地用 Workspace 渲染；相同 revision 不会重复发送正文。远程页面控制
+能力默认关闭，WebSocket 的认证、授权与 TLS 由建立端点的宿主负责。接入方式见
+[UI Container remote transport](https://github.com/CH4ACKO3/dsh-ui-container#remote-transport)。
+Workspace 提供 Explorer、可拖动 Pane、标签页、文档页面和动作栏等可选模板。
+Patchouli 以 `patchouli.memory` surface 接入，用 Workspace 模板组装页面，并注册 Harness
+原生的“知识”会话视图。
+
+客户端知识视图默认继承 Harness 的明暗主题和当前语言，并导出
+`patchouliTheme.set({ browse, edit })` 供宿主分别配置浏览与编辑模式的颜色、阴影、字体和动效；调用
+`patchouliTheme.reset()` 即恢复继承。Explorer 栏目通过 `ctx.patchouliMemoryUi.explorerPanes`
+注册，文档动作和过滤器也由同一个贡献 service 暴露。具体接口与示例见
+[UI 设计文档](docs/ui-design.md)。
 
 ## 仓库结构
 
@@ -55,6 +79,7 @@ dsh --profile web --dump-config
 ├── crates/
 │   └── backend/              # Rust 数据库后端核心
 ├── packages/
+│   ├── memory-ui/            # Patchouli 记忆前端与 Harness 会话视图
 │   └── protocol/             # 与 Harness 无关的数据库 JSON-RPC 契约
 ├── src/                      # Cordis 插件源码
 ├── test/                     # 最小契约测试
@@ -62,6 +87,11 @@ dsh --profile web --dump-config
 ├── package.json
 └── tsconfig.json
 ```
+
+通用 UI 基础设施已拆分为独立仓库：
+
+- [dsh-ui-container](https://github.com/CH4ACKO3/dsh-ui-container)：可递归视觉容器、文档投影与远程通道。
+- [dsh-ui-workspace](https://github.com/CH4ACKO3/dsh-ui-workspace)：Explorer、标签页和文档表面等预设组件。
 
 ## CI 与交付
 
