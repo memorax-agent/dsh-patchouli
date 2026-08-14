@@ -1,3 +1,6 @@
 - insert:
     - id: patchouli
       name: dsh-patchouli
+
+    - id: patchouli-agent-loop
+      name: dsh-patchouli/agent-loop

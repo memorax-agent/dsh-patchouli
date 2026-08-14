@@ -2,7 +2,7 @@
 
 ## Status
 
-Patchouli currently provides the common Cordis Memory Service foundation. Concrete memory plugins, Agent Loop consumers, and storage connectivity are not implemented yet.
+Patchouli currently provides the common Cordis Memory Service and an MVP Consumer for the official Agent Loop. Concrete memory plugins and storage connectivity are not implemented yet.
 
 ## Goal
 
@@ -53,24 +53,27 @@ The controller owns schemas, identity extraction, consistency selection, logical
 
 ### Agent Loop Consumer
 
-The Consumer listens to `agent/pre-step`, calls `next()`, retrieves against the admitted user messages, and appends one plugin-sourced user message to the returned decision.
+The Consumer is a separate `dsh-patchouli/agent-loop` Cordis plugin. It registers model-facing `memory_update` and `memory_retrieve` tools and listens to `agent/pre-step` for automatic retrieval. Tool scope is derived from the session working directory, falling back to the session id, rather than accepted from model input.
+
+The retrieval Hook calls `next()`, extracts text only from directly sourced user messages, retrieves through the common service, and appends one plugin-sourced recall message to the returned decision. Tool continuations, rejected steps, empty results, and retrieval failures inject nothing.
 
 The injected message must be:
 
-- bounded by an explicit result and byte budget;
-- tagged with plugin provenance and section metadata;
+- bounded by an explicit result and character budget;
+- tagged with plugin provenance and the `recall` context form;
 - appended rather than inserted into earlier history;
 - admitted through the normal Session Log path so the model-visible request can be reconstructed;
-- emitted once per user turn unless a later requirement justifies another retrieval.
+- emitted once per admitted direct-user batch; tool continuations do not repeat retrieval.
 
-## Default model interface
+## MVP model interface
 
-Patchouli will not expose knowledge retrieval as a model tool by default. Human commands, administration UI, or optional tools may be added as separate Consumers only when there is a concrete use case.
+The current Consumer enables automatic retrieval and also exposes explicit update/retrieve tools. Whether automatic retrieval remains enabled by default is intentionally deferred until the end-to-end MemoraX path can be evaluated.
 
 ## Initial delivery sequence
 
 1. Common Memory Service and Memory Plugin registry.
-2. A MemoraX plugin and Agent Loop Consumer working end to end.
-3. Local storage-backed plugins and operational surfaces such as status, rebuild, and inspection.
+2. Official Agent Loop Consumer with Hook and Tool paths.
+3. A MemoraX plugin working end to end through the common service and Consumer.
+4. Local storage-backed plugins and operational surfaces such as status, rebuild, and inspection.
 
 The repository is a monorepo. Rust backend crates live under `crates/`; JavaScript/TypeScript protocol and Harness packages live under `packages/`. The root package remains the DeepSeek Harness plugin until it is moved into its own package.
