@@ -9,8 +9,52 @@ pnpm check
 cargo test --workspace
 ```
 
-`pnpm check` performs strict TypeScript validation, builds `lib/`, and runs the Node test suite.
-The Rust backend is checked independently with Cargo.
+`pnpm check` performs strict TypeScript validation, builds `lib/`, and runs the
+Node test suite. The Rust backend is checked independently with Cargo. CI runs
+both stacks on Ubuntu, macOS, and Windows.
+
+## Run the daemon shell
+
+Install the Rust CLI into Cargo's binary directory:
+
+```bash
+cargo install --path crates/server
+```
+
+The Cordis plugin defaults to `autoStart: true` and invokes the `patchouli`
+binary from `PATH` when its endpoint is unavailable. Default endpoints are:
+
+- macOS/Linux: `~/.patchouli/run/patchouli.sock`
+- Windows: `\\.\pipe\patchouli`
+
+Manual macOS/Linux lifecycle:
+
+```bash
+patchouli serve --endpoint "$HOME/.patchouli/run/patchouli.sock"
+patchouli status --endpoint "$HOME/.patchouli/run/patchouli.sock"
+patchouli stop --endpoint "$HOME/.patchouli/run/patchouli.sock"
+```
+
+Manual PowerShell lifecycle:
+
+```powershell
+$endpoint = '\\.\pipe\patchouli'
+patchouli serve --endpoint $endpoint
+patchouli status --endpoint $endpoint
+patchouli stop --endpoint $endpoint
+```
+
+`serve` remains in the foreground for launchd, systemd, Windows Service
+wrappers, containers, and local development. Plugin auto-start launches the
+same command as a detached process. The current daemon implements only
+handshake, status, and shutdown; CRUD methods intentionally return method not
+found until the engine layer is added.
+
+Validate the existing backend policy file without starting a daemon:
+
+```bash
+patchouli config check config/patchouli.example.json
+```
 
 The two entries in `pnpm-workspace.yaml` are explicit exceptions to pnpm's minimum-release-age policy. DeepSeek Harness and its Cordis dependency were newly published when this repository was initialized; all other dependencies remain subject to the active supply-chain policy.
 

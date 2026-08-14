@@ -2,7 +2,9 @@
 
 ## Status
 
-Patchouli is currently an installable Cordis plugin skeleton. This document records the intended capability boundary; it does not claim that retrieval is implemented yet.
+Patchouli currently provides an installable Cordis plugin, a local Rust daemon,
+cross-platform IPC bootstrap, and control CLI. Database providers, CRUD
+execution, retrieval, and context injection are not implemented yet.
 
 ## Goal
 
@@ -44,6 +46,20 @@ JSON-RPC adapter
 ```
 
 The controller owns schemas, identity extraction, consistency selection, logical transaction/batch state, conflicts and publication. A database provider does not interpret business fields and is never called directly by the frontend adapter.
+
+### Runtime bootstrap
+
+The root Cordis plugin registers `ctx.patchouli`, connects to an existing local
+daemon, and optionally starts one when the configured endpoint is unavailable.
+The daemon remains independent of the plugin lifecycle: unloading the plugin
+closes its IPC connection but does not stop the daemon. Administrative shutdown
+goes through the `patchouli stop` CLI.
+
+The IPC framing and JSON-RPC dispatcher are shared across platforms:
+
+- macOS and Linux: Unix domain socket;
+- Windows: named pipe;
+- all platforms: UTF-8 NDJSON with one JSON-RPC object per line.
 
 ### Context Consumer
 

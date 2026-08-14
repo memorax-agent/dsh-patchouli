@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/backend"]
+members = ["crates/backend", "crates/server"]
 resolver = "3"
 
 [workspace.package]
@@ -10,8 +10,10 @@ repository = "https://github.com/memorax-agent/dsh-patchouli"
 
 [workspace.dependencies]
 async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
 futures-core = "0.3"
 jsonschema = { version = "0.49.9", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"] }

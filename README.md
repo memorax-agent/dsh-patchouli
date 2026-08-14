@@ -2,7 +2,7 @@
 
 Patchouli 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地知识依赖。目标是在不要求模型发起 Tool Call 的前提下，按当前任务检索相关知识，并通过 Harness 原生、可记录的上下文链路注入模型请求。
 
-> 当前状态：仓库初始化阶段。现在提供可构建、可打包、可被 Cordis Loader 加载的最小插件骨架，尚未实现知识采集、索引和召回。
+> 当前状态：已经具备可加载的 Cordis 插件、Rust 常驻服务空壳、本地 IPC 与控制 CLI。macOS/Linux 使用 Unix socket，Windows 使用 named pipe。数据库 provider、CRUD、知识采集、索引和召回尚未实现。
 
 ## 设计方向
 
@@ -46,6 +46,17 @@ dsh --profile web --dump-config
 
 配置中应出现 `patchouli` 插件行。当前插件不会向模型注入任何内容。
 
+先安装 daemon/CLI：
+
+```bash
+cargo install --path crates/server
+```
+
+插件加载时会连接默认本地 endpoint；若 daemon 不存在，则执行
+`patchouli serve` 后等待 handshake。插件卸载只关闭自身连接，daemon 由
+`patchouli stop --endpoint <endpoint>` 显式停止。详细的三平台命令见
+[开发文档](docs/development.md)。
+
 ## 仓库结构
 
 ```text
@@ -53,7 +64,8 @@ dsh --profile web --dump-config
 ├── .github/workflows/ci.yml  # 验证与交付物打包
 ├── docs/                     # 架构和开发文档
 ├── crates/
-│   └── backend/              # Rust 数据库后端核心
+│   ├── backend/              # Rust 数据库后端核心契约
+│   └── server/               # 跨平台 daemon、IPC 和控制 CLI
 ├── packages/
 │   └── protocol/             # 与 Harness 无关的数据库 JSON-RPC 契约
 ├── src/                      # Cordis 插件源码

@@ -7,7 +7,15 @@ export * from './rpc.js'
 import type { ReactiveContract } from './changes.js'
 import type { EntityCrudContract } from './entity.js'
 import type { JsonValue } from './json.js'
-import type { HandshakeParams, HandshakeResult, RpcMethod } from './rpc.js'
+import type {
+  ControlShutdownParams,
+  ControlShutdownResult,
+  ControlStatusParams,
+  ControlStatusResult,
+  HandshakeParams,
+  HandshakeResult,
+  RpcMethod,
+} from './rpc.js'
 
 export type PatchouliProtocol<
   TType extends string = string,
@@ -16,4 +24,6 @@ export type PatchouliProtocol<
   & ReactiveContract<TType>
   & {
     readonly 'patchouli.protocol.handshake@1': RpcMethod<HandshakeParams, HandshakeResult>
+    readonly 'patchouli.control.status@1': RpcMethod<ControlStatusParams, ControlStatusResult>
+    readonly 'patchouli.control.shutdown@1': RpcMethod<ControlShutdownParams, ControlShutdownResult>
   }

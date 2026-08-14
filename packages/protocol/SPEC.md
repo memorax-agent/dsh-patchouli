@@ -1,13 +1,15 @@
 # Patchouli Storage Protocol v1
 
-Status: draft 3. Normative method and data schemas are in `openrpc.json`.
+Status: draft 4. Normative method and data schemas are in `openrpc.json`.
 
 The words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are normative.
 
 ## 1. Transport and session
 
-- The transport is JSON-RPC 2.0 over WebSocket.
-- One text frame MUST contain exactly one complete JSON-RPC object.
+- The local transport is a UTF-8, newline-delimited JSON-RPC 2.0 byte stream.
+- macOS and Linux use a Unix domain socket. Windows uses a named pipe.
+- One line MUST contain exactly one complete JSON-RPC object. JSON string line
+  breaks therefore remain escaped inside that object.
 - Batch requests are not supported in v1.
 - Request IDs MUST be strings or integers. Clients MUST NOT reuse an ID while
   its request is outstanding on the same connection.
@@ -24,6 +26,13 @@ The words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are normative.
 
 Method suffix `@1` is part of method identity. A breaking request, response, or
 behavior change requires a new method suffix.
+
+### Control methods
+
+`patchouli.control.status@1` reports daemon readiness, process identity, start
+time, and active connection count. `patchouli.control.shutdown@1` accepts a
+graceful local shutdown request. Both follow the normal `{ meta, data }` shape;
+their `data` request object is empty.
 
 ## 2. Identity and scope
 

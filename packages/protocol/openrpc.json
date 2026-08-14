@@ -3,7 +3,7 @@
   "openrpc": "1.3.2",
   "info": {
     "title": "Patchouli Storage Protocol",
-    "version": "1.0.0-draft.3",
+    "version": "1.0.0-draft.4",
     "description": "Harness-neutral transactional CRUD and reactive change protocol for generic JSON entities.",
     "license": {
       "name": "MIT",
@@ -47,6 +47,49 @@
         { "$ref": "#/components/errors/Forbidden" },
         { "$ref": "#/components/errors/UnsupportedCapability" },
         { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.control.status@1",
+      "summary": "Report daemon readiness and process identity",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        {
+          "name": "data",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/EmptyData" }
+        }
+      ],
+      "result": {
+        "name": "status",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ControlStatusResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.control.shutdown@1",
+      "summary": "Ask the local daemon to shut down cleanly",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        {
+          "name": "data",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/EmptyData" }
+        }
+      ],
+      "result": {
+        "name": "shutdown",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ControlShutdownResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" }
       ]
     },
     {
@@ -303,6 +346,45 @@
               "max_result_items": { "type": "integer", "minimum": 1 },
               "idempotency_retention_seconds": { "type": "integer", "minimum": 1 },
               "change_retention_seconds": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      },
+      "EmptyData": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "ControlStatusResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ready", "pid", "started_at_unix_ms", "active_connections"],
+            "properties": {
+              "ready": { "type": "boolean" },
+              "pid": { "type": "integer", "minimum": 1 },
+              "started_at_unix_ms": { "type": "integer", "minimum": 0 },
+              "active_connections": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      },
+      "ControlShutdownResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["accepted"],
+            "properties": {
+              "accepted": { "type": "boolean" }
             }
           }
         }

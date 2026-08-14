@@ -30,6 +30,8 @@ conflict-resolution algorithms, or a Harness binding.
 
 ```text
 patchouli.protocol.handshake@1
+patchouli.control.status@1
+patchouli.control.shutdown@1
 patchouli.entity.create@1
 patchouli.entity.read@1
 patchouli.entity.update@1
@@ -94,6 +96,7 @@ does not invalidate the cursor.
 
 ## Transport binding
 
-The first binding is JSON-RPC 2.0 over WebSocket. One WebSocket text frame
-contains one complete JSON-RPC object. Batch requests are not part of protocol
-version 1.
+The first binding is a UTF-8 NDJSON stream over local IPC. macOS and Linux use
+a Unix domain socket; Windows uses a named pipe. One line contains one complete
+JSON-RPC object. The same connection carries responses and server
+notifications. Batch requests are not part of protocol version 1.

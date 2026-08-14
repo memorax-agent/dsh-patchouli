@@ -1,0 +1,23 @@
+[package]
+name = "patchouli-server"
+description = "Local Patchouli daemon and control CLI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "patchouli"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+patchouli-backend = { path = "../backend" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

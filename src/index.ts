@@ -1,16 +1,45 @@
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import process from 'node:process'
+
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+
+import { PatchouliService } from './service.js'
+
+export { PatchouliService } from './service.js'
 
 /** Cordis plugin identity used by loader diagnostics and model provenance. */
 export const name = 'dsh-patchouli'
 
-/** The bootstrap plugin has no service dependencies yet. */
+/** The daemon binding does not depend on Harness services. */
 export const inject = [] as const
 
-/**
- * Install Patchouli into a Cordis context.
- *
- * Knowledge services and model-visible context are introduced only when their
- * end-to-end implementation is present; the bootstrap plugin intentionally
- * has no runtime side effects.
- */
-export function apply(_ctx: Context): void {}
+export interface Config {
+  /** Unix socket path or Windows named-pipe name shared with the CLI. */
+  endpoint: string
+  /** Patchouli executable used when auto-start is enabled. */
+  command: string
+  /** Start a detached daemon when no existing daemon can be reached. */
+  autoStart: boolean
+  /** Maximum time to wait for a newly started daemon. */
+  startupTimeoutMs: number
+}
+
+const defaultEndpoint = process.platform === 'win32'
+  ? String.raw`\\.\pipe\patchouli`
+  : join(homedir(), '.patchouli', 'run', 'patchouli.sock')
+
+export const Config: z<Config> = z.object({
+  endpoint: z.string().default(defaultEndpoint),
+  command: z.string().default('patchouli'),
+  autoStart: z.boolean().default(true),
+  startupTimeoutMs: z.natural().min(1).default(5_000),
+})
+
+/** Register a lifecycle-managed daemon client on `ctx.patchouli`. */
+export async function apply(ctx: Context, config: Config): Promise<() => void> {
+  const service = new PatchouliService(ctx, config)
+  await service.start()
+  return () => service.close()
+}

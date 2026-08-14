@@ -11,6 +11,8 @@ test('publishes the versioned generic CRUD and reactive method names', () => {
   assert.equal(protocolVersion, 1)
   assert.deepEqual(methods, {
     handshake: 'patchouli.protocol.handshake@1',
+    controlStatus: 'patchouli.control.status@1',
+    controlShutdown: 'patchouli.control.shutdown@1',
     entityCreate: 'patchouli.entity.create@1',
     entityRead: 'patchouli.entity.read@1',
     entityUpdate: 'patchouli.entity.update@1',

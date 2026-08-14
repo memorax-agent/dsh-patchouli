@@ -90,6 +90,31 @@ pub struct ServerLimits {
     pub change_retention_seconds: u64,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyData {}
+
+pub type ControlStatusParams = RpcParams<EmptyData>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlStatusResultData {
+    pub ready: bool,
+    pub pid: u32,
+    pub started_at_unix_ms: u64,
+    pub active_connections: u64,
+}
+
+pub type ControlStatusResult = RpcResult<ControlStatusResultData>;
+
+pub type ControlShutdownParams = RpcParams<EmptyData>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlShutdownResultData {
+    pub accepted: bool,
+}
+
+pub type ControlShutdownResult = RpcResult<ControlShutdownResultData>;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubscribeChangesResultData {
     pub subscription_id: String,

@@ -31,6 +31,8 @@ fn rust_method_and_error_constants_match_openrpc() {
 
     let mut rust_methods = vec![
         methods::HANDSHAKE,
+        methods::CONTROL_STATUS,
+        methods::CONTROL_SHUTDOWN,
         methods::ENTITY_CREATE,
         methods::ENTITY_READ,
         methods::ENTITY_UPDATE,

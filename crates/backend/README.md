@@ -3,6 +3,10 @@
 Rust implementation boundary for Patchouli persistence. This crate is
 independent of DeepSeek Harness and Cordis.
 
+The runnable process shell lives in `crates/server`. It currently exposes only
+handshake, status, and shutdown over Unix sockets on macOS/Linux and named
+pipes on Windows; storage methods remain unimplemented.
+
 The current layer contains the backend-service CRUD contract, wire-compatible
 request and response types, the configuration model, and the reactive
 change-stream contract. The RPC adapter calls a Rust backend controller through

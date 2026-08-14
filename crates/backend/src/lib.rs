@@ -15,17 +15,21 @@ pub use model::{
 };
 pub use service::{BackendService, ChangeStream};
 pub use wire::{
-    ChangesEventData, ChangesEventParams, ClientIdentity, HandshakeParams, HandshakeResult,
-    JsonRpcError, JsonRpcFailure, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcSuccess,
-    JsonRpcVersion, ProtocolErrorData, ProtocolErrorReason, ServerIdentity, ServerLimits,
-    SubscribeChangesResult, SubscribeChangesResultData, UnsubscribeChangesData,
-    UnsubscribeChangesParams, UnsubscribeChangesResult, UnsubscribeChangesResultData, error_codes,
+    ChangesEventData, ChangesEventParams, ClientIdentity, ControlShutdownParams,
+    ControlShutdownResult, ControlShutdownResultData, ControlStatusParams, ControlStatusResult,
+    ControlStatusResultData, EmptyData, HandshakeParams, HandshakeResult, JsonRpcError,
+    JsonRpcFailure, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcSuccess, JsonRpcVersion,
+    ProtocolErrorData, ProtocolErrorReason, ServerIdentity, ServerLimits, SubscribeChangesResult,
+    SubscribeChangesResultData, UnsubscribeChangesData, UnsubscribeChangesParams,
+    UnsubscribeChangesResult, UnsubscribeChangesResultData, error_codes,
 };
 
 pub const PROTOCOL_VERSION: u16 = 1;
 
 pub mod methods {
     pub const HANDSHAKE: &str = "patchouli.protocol.handshake@1";
+    pub const CONTROL_STATUS: &str = "patchouli.control.status@1";
+    pub const CONTROL_SHUTDOWN: &str = "patchouli.control.shutdown@1";
     pub const ENTITY_CREATE: &str = "patchouli.entity.create@1";
     pub const ENTITY_READ: &str = "patchouli.entity.read@1";
     pub const ENTITY_UPDATE: &str = "patchouli.entity.update@1";
