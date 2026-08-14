@@ -21,11 +21,10 @@ Install the Rust CLI into Cargo's binary directory:
 cargo install --path crates/server
 ```
 
-The Cordis plugin defaults to `autoStart: true` and invokes the `patchouli`
-binary from `PATH` when its endpoint is unavailable. It opens the SQLite file
-at `~/.patchouli/data/patchouli.db` and loads backend policy from
-`~/.patchouli/config.json` by default. Copy the development policy before the
-first automatic start:
+The daemon opens the SQLite file at `~/.patchouli/data/patchouli.db` and loads
+backend policy from `~/.patchouli/config.json` in the default local layout.
+DeepSeek Harness/Cordis startup integration is maintained by the frontend
+collaborator. Copy the development policy before the first manual start:
 
 ```bash
 mkdir -p "$HOME/.patchouli"
@@ -37,7 +36,7 @@ Default endpoints are:
 - macOS/Linux: `~/.patchouli/run/patchouli.sock`
 - Windows: `\\.\pipe\patchouli`
 
-Manual macOS/Linux lifecycle:
+macOS/Linux lifecycle:
 
 ```bash
 patchouli serve \
@@ -65,8 +64,16 @@ patchouli stop --endpoint $endpoint
 wrappers, containers, and local development. Plugin auto-start launches the
 same command as a detached process. Policy validation and the SQLite health
 check both complete before the daemon begins listening. CRUD calls are decoded
-and routed through `BackendEngine`; until transactional storage is implemented,
-they return `UNSUPPORTED_CAPABILITY` rather than reporting success.
+and routed through `BackendEngine`. The shipped default policy supports
+transactional create/read/update/delete. Shared snapshot policies with marker
+publication and discard-on-expiry use durable cross-RPC work units. SQLite also
+persists causal/session frontiers for immediate-publication policies. Provider
+capability mismatches prevent startup rather than failing the first request.
+
+Immediate and batch-publication policies may enable keyed idempotency. The
+SQLite adapter stores the request and original accepted result atomically with
+the entity commit or staged candidate. Retention comes from backend
+configuration and is reported by handshake.
 
 Only one daemon may own a SQLite database at a time; ownership is represented
 by an exclusive `<database>.lock`. Each successful startup increments a durable
@@ -85,25 +92,17 @@ patchouli config check config/patchouli.default.json
 
 The two entries in `pnpm-workspace.yaml` are explicit exceptions to pnpm's minimum-release-age policy. DeepSeek Harness and its Cordis dependency were newly published when this repository was initialized; all other dependencies remain subject to the active supply-chain policy.
 
-## Test the bundle locally
-
-```bash
-dsh plugin --profile web add .
-dsh --profile web --dump-config
-```
-
-The effective configuration should contain an enabled row with id `patchouli` and module name `dsh-patchouli`.
-
 ## CI policy
 
 The repository is public. Pull Request code therefore runs only on GitHub-hosted infrastructure. The registered self-hosted runner is reserved for trusted `main` delivery jobs and explicit manual workflow runs.
 
-The delivery job creates an npm tarball and uploads it as a workflow artifact. It does not mutate a local DSH installation. Server installation will be added only after the following values are fixed:
-
-- target runner labels;
-- target DSH profile;
-- persistent release directory;
-- health check and rollback command.
+The matrix job builds Linux, macOS, and Windows daemon binaries. Tags named
+`v*` publish those binaries to a GitHub Release. Trusted `main` and manual runs
+also build on the registered self-hosted runner, install the daemon under
+`PATCHOULI_DEPLOY_ROOT` (default `~/.patchouli`), restart it, and verify
+`patchouli status`. A failed health check restores and restarts the previous
+binary. Repository variables may override deploy root, endpoint, database, and
+configuration paths. The workflow does not install or modify a DSH plugin.
 
 ## Generated files
 

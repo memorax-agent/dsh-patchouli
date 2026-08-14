@@ -3,10 +3,11 @@
   "title": "Patchouli backend configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "version", "meta_fields", "entity_identity", "entity_types"],
+  "required": ["$schema", "version", "retention", "meta_fields", "entity_identity", "entity_types"],
   "properties": {
     "$schema": { "type": "string", "minLength": 1 },
     "version": { "const": 1 },
+    "retention": { "$ref": "#/$defs/retention" },
     "meta_fields": {
       "type": "object",
       "minProperties": 1,
@@ -22,6 +23,15 @@
     }
   },
   "$defs": {
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["idempotency_seconds", "changes_seconds"],
+      "properties": {
+        "idempotency_seconds": { "type": "integer", "minimum": 1 },
+        "changes_seconds": { "type": "integer", "minimum": 1 }
+      }
+    },
     "non_empty_string": {
       "type": "string",
       "minLength": 1
@@ -328,8 +338,7 @@
               "minimum": 1
             },
             "on_expire": {
-              "type": "string",
-              "enum": ["discard", "publish"]
+              "const": "discard"
             }
           }
         }
@@ -345,33 +354,6 @@
             "kind": { "const": "marker" },
             "field": { "$ref": "#/$defs/alias" },
             "equals": {}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "field"],
-          "properties": {
-            "kind": { "const": "expected_count" },
-            "field": { "$ref": "#/$defs/alias" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "field", "size_ms"],
-          "properties": {
-            "kind": { "const": "time_window" },
-            "field": { "$ref": "#/$defs/alias" },
-            "size_ms": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "allowed_lateness_ms": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
           }
         }
       ]

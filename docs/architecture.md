@@ -2,15 +2,17 @@
 
 ## Status
 
-Patchouli currently provides an installable Cordis plugin, a local Rust daemon,
-cross-platform IPC bootstrap, control CLI, a database-provider boundary, and a
-SQLite startup adapter. A validated `BackendEngine` is connected to the daemon
-and CRUD methods reach its explicit placeholder implementation. Transactional
-CRUD execution, retrieval, and context injection are not implemented yet.
+Patchouli provides a local Rust daemon, cross-platform IPC, a control CLI, an
+explicit database-provider boundary, and a SQLite adapter. Transactional CRUD,
+durable shared-baseline work units, Automerge/MVCC resolution, immediate and
+batch idempotency, lexical retrieval, causal/session frontiers, retained change
+streams, and lifecycle recovery are implemented. Harness/Cordis integration
+and model context injection are maintained outside the backend scope.
 
 ## Goal
 
-Provide DeepSeek Harness with local, workspace-aware knowledge context without requiring the model to decide to call a knowledge tool.
+Provide any Harness with a local, workspace-aware knowledge store through one
+stable process boundary, without binding storage behavior to that Harness.
 
 ```text
 Knowledge Provider
@@ -63,7 +65,7 @@ interpret business fields and is never called directly by the frontend adapter.
 
 `BackendEngine` is the runtime owner of the immutable validated policy and one
 injected provider. JSON-RPC sessions call it only through `BackendService`.
-Cross-request business facts will live in the provider; the engine retains no
+Cross-request business facts live in the provider; the engine retains no
 process-local transaction or batch map.
 
 The provider also owns the durable daemon lifecycle. Startup takes exclusive
@@ -72,9 +74,9 @@ runtime generation, and only then exposes IPC. A manual checkpoint flushes WAL
 pages without stopping service. Graceful shutdown first drains IPC connections,
 then records a clean stop, truncates the WAL, closes the provider, and releases
 ownership. A later startup reports whether the previous generation ended
-uncleanly. This runtime marker does not replace business transactions: once
-CRUD is implemented, every mutation must become durable through its own
-provider transaction before its RPC response succeeds.
+uncleanly. This runtime marker does not replace business transactions: every
+mutation becomes durable through its own provider transaction before its RPC
+response succeeds.
 
 Database providers are compile-time Rust adapters rather than dynamically
 loaded plugins. `patchouli-provider` owns the common contract,
@@ -86,13 +88,19 @@ feature and can be omitted when embedding the server library. Exactly one
 provider is selected at startup and failure is explicit—there is no provider
 fallback chain.
 
+`cluster_id` and `node_id` identify the serving process but do not imply
+replication. Multi-node support enters through a provider that advertises a
+replica source and causal frontier operations; the engine validates those
+capabilities before startup. SQLite remains a single authority and never
+pretends that a local transaction makes remote replicas immediately visible.
+
 Physical provider settings are not part of the business-policy schema. The
 SQLite path is a daemon startup option, while entity schemas and consistency
 rules remain in backend policy configuration.
 
-### Runtime bootstrap
+### External runtime bootstrap
 
-The root Cordis plugin registers `ctx.patchouli`, connects to an existing local
+The frontend-owned Cordis plugin may register `ctx.patchouli`, connect to an existing local
 daemon, and optionally starts one when the configured endpoint is unavailable.
 The daemon remains independent of the plugin lifecycle: unloading the plugin
 closes its IPC connection but does not stop the daemon. Administrative shutdown
@@ -104,7 +112,7 @@ The IPC framing and JSON-RPC dispatcher are shared across platforms:
 - Windows: named pipe;
 - all platforms: UTF-8 NDJSON with one JSON-RPC object per line.
 
-### Context Consumer
+### External Context Consumer
 
 The Consumer listens to `agent/pre-step`, calls `next()`, retrieves against the admitted user messages, and appends one plugin-sourced user message to the returned decision.
 
@@ -120,10 +128,12 @@ The injected message must be:
 
 Patchouli will not expose knowledge retrieval as a model tool by default. Human commands, administration UI, or optional tools may be added as separate Consumers only when there is a concrete use case.
 
-## Initial delivery sequence
+## Delivery sequence
 
-1. A single local Provider and automatic Context Consumer working end to end.
+1. A single local Provider and stable CRUD/retrieval/change protocol.
 2. Durable ingestion and incremental indexing.
 3. Operational surfaces such as status, rebuild, and inspection.
 
-The repository is a monorepo. Rust backend crates live under `crates/`; JavaScript/TypeScript protocol and Harness packages live under `packages/`. The root package remains the DeepSeek Harness plugin until it is moved into its own package.
+The repository is a monorepo. Rust backend crates live under `crates/`, and the
+Harness-neutral TypeScript protocol lives under `packages/protocol`. Harness
+packages may consume the protocol but are not part of backend architecture.

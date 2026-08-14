@@ -1,7 +1,16 @@
 {
   "$schema": "../patchouli.schema.json",
   "version": 1,
+  "retention": { "idempotency_seconds": 86400, "changes_seconds": 604800 },
   "meta_fields": {
+    "workspace_id": {
+      "pointer": "/workspace_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "user_id": {
+      "pointer": "/user_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
     "channel_id": {
       "pointer": "/channel_id",
       "schema": { "type": "string", "minLength": 1 }
@@ -29,7 +38,7 @@
     }
   },
   "entity_identity": {
-    "scope_by": ["channel_id"]
+    "scope_by": ["workspace_id", "user_id"]
   },
   "entity_types": {
     "knowledge": {

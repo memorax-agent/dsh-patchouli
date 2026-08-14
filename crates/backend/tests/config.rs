@@ -1,6 +1,6 @@
 use patchouli_backend::{
     BackendConfig, CausalConsistencyPlan, ConfigError, ConflictStrategy, ConsistencySource,
-    ControlKey, PolicySelector, PublicationPolicy, SessionGuarantee, SnapshotPolicy,
+    ControlKey, PolicySelector, PublicationPolicy, SnapshotPolicy,
 };
 use serde_json::json;
 
@@ -35,7 +35,7 @@ fn configuration_schema_and_example_are_valid() {
     assert!(jsonschema::meta::is_valid(&schema));
 
     let config = BackendConfig::from_json(EXAMPLE).unwrap();
-    assert_eq!(config.entity_identity.scope_by, ["channel_id"]);
+    assert_eq!(config.entity_identity.scope_by, ["workspace_id", "user_id"]);
     assert_eq!(
         config.meta_fields["transaction_id"].select(&json!({
             "transaction_id": "transaction-3"
@@ -56,7 +56,10 @@ fn common_consistency_patterns_compile_to_the_expected_plans() {
     }
 
     let default = PolicySelector::new(BackendConfig::from_json(DEFAULT).unwrap())
-        .select("knowledge", &json!({ "channel_id": "channel-7" }))
+        .select(
+            "knowledge",
+            &scoped_meta(json!({ "channel_id": "channel-7" })),
+        )
         .unwrap();
     assert_eq!(default.consistency.snapshot_key, None);
     assert_eq!(
@@ -65,11 +68,11 @@ fn common_consistency_patterns_compile_to_the_expected_plans() {
     );
     assert_eq!(
         default.consistency.linearization_key,
-        Some(control_key([("channel_id", "channel-7")], []))
+        Some(control_key(default_scope(), []))
     );
     assert_eq!(
         default.consistency.commit_ordering_key,
-        Some(control_key([("channel_id", "channel-7")], []))
+        Some(control_key(default_scope(), []))
     );
     assert_eq!(
         default.behavior.consistency.snapshot,
@@ -81,7 +84,10 @@ fn common_consistency_patterns_compile_to_the_expected_plans() {
     assert_eq!(default.behavior.publication, PublicationPolicy::Immediate);
 
     let eventual = PolicySelector::new(BackendConfig::from_json(EVENTUAL).unwrap())
-        .select("knowledge", &json!({ "channel_id": "channel-7" }))
+        .select(
+            "knowledge",
+            &scoped_meta(json!({ "channel_id": "channel-7" })),
+        )
         .unwrap();
     assert_eq!(
         eventual.consistency.allowed_sources,
@@ -97,10 +103,10 @@ fn common_consistency_patterns_compile_to_the_expected_plans() {
     let causal = PolicySelector::new(BackendConfig::from_json(CAUSAL_SESSION).unwrap())
         .select(
             "knowledge",
-            &json!({
+            &scoped_meta(json!({
                 "channel_id": "channel-7",
                 "plugin_route_id": "route-a"
-            }),
+            })),
         )
         .unwrap();
     assert_eq!(
@@ -113,27 +119,24 @@ fn common_consistency_patterns_compile_to_the_expected_plans() {
     assert_eq!(causal.consistency.sessions.len(), 1);
     assert_eq!(
         causal.consistency.sessions[0].key,
-        control_key(
-            [("channel_id", "channel-7")],
-            [("participant_id", "route-a")]
-        )
+        control_key(default_scope(), [("participant_id", "route-a")])
     );
 
     let shared = PolicySelector::new(BackendConfig::from_json(SHARED_TRANSACTION).unwrap())
         .select(
             "knowledge",
-            &json!({
+            &scoped_meta(json!({
                 "channel_id": "channel-7",
                 "transaction_id": "transaction-3",
                 "plugin_route_id": "route-a",
                 "request_id": "request-9"
-            }),
+            })),
         )
         .unwrap();
     assert_eq!(
         shared.consistency.snapshot_key,
         Some(control_key(
-            [("channel_id", "channel-7")],
+            default_scope(),
             [("transaction_id", "transaction-3")]
         ))
     );
@@ -184,23 +187,19 @@ fn configuration_rejects_unresolvable_value_schemas() {
 #[test]
 fn selector_derives_separate_scope_and_control_keys() {
     let selector = PolicySelector::new(BackendConfig::from_json(EXAMPLE).unwrap());
-    let meta = json!({
+    let meta = scoped_meta(json!({
         "channel_id": "channel-7",
         "transaction_id": "transaction-3",
-        "event_time": "2026-08-14T08:00:00Z",
-        "plugin_route_id": "route-a",
-        "request_id": "request-9",
-        "causal_token": "causal-4",
         "base_versions": ["version-1"]
-    });
+    }));
 
     let selection = selector.select("knowledge", &meta).unwrap();
     assert_eq!(selection.rule.as_deref(), Some("transaction_batch"));
-    assert_eq!(selection.scope, json_map([("channel_id", "channel-7")]));
+    assert_eq!(selection.scope, json_map(default_scope()));
     assert_eq!(
         selection.consistency.snapshot_key,
         Some(control_key(
-            [("channel_id", "channel-7")],
+            default_scope(),
             [("transaction_id", "transaction-3")]
         ))
     );
@@ -208,46 +207,17 @@ fn selector_derives_separate_scope_and_control_keys() {
         selection.consistency.allowed_sources,
         [ConsistencySource::Authority].into_iter().collect()
     );
+    assert!(selection.consistency.causal.is_empty());
     assert_eq!(
-        selection.consistency.causal,
-        [CausalConsistencyPlan {
-            field: "causal_token".to_owned(),
-            minimum: Some(json!("causal-4"))
-        }]
+        selection.consistency.linearization_key,
+        Some(control_key(default_scope(), []))
     );
-    assert_eq!(selection.consistency.linearization_key, None);
-    assert_eq!(selection.consistency.sessions.len(), 1);
-    assert_eq!(
-        selection.consistency.sessions[0].key,
-        control_key(
-            [("channel_id", "channel-7")],
-            [("participant_id", "route-a")]
-        )
-    );
-    assert_eq!(
-        selection.consistency.sessions[0].guarantees,
-        [
-            SessionGuarantee::MonotonicReads,
-            SessionGuarantee::ReadYourWrites
-        ]
-        .into_iter()
-        .collect()
-    );
+    assert!(selection.consistency.sessions.is_empty());
     assert_eq!(
         selection.consistency.commit_ordering_key,
-        Some(control_key([("channel_id", "channel-7")], []))
+        Some(control_key(default_scope(), []))
     );
-    assert_eq!(
-        selection.idempotency_key,
-        Some(control_key(
-            [("channel_id", "channel-7")],
-            [
-                ("participant_id", "route-a"),
-                ("request_id", "request-9"),
-                ("transaction_id", "transaction-3")
-            ]
-        ))
-    );
+    assert_eq!(selection.idempotency_key, None);
     assert_eq!(
         selection.publication_key,
         selection.consistency.snapshot_key
@@ -259,17 +229,20 @@ fn request_conflict_strategy_overrides_the_configured_default() {
     let selector = PolicySelector::new(BackendConfig::from_json(DEFAULT).unwrap());
 
     let default = selector
-        .select("knowledge", &json!({ "channel_id": "channel-7" }))
+        .select(
+            "knowledge",
+            &scoped_meta(json!({ "channel_id": "channel-7" })),
+        )
         .unwrap();
     assert_eq!(default.conflict.strategy, ConflictStrategy::Merge);
 
     let requested = selector
         .select(
             "knowledge",
-            &json!({
+            &scoped_meta(json!({
                 "channel_id": "channel-7",
                 "conflict_strategy": "reject"
-            }),
+            })),
         )
         .unwrap();
     assert_eq!(requested.conflict.strategy, ConflictStrategy::Reject);
@@ -278,21 +251,21 @@ fn request_conflict_strategy_overrides_the_configured_default() {
 #[test]
 fn request_consistency_has_no_shared_or_session_state() {
     let selector = PolicySelector::new(BackendConfig::from_json(EXAMPLE).unwrap());
-    let meta = json!({ "channel_id": "channel-7" });
+    let meta = scoped_meta(json!({ "channel_id": "channel-7" }));
 
     let selection = selector.select("knowledge", &meta).unwrap();
     assert_eq!(selection.rule, None);
-    assert_eq!(selection.scope, json_map([("channel_id", "channel-7")]));
+    assert_eq!(selection.scope, json_map(default_scope()));
     assert_eq!(selection.consistency.snapshot_key, None);
     assert!(selection.consistency.causal.is_empty());
     assert!(selection.consistency.sessions.is_empty());
     assert_eq!(
         selection.consistency.linearization_key,
-        Some(control_key([("channel_id", "channel-7")], []))
+        Some(control_key(default_scope(), []))
     );
     assert_eq!(
         selection.consistency.commit_ordering_key,
-        Some(control_key([("channel_id", "channel-7")], []))
+        Some(control_key(default_scope(), []))
     );
     assert_eq!(selection.idempotency_key, None);
     assert_eq!(selection.publication_key, None);
@@ -350,7 +323,7 @@ fn configuration_requires_shared_snapshot_and_batch_keys_to_match() {
 fn configuration_rejects_scope_fields_repeated_in_control_keys() {
     let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
     value["entity_types"]["knowledge"]["fallback"]["consistency"]["acquire"]["requirements"][0]["key_by"] =
-        json!(["channel_id"]);
+        json!(["workspace_id"]);
 
     let error = BackendConfig::from_json(&value.to_string()).unwrap_err();
     assert!(matches!(error, ConfigError::Invalid { .. }));
@@ -360,6 +333,10 @@ fn configuration_rejects_scope_fields_repeated_in_control_keys() {
 #[test]
 fn configuration_rejects_duplicate_session_identities() {
     let mut value: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
+    value["meta_fields"]["participant_id"] = json!({
+        "pointer": "/plugin_route_id",
+        "schema": { "type": "string", "minLength": 1 }
+    });
     value["entity_types"]["knowledge"]["rules"][0]["behavior"]["consistency"]["sessions"] = json!([
         {
             "key_by": ["participant_id"],
@@ -399,21 +376,18 @@ fn configuration_rejects_overlapping_conflict_merge_paths() {
 
 #[test]
 fn optional_causal_tokens_do_not_become_required_identity_fields() {
-    let selector = PolicySelector::new(BackendConfig::from_json(EXAMPLE).unwrap());
+    let selector = PolicySelector::new(BackendConfig::from_json(CAUSAL_SESSION).unwrap());
     let selection = selector
         .select(
             "knowledge",
-            &json!({
+            &scoped_meta(json!({
                 "channel_id": "channel-7",
-                "transaction_id": "transaction-3",
-                "plugin_route_id": "route-a",
-                "request_id": "request-9",
-                "base_versions": ["version-1"]
-            }),
+                "plugin_route_id": "route-a"
+            })),
         )
         .unwrap();
 
-    assert_eq!(selection.rule.as_deref(), Some("transaction_batch"));
+    assert_eq!(selection.rule, None);
     assert_eq!(
         selection.consistency.causal,
         [CausalConsistencyPlan {
@@ -432,7 +406,10 @@ fn linearizable_acquisition_intersects_sources_with_authority() {
         PolicySelector::new(BackendConfig::from_json(&value.to_string()).expect("valid config"));
 
     let selection = selector
-        .select("knowledge", &json!({ "channel_id": "channel-7" }))
+        .select(
+            "knowledge",
+            &scoped_meta(json!({ "channel_id": "channel-7" })),
+        )
         .unwrap();
 
     assert_eq!(
@@ -445,7 +422,7 @@ fn linearizable_acquisition_intersects_sources_with_authority() {
 fn selector_validates_bound_metadata_values() {
     let selector = PolicySelector::new(BackendConfig::from_json(EXAMPLE).unwrap());
     let error = selector
-        .select("knowledge", &json!({ "channel_id": "" }))
+        .select("knowledge", &scoped_meta(json!({ "channel_id": "" })))
         .unwrap_err();
 
     assert!(error.to_string().contains("channel_id"));
@@ -459,6 +436,17 @@ fn json_map<const N: usize>(
         .into_iter()
         .map(|(name, value)| (name.to_owned(), json!(value)))
         .collect()
+}
+
+fn default_scope() -> [(&'static str, &'static str); 2] {
+    [("workspace_id", "workspace-1"), ("user_id", "user-7")]
+}
+
+fn scoped_meta(mut value: serde_json::Value) -> serde_json::Value {
+    let object = value.as_object_mut().unwrap();
+    object.insert("workspace_id".to_owned(), json!("workspace-1"));
+    object.insert("user_id".to_owned(), json!("user-7"));
+    value
 }
 
 fn control_key<const S: usize, const F: usize>(

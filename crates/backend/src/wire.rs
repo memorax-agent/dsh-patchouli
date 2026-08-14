@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{ChangeRecord, RpcParams, RpcResult, VersionToken};
+use crate::{ChangeRecord, EntityRef, RpcParams, RpcResult, VersionToken};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -165,11 +165,13 @@ pub enum ProtocolErrorReason {
     DeadlineExceeded,
     Forbidden,
     IdempotencyConflict,
+    InvalidRequest,
     NotFound,
     Overloaded,
     Unauthenticated,
     UnsupportedCapability,
     VersionConflict,
+    WorkUnitExpired,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,9 +179,19 @@ pub struct ProtocolErrorData {
     pub reason: ProtocolErrorReason,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_versions: Option<Vec<VersionToken>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflicts: Option<Vec<ProtocolEntityConflict>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtocolEntityConflict {
+    #[serde(rename = "ref")]
+    pub entity_ref: EntityRef,
+    pub current_versions: Vec<VersionToken>,
 }
 
 pub mod error_codes {
+    pub const INVALID_REQUEST: i32 = -32602;
     pub const UNAUTHENTICATED: i32 = -32001;
     pub const FORBIDDEN: i32 = -32002;
     pub const NOT_FOUND: i32 = -32003;
@@ -190,4 +202,5 @@ pub mod error_codes {
     pub const CANCELLED: i32 = -32008;
     pub const OVERLOADED: i32 = -32009;
     pub const CURSOR_EXPIRED: i32 = -32010;
+    pub const WORK_UNIT_EXPIRED: i32 = -32011;
 }

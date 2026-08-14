@@ -1,7 +1,16 @@
 {
   "$schema": "../patchouli.schema.json",
   "version": 1,
+  "retention": { "idempotency_seconds": 86400, "changes_seconds": 604800 },
   "meta_fields": {
+    "workspace_id": {
+      "pointer": "/workspace_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "user_id": {
+      "pointer": "/user_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
     "channel_id": {
       "pointer": "/channel_id",
       "schema": { "type": "string", "minLength": 1 }
@@ -14,21 +23,9 @@
       "pointer": "/transaction_id",
       "schema": { "type": "string", "minLength": 1 }
     },
-    "participant_id": {
-      "pointer": "/plugin_route_id",
-      "schema": { "type": "string", "minLength": 1 }
-    },
-    "request_id": {
-      "pointer": "/request_id",
-      "schema": { "type": "string", "minLength": 1 }
-    },
     "transaction_state": {
       "pointer": "/transaction_state",
       "schema": { "type": "string" }
-    },
-    "causal_token": {
-      "pointer": "/causal_token",
-      "schema": { "type": "string", "minLength": 1 }
     },
     "base_versions": {
       "pointer": "/base_versions",
@@ -41,7 +38,7 @@
     }
   },
   "entity_identity": {
-    "scope_by": ["channel_id"]
+    "scope_by": ["workspace_id", "user_id"]
   },
   "entity_types": {
     "knowledge": {
@@ -55,22 +52,16 @@
             "mode": "shared",
             "key_by": ["transaction_id"]
           },
-          "acquire": {
-            "allow_sources": ["authority"],
-            "requirements": [
-              {
-                "kind": "causal_after",
-                "token": "causal_token",
-                "optional": true
-              }
-            ]
-          },
-          "sessions": [
-            {
-              "key_by": ["participant_id"],
-              "guarantees": ["monotonic_reads", "read_your_writes"]
-            }
-          ],
+            "acquire": {
+              "allow_sources": ["authority"],
+              "requirements": [
+                {
+                  "kind": "linearizable",
+                  "key_by": []
+                }
+              ]
+            },
+            "sessions": [],
           "commit": {
             "ordering": {
               "kind": "serialize",
@@ -78,10 +69,9 @@
             }
           }
         },
-        "idempotency": {
-          "mode": "keyed",
-          "key_by": ["transaction_id", "participant_id", "request_id"]
-        },
+          "idempotency": {
+            "mode": "disabled"
+          },
         "conflict": {
           "default_strategy": "merge",
           "strategy_from": "conflict_strategy",

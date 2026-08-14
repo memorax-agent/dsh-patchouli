@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use automerge::{ActorId, AutoCommit};
+use automerge::{ActorId, AutoCommit, Change};
 use autosurgeon::{
     Hydrate, HydrateError, Reconcile, Reconciler, Text, hydrate, hydrate_prop, reconcile,
     reconcile::{MapReconciler, NoKey},
@@ -24,15 +24,14 @@ pub struct CrdtChange {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConflictResolution {
-    pub variants: Vec<Value>,
-    pub merged_fields: Vec<MergedField>,
+    pub variants: Vec<ConflictCandidate>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct MergedField {
-    pub path: String,
-    pub group: Vec<Value>,
-    pub document: CrdtDocument,
+pub struct ConflictCandidate {
+    pub value: Value,
+    pub crdt_fields: BTreeMap<String, CrdtDocument>,
+    pub source_version: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -47,6 +46,10 @@ pub enum ConflictError {
     Reconcile(#[from] autosurgeon::ReconcileError),
     #[error("Automerge hydration error: {0}")]
     Hydrate(#[from] HydrateError),
+    #[error("invalid stored Automerge change: {0}")]
+    StoredChange(String),
+    #[error("stored Automerge frontier does not match the reconstructed document")]
+    FrontierMismatch,
 }
 
 impl CrdtDocument {
@@ -61,6 +64,49 @@ impl CrdtDocument {
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, ConflictError> {
         AutoCommit::load(&bytes)?;
         Ok(Self { bytes })
+    }
+
+    pub fn from_changes(
+        changes: &[CrdtChange],
+        expected_heads: &[String],
+    ) -> Result<Self, ConflictError> {
+        let changes = changes
+            .iter()
+            .map(|change| {
+                let decoded = Change::from_bytes(change.bytes.clone())
+                    .map_err(|error| ConflictError::StoredChange(error.to_string()))?;
+                let mut decoded_parents = decoded
+                    .deps()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                let mut stored_parents = change.parents.clone();
+                decoded_parents.sort();
+                stored_parents.sort();
+                if decoded.hash().to_string() != change.hash || decoded_parents != stored_parents {
+                    return Err(ConflictError::StoredChange(
+                        "change hash or dependency edges do not match its bytes".to_owned(),
+                    ));
+                }
+                Ok(decoded)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut document = AutoCommit::new();
+        document.apply_changes(changes)?;
+        let mut actual_heads = document
+            .get_heads()
+            .into_iter()
+            .map(|hash| hash.to_string())
+            .collect::<Vec<_>>();
+        let mut expected_heads = expected_heads.to_vec();
+        actual_heads.sort();
+        expected_heads.sort();
+        if actual_heads != expected_heads {
+            return Err(ConflictError::FrontierMismatch);
+        }
+        Ok(Self {
+            bytes: document.save(),
+        })
     }
 
     pub fn change(&self, value: &Value) -> Result<Self, ConflictError> {
@@ -132,45 +178,102 @@ pub fn resolve_conflict(
 ) -> Result<ConflictResolution, ConflictError> {
     if candidates.len() <= 1 {
         return Ok(ConflictResolution {
+            variants: candidates
+                .iter()
+                .cloned()
+                .map(|value| ConflictCandidate {
+                    value,
+                    crdt_fields: BTreeMap::new(),
+                    source_version: None,
+                })
+                .collect(),
+        });
+    }
+
+    let base_documents = plan
+        .merge
+        .iter()
+        .filter_map(|rule| {
+            base.pointer(&rule.path)
+                .map(|value| Ok((rule.path.clone(), CrdtDocument::from_json(value)?)))
+        })
+        .collect::<Result<BTreeMap<_, _>, ConflictError>>()?;
+    let prepared = candidates
+        .iter()
+        .map(|candidate| prepare_candidate(plan, base, &base_documents, candidate))
+        .collect::<Result<Vec<_>, _>>()?;
+    resolve_prepared_conflict(plan, &prepared)
+}
+
+pub fn resolve_prepared_conflict(
+    plan: &ConflictPlan,
+    candidates: &[ConflictCandidate],
+) -> Result<ConflictResolution, ConflictError> {
+    if candidates.len() <= 1 {
+        return Ok(ConflictResolution {
             variants: candidates.to_vec(),
-            merged_fields: Vec::new(),
         });
     }
 
     match plan.strategy {
         ConflictStrategy::Reject => Err(ConflictError::Rejected),
         ConflictStrategy::Mvcc => Ok(ConflictResolution {
-            variants: unique_values(candidates),
-            merged_fields: Vec::new(),
+            variants: candidates.to_vec(),
         }),
-        ConflictStrategy::Merge => merge_candidates(plan, base, candidates),
+        ConflictStrategy::Merge => merge_candidates(plan, candidates),
     }
+}
+
+fn prepare_candidate(
+    plan: &ConflictPlan,
+    base: &Value,
+    base_documents: &BTreeMap<String, CrdtDocument>,
+    candidate: &Value,
+) -> Result<ConflictCandidate, ConflictError> {
+    let mut crdt_fields = BTreeMap::new();
+    for rule in &plan.merge {
+        let (Some(base_field), Some(candidate_field)) =
+            (base.pointer(&rule.path), candidate.pointer(&rule.path))
+        else {
+            reject_if_required(plan.otherwise)?;
+            continue;
+        };
+        if group_values(base_field, rule) != group_values(candidate_field, rule) {
+            reject_if_required(plan.otherwise)?;
+            continue;
+        }
+        crdt_fields.insert(
+            rule.path.clone(),
+            base_documents
+                .get(&rule.path)
+                .expect("a merge rule with a base value must have a base document")
+                .change(candidate_field)?,
+        );
+    }
+    Ok(ConflictCandidate {
+        value: candidate.clone(),
+        crdt_fields,
+        source_version: None,
+    })
 }
 
 fn merge_candidates(
     plan: &ConflictPlan,
-    base: &Value,
-    candidates: &[Value],
+    candidates: &[ConflictCandidate],
 ) -> Result<ConflictResolution, ConflictError> {
     let mut variants = candidates.to_vec();
-    let mut merged_fields = Vec::new();
 
     for rule in &plan.merge {
-        let Some(base_field) = base.pointer(&rule.path) else {
-            reject_if_required(plan.otherwise)?;
-            continue;
-        };
-        let Some(base_group) = group_values(base_field, rule) else {
-            reject_if_required(plan.otherwise)?;
-            continue;
-        };
-
         let mut groups = BTreeMap::<Vec<String>, (Vec<Value>, Vec<usize>)>::new();
         for (index, candidate) in variants.iter().enumerate() {
-            let Some(field) = candidate.pointer(&rule.path) else {
+            let Some(field) = candidate.value.pointer(&rule.path) else {
                 reject_if_required(plan.otherwise)?;
                 continue;
             };
+            if !candidate.crdt_fields.contains_key(&rule.path) {
+                reject_if_required(plan.otherwise)?;
+                continue;
+            }
             let Some(group) = group_values(field, rule) else {
                 reject_if_required(plan.otherwise)?;
                 continue;
@@ -183,42 +286,40 @@ fn merge_candidates(
                 .push(index);
         }
 
-        for (_, (group, indexes)) in groups {
-            if indexes.len() < 2 || group != base_group {
+        for (_, (_, indexes)) in groups {
+            if indexes.len() < 2 {
                 reject_if_required(plan.otherwise)?;
                 continue;
             }
 
-            let base_document = CrdtDocument::from_json(base_field)?;
             let branches = indexes
                 .iter()
                 .map(|index| {
-                    base_document.change(
-                        variants[*index]
-                            .pointer(&rule.path)
-                            .expect("grouped merge fields must still exist"),
-                    )
+                    variants[*index]
+                        .crdt_fields
+                        .get(&rule.path)
+                        .expect("grouped merge fields must have CRDT state")
+                        .clone()
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Vec<_>>();
             let document = CrdtDocument::merge(&branches)?;
             let merged_value = document.json()?;
 
             for index in indexes {
                 *variants[index]
+                    .value
                     .pointer_mut(&rule.path)
                     .expect("grouped merge fields must still exist") = merged_value.clone();
+                variants[index]
+                    .crdt_fields
+                    .insert(rule.path.clone(), document.clone());
+                variants[index].source_version = None;
             }
-            merged_fields.push(MergedField {
-                path: rule.path.clone(),
-                group: group.clone(),
-                document,
-            });
         }
     }
 
     Ok(ConflictResolution {
-        variants: unique_values(&variants),
-        merged_fields,
+        variants: collapse_identical_variants(variants)?,
     })
 }
 
@@ -253,14 +354,32 @@ fn canonical_json(value: &Value) -> String {
     }
 }
 
-fn unique_values(values: &[Value]) -> Vec<Value> {
-    let mut unique = Vec::new();
-    for value in values {
-        if !unique.contains(value) {
-            unique.push(value.clone());
+fn collapse_identical_variants(
+    variants: Vec<ConflictCandidate>,
+) -> Result<Vec<ConflictCandidate>, ConflictError> {
+    let mut unique: Vec<ConflictCandidate> = Vec::new();
+    for variant in variants {
+        if let Some(existing) = unique
+            .iter_mut()
+            .find(|existing| existing.value == variant.value)
+        {
+            existing.source_version = None;
+            for (path, document) in variant.crdt_fields {
+                match existing.crdt_fields.get(&path) {
+                    Some(current) => {
+                        let merged = CrdtDocument::merge(&[current.clone(), document])?;
+                        existing.crdt_fields.insert(path, merged);
+                    }
+                    None => {
+                        existing.crdt_fields.insert(path, document);
+                    }
+                }
+            }
+        } else {
+            unique.push(variant);
         }
     }
-    unique
+    Ok(unique)
 }
 
 #[derive(Clone)]

@@ -105,7 +105,8 @@ its identity from configured `meta` fields. Repeating the same identity and
 mutation data MUST return the original accepted result without another
 candidate or change event. Reusing the identity with different mutation data
 MUST return `IDEMPOTENCY_CONFLICT`. The guarantee lasts at least
-`idempotency_retention_seconds` reported by the handshake. With idempotency
+`idempotency_retention_seconds` reported by the handshake. Immediate and
+deferred acceptance both store the accepted result atomically. With idempotency
 disabled, clients MUST NOT assume that retrying a mutation is deduplicated.
 
 Cancellation or deadline expiry before acceptance commits MUST roll back and
@@ -114,11 +115,20 @@ successful; a retry with the same idempotency identity obtains the stored
 result.
 
 v1 does not expose a transaction lifecycle in JSON-RPC. Cross-request grouping
-is controller state driven by configuration and requires an explicit marker,
-expected-count, or time-window close condition. Request snapshot mode reads one
+is controller state driven by configuration and version 1 uses an explicit
+marker close condition. Request snapshot mode reads one
 database snapshot per request. Shared snapshot mode fixes one baseline for the
 configured scoped group, exposes that group's staged overlay to its own reads,
 and requires batch publication with the same grouping fields.
+
+Closing compares every mutated entity's published heads with the group's fixed
+baseline. Drift is resolved per entity using the conflict strategy persisted
+with that staged mutation: `reject` returns `VERSION_CONFLICT`, `mvcc` retains
+both branches, and `merge` applies the configured CRDT rules and fallback. The
+resolved set is published with one atomic compare-and-swap; a write racing that
+final compare returns entity-specific conflict details. A discard-on-expiry
+group permanently rejects further use of that identity and publishes none of
+its staged mutations.
 
 ## 5. Versions and conflicts
 
@@ -182,7 +192,22 @@ When configured, the controller reads and writes opaque causal tokens in
 Clients store and forward tokens but never parse them. The CRUD business `data`
 schema does not contain causal fields.
 
-## 7. Change subscriptions
+The SQLite authority represents a causal token by a published change frontier
+and persists configured session frontiers across daemon restarts. Causal/session
+behavior is restricted to immediate publication in version 1; unsupported
+provider sources or frontier operations prevent daemon startup.
+
+## 7. Entity retrieval
+
+`patchouli.entity.retrieve@1` searches active published entities inside the
+scope selected from request `meta`. Its business data is `query`, optional
+`types`, and an optional `limit` from 1 through 100. Results contain scored
+hits with the current entity variants. The RPC remains entity-generic;
+deployments choose which types (for example `knowledge`) a consumer requests.
+The initial SQLite provider performs case-insensitive lexical matching over the
+stored JSON value. Retrieval never exposes staged work-unit candidates.
+
+## 8. Change subscriptions
 
 Change delivery is committed, ordered, resumable, and at least once.
 
@@ -194,11 +219,13 @@ Change delivery is committed, ordered, resumable, and at least once.
   that subscription.
 - Cursors increase in server-defined order, but clients MUST treat them as
   opaque. Notifications on one subscription follow cursor order.
-- Clients MUST apply idempotently, persist the last applied cursor, and dedupe
-  repeated cursors.
+- Consumers MUST apply idempotently, persist the last applied cursor, and dedupe
+  repeated cursors. A Harness binding may remain policy-stateless by forwarding
+  the cursor to its consumer; the backend does not silently acknowledge delivery.
 - Only published mutations produce events. A rolled-back acceptance or failed
-  publication produces none. Changes published by one configured batch may
-  share a causal token in event `meta`, and a configured close-marker change is
+  publication produces none. Changes carry configured mutation metadata in
+  event `meta`; one configured batch may share a causal token, and its
+  configured close-marker change is
   ordered last.
 - If a requested cursor is older than retained history, subscribe returns
   `CURSOR_EXPIRED`. Retention is at least `change_retention_seconds`.
@@ -211,9 +238,12 @@ Change delivery is committed, ordered, resumable, and at least once.
 become one, `deleted` for an ordinary tombstone transition, and `updated` for an
 ordinary active transition.
 
-## 8. Errors
+## 9. Errors
 
 JSON-RPC standard errors remain available. Patchouli domain errors use:
+
+- `-32602 INVALID_REQUEST` for metadata or entity values that fail configured
+  validation. Its `error.data.reason` is `INVALID_REQUEST`.
 
 | Code | Reason | Meaning |
 | ---: | --- | --- |
@@ -227,12 +257,14 @@ JSON-RPC standard errors remain available. Patchouli domain errors use:
 | -32008 | `CANCELLED` | Request was cancelled before completion. |
 | -32009 | `OVERLOADED` | Server cannot currently accept the request. |
 | -32010 | `CURSOR_EXPIRED` | Replay position is outside retained history. |
+| -32011 | `WORK_UNIT_EXPIRED` | Configured cross-request state expired before publication. |
 
-`error.data.reason` MUST match the code. `VERSION_CONFLICT` MUST also return
-`current_versions`. Error message text is diagnostic and MUST NOT drive client
-logic.
+`error.data.reason` MUST match the code. `VERSION_CONFLICT` MUST return either
+`current_versions` for one request entity or `conflicts` containing every
+conflicting entity reference and its current versions for grouped publication.
+Error message text is diagnostic and MUST NOT drive client logic.
 
-## 9. Complete wire examples
+## 10. Complete wire examples
 
 Handshake:
 
@@ -241,7 +273,7 @@ Handshake:
 ```
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"protocol_version":1,"server":{"version":"0.1.0","cluster_id":"cluster-a","node_id":"node-1"},"capabilities":["subscriptions"],"limits":{"max_request_bytes":1048576,"max_result_items":1000,"idempotency_retention_seconds":86400,"change_retention_seconds":604800}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocol_version":1,"server":{"version":"0.1.0","cluster_id":"cluster-a","node_id":"node-1"},"capabilities":["subscriptions"],"limits":{"max_request_bytes":1048576,"max_result_items":100,"idempotency_retention_seconds":86400,"change_retention_seconds":604800}}}
 ```
 
 Create:

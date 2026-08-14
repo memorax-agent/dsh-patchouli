@@ -94,6 +94,34 @@ pub struct ReadEntityResultData {
 pub type ReadEntityResult = RpcResult<ReadEntityResultData>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetrieveEntitiesData {
+    pub query: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub types: Option<Vec<String>>,
+    #[serde(default = "default_retrieve_limit")]
+    pub limit: usize,
+}
+
+fn default_retrieve_limit() -> usize {
+    10
+}
+
+pub type RetrieveEntitiesParams = RpcParams<RetrieveEntitiesData>;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetrievalHit {
+    pub score: f64,
+    pub variants: Vec<EntityVersion>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetrieveEntitiesResultData {
+    pub hits: Vec<RetrievalHit>,
+}
+
+pub type RetrieveEntitiesResult = RpcResult<RetrieveEntitiesResultData>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadState {
     Active,

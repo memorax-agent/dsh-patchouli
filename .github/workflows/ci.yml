@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches: ['**']
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -55,8 +57,72 @@ jobs:
       - name: Test Rust backend
         run: cargo test --workspace
 
-  deliver:
-    name: Build delivery artifact
+  package-daemon:
+    name: Package daemon (${{ matrix.artifact }})
+    needs: verify
+    if: >-
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
+      github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            binary: target/release/patchouli
+            artifact: patchouli-linux-x86_64
+            asset: patchouli-linux-x86_64
+          - os: macos-latest
+            binary: target/release/patchouli
+            artifact: patchouli-macos
+            asset: patchouli-macos
+          - os: windows-latest
+            binary: target/release/patchouli.exe
+            artifact: patchouli-windows-x86_64
+            asset: patchouli-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build daemon
+        run: cargo build --release --bin patchouli
+
+      - name: Name release asset
+        run: node --eval "const fs=require('node:fs'); fs.mkdirSync('dist'); fs.copyFileSync(process.argv[1], process.argv[2])" "${{ matrix.binary }}" "dist/${{ matrix.asset }}"
+
+      - name: Upload daemon
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release-daemon:
+    name: Publish daemon release
+    needs: package-daemon
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download daemon artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: patchouli-*
+          path: artifacts
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" artifacts/**/* --generate-notes
+
+  deploy-daemon:
+    name: Deploy daemon to local server
     needs: verify
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -66,31 +132,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          run_install: false
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
+      - name: Build daemon
+        run: cargo build --release --bin patchouli
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Create artifact directory
-        run: |
-          node --eval "require('node:fs').mkdirSync('artifacts', { recursive: true })"
-
-      - name: Pack plugin
-        run: pnpm pack --pack-destination artifacts
-
-      - name: Upload plugin package
-        uses: actions/upload-artifact@v4
-        with:
-          name: dsh-patchouli-${{ github.sha }}
-          path: artifacts/*.tgz
-          if-no-files-found: error
-          retention-days: 14
+      - name: Deploy and verify daemon
+        env:
+          PATCHOULI_DEPLOY_ROOT: ${{ vars.PATCHOULI_DEPLOY_ROOT }}
+          PATCHOULI_ENDPOINT: ${{ vars.PATCHOULI_ENDPOINT }}
+          PATCHOULI_DATABASE: ${{ vars.PATCHOULI_DATABASE }}
+          PATCHOULI_CONFIG: ${{ vars.PATCHOULI_CONFIG }}
+        run: node scripts/deploy-daemon.mjs "${{ runner.os == 'Windows' && 'target/release/patchouli.exe' || 'target/release/patchouli' }}"

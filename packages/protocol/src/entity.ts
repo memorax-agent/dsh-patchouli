@@ -95,6 +95,29 @@ export type ReadEntityResult<
   TValue extends JsonValue = JsonValue,
 > = RpcResult<ReadEntityResultData<TType, TValue>>
 
+export interface RetrieveEntitiesData<TType extends string = string> {
+  readonly query: string
+  readonly types?: readonly TType[]
+  readonly limit?: number
+}
+
+export type RetrieveEntitiesParams<TType extends string = string> = RpcParams<
+  RetrieveEntitiesData<TType>
+>
+
+export interface RetrievalHit<
+  TType extends string = string,
+  TValue extends JsonValue = JsonValue,
+> {
+  readonly score: number
+  readonly variants: readonly EntityVersion<TType, TValue>[]
+}
+
+export type RetrieveEntitiesResult<
+  TType extends string = string,
+  TValue extends JsonValue = JsonValue,
+> = RpcResult<{ readonly hits: readonly RetrievalHit<TType, TValue>[] }>
+
 export interface EntityCrudContract<
   TType extends string = string,
   TValue extends JsonValue = JsonValue,
@@ -106,6 +129,10 @@ export interface EntityCrudContract<
   readonly 'patchouli.entity.read@1': RpcMethod<
     ReadEntityParams<TType>,
     ReadEntityResult<TType, TValue>
+  >
+  readonly 'patchouli.entity.retrieve@1': RpcMethod<
+    RetrieveEntitiesParams<TType>,
+    RetrieveEntitiesResult<TType, TValue>
   >
   readonly 'patchouli.entity.update@1': RpcMethod<
     UpdateEntityParams<TType, TValue>,

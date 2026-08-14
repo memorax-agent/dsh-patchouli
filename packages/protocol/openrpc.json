@@ -117,7 +117,7 @@
     {
       "name": "patchouli.entity.create@1",
       "summary": "Durably accept one generic entity creation",
-      "description": "The Rust backend controller validates and records the candidate plus idempotency result atomically. Configured policy decides whether publication is immediate or deferred.",
+      "description": "The Rust backend controller validates the candidate and atomically records its immutable version, visible heads, CRDT frontier, and change-log entry.",
       "paramStructure": "by-name",
       "params": [
         { "$ref": "#/components/contentDescriptors/Meta" },
@@ -131,7 +131,9 @@
       "errors": [
         { "$ref": "#/components/errors/Unauthenticated" },
         { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/InvalidRequest" },
         { "$ref": "#/components/errors/VersionConflict" },
+        { "$ref": "#/components/errors/WorkUnitExpired" },
         { "$ref": "#/components/errors/IdempotencyConflict" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
         { "$ref": "#/components/errors/Cancelled" },
@@ -155,7 +157,32 @@
       "errors": [
         { "$ref": "#/components/errors/Unauthenticated" },
         { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/InvalidRequest" },
         { "$ref": "#/components/errors/NotFound" },
+        { "$ref": "#/components/errors/WorkUnitExpired" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Cancelled" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.entity.retrieve@1",
+      "summary": "Retrieve relevant entities in the configured scope",
+      "description": "The provider searches active entity values and returns matching current variants ordered by relevance.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/RetrieveEntitiesData" }
+      ],
+      "result": {
+        "name": "entities",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/RetrieveEntitiesResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/InvalidRequest" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
         { "$ref": "#/components/errors/Cancelled" },
         { "$ref": "#/components/errors/Overloaded" }
@@ -164,7 +191,7 @@
     {
       "name": "patchouli.entity.update@1",
       "summary": "Durably accept one generic entity replacement",
-      "description": "Configured conflict metadata must satisfy the controller's selected policy. The candidate and idempotency result are recorded atomically; configured policy decides publication.",
+      "description": "Configured conflict metadata must satisfy the selected policy. The controller resolves CRDT/MVCC variants before atomically comparing and replacing the visible head set.",
       "paramStructure": "by-name",
       "params": [
         { "$ref": "#/components/contentDescriptors/Meta" },
@@ -178,8 +205,10 @@
       "errors": [
         { "$ref": "#/components/errors/Unauthenticated" },
         { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/InvalidRequest" },
         { "$ref": "#/components/errors/NotFound" },
         { "$ref": "#/components/errors/VersionConflict" },
+        { "$ref": "#/components/errors/WorkUnitExpired" },
         { "$ref": "#/components/errors/IdempotencyConflict" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
         { "$ref": "#/components/errors/Cancelled" },
@@ -189,7 +218,7 @@
     {
       "name": "patchouli.entity.delete@1",
       "summary": "Durably accept one generic entity tombstone",
-      "description": "Delete is logical. The tombstone candidate and idempotency result are recorded atomically; configured policy decides publication.",
+      "description": "Delete is logical. The tombstone, visible head set, and change-log entry are recorded atomically.",
       "paramStructure": "by-name",
       "params": [
         { "$ref": "#/components/contentDescriptors/Meta" },
@@ -203,8 +232,10 @@
       "errors": [
         { "$ref": "#/components/errors/Unauthenticated" },
         { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/InvalidRequest" },
         { "$ref": "#/components/errors/NotFound" },
         { "$ref": "#/components/errors/VersionConflict" },
+        { "$ref": "#/components/errors/WorkUnitExpired" },
         { "$ref": "#/components/errors/IdempotencyConflict" },
         { "$ref": "#/components/errors/DeadlineExceeded" },
         { "$ref": "#/components/errors/Cancelled" },
@@ -279,6 +310,11 @@
         "name": "data",
         "required": true,
         "schema": { "$ref": "#/components/schemas/ReadEntityData" }
+      },
+      "RetrieveEntitiesData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/RetrieveEntitiesData" }
       },
       "UpdateEntityData": {
         "name": "data",
@@ -457,6 +493,21 @@
           "ref": { "$ref": "#/components/schemas/EntityRef" }
         }
       },
+      "RetrieveEntitiesData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["query"],
+        "properties": {
+          "query": { "$ref": "#/components/schemas/NonEmptyString" },
+          "types": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/NonEmptyString" },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 }
+        }
+      },
       "UpdateEntityData": {
         "type": "object",
         "additionalProperties": false,
@@ -536,6 +587,37 @@
                 "type": "array",
                 "items": { "$ref": "#/components/schemas/EntityVersion" },
                 "minItems": 1
+              }
+            }
+          }
+        }
+      },
+      "RetrieveEntitiesResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["hits"],
+            "properties": {
+              "hits": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["score", "variants"],
+                  "properties": {
+                    "score": { "type": "number" },
+                    "variants": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/EntityVersion" },
+                      "minItems": 1
+                    }
+                  }
+                }
               }
             }
           }
@@ -638,6 +720,11 @@
       }
     },
     "errors": {
+      "InvalidRequest": {
+        "code": -32602,
+        "message": "The request metadata or entity value is invalid.",
+        "data": { "reason": "INVALID_REQUEST" }
+      },
       "Unauthenticated": {
         "code": -32001,
         "message": "Authentication is required.",
@@ -656,7 +743,15 @@
       "VersionConflict": {
         "code": -32004,
         "message": "The supplied base versions do not match the current heads.",
-        "data": { "reason": "VERSION_CONFLICT", "current_versions": ["opaque-version"] }
+        "data": {
+          "reason": "VERSION_CONFLICT",
+          "conflicts": [
+            {
+              "ref": { "type": "knowledge", "id": "knowledge-1" },
+              "current_versions": ["opaque-version"]
+            }
+          ]
+        }
       },
       "IdempotencyConflict": {
         "code": -32005,
@@ -687,6 +782,11 @@
         "code": -32010,
         "message": "The cursor is outside the retained change history.",
         "data": { "reason": "CURSOR_EXPIRED" }
+      },
+      "WorkUnitExpired": {
+        "code": -32011,
+        "message": "The configured cross-request work unit expired before publication.",
+        "data": { "reason": "WORK_UNIT_EXPIRED" }
       }
     }
   }

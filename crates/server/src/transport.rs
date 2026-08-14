@@ -137,6 +137,7 @@ mod platform {
             validate_endpoint(endpoint)?;
             let next = NamedPipeOptions::new()
                 .first_pipe_instance(true)
+                .reject_remote_clients(true)
                 .create(endpoint)?;
             Ok(Self {
                 endpoint: endpoint.to_owned(),
@@ -147,7 +148,11 @@ mod platform {
         pub async fn accept(&mut self) -> io::Result<Stream> {
             let connected = self.next.take().expect("listener must own a pipe instance");
             connected.connect().await?;
-            self.next = Some(NamedPipeOptions::new().create(&self.endpoint)?);
+            self.next = Some(
+                NamedPipeOptions::new()
+                    .reject_remote_clients(true)
+                    .create(&self.endpoint)?,
+            );
             Ok(Box::new(connected))
         }
     }

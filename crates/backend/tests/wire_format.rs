@@ -36,6 +36,7 @@ fn rust_method_and_error_constants_match_openrpc() {
         methods::CONTROL_SHUTDOWN,
         methods::ENTITY_CREATE,
         methods::ENTITY_READ,
+        methods::ENTITY_RETRIEVE,
         methods::ENTITY_UPDATE,
         methods::ENTITY_DELETE,
         methods::CHANGES_SUBSCRIBE,
@@ -46,6 +47,10 @@ fn rust_method_and_error_constants_match_openrpc() {
     assert_eq!(rust_methods, documented_methods);
 
     let errors = document["components"]["errors"].as_object().unwrap();
+    assert_eq!(
+        errors["InvalidRequest"]["code"],
+        error_codes::INVALID_REQUEST
+    );
     assert_eq!(
         errors["Unauthenticated"]["code"],
         error_codes::UNAUTHENTICATED
@@ -71,6 +76,10 @@ fn rust_method_and_error_constants_match_openrpc() {
     assert_eq!(errors["Cancelled"]["code"], error_codes::CANCELLED);
     assert_eq!(errors["Overloaded"]["code"], error_codes::OVERLOADED);
     assert_eq!(errors["CursorExpired"]["code"], error_codes::CURSOR_EXPIRED);
+    assert_eq!(
+        errors["WorkUnitExpired"]["code"],
+        error_codes::WORK_UNIT_EXPIRED
+    );
 }
 
 #[test]

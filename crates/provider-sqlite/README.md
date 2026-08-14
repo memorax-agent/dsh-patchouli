@@ -10,10 +10,19 @@ listening. Manual checkpoints use complete WAL checkpointing. Graceful shutdown
 marks the generation clean, truncates the WAL, closes the connection, and
 releases the ownership lock.
 
-Storage schema version 3 contains generic immutable entity versions, published
-heads, and Automerge change/frontier tables. Read-only `patchouli_knowledge` and
-`patchouli_knowledge_relation` views project typed fact fields from the one
-authoritative JSON value. The views do not duplicate semantic state.
+Storage schema version 9 contains generic immutable entity versions, published
+heads, a retained atomic change log, durable causal/session frontiers,
+idempotency records, Automerge change/frontier tables, and durable work
+units with one global baseline cursor, a fixed policy descriptor, per-entity
+conflict policies, captured base versions, and private staged heads. Marker
+close either publishes unchanged baselines immediately or returns the complete
+drift set for engine resolution; the resulting compare-and-swap publishes the
+whole unit in one SQLite transaction. Expired open units are swept on startup,
+checkpoint, shutdown, and every provider operation. Read-only
+`patchouli_knowledge` and `patchouli_knowledge_relation` views project typed fact
+fields from the one authoritative JSON value. The views do not duplicate
+semantic state. SQLite advertises these capabilities before engine startup so
+an incompatible backend policy cannot begin serving requests.
 
 The crate uses a bundled SQLite build so the same adapter can be compiled on
 macOS, Linux, and Windows without a system SQLite installation.

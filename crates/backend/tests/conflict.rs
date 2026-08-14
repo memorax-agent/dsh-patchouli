@@ -13,18 +13,15 @@ fn automerge_combines_concurrent_text_edits_and_keeps_mvcc_variants() {
     let resolution = resolve_conflict(&merge_plan(), &base, &[first, second]).unwrap();
 
     assert_eq!(resolution.variants.len(), 2);
-    assert_eq!(resolution.merged_fields.len(), 1);
-    assert!(
-        resolution
-            .variants
-            .iter()
-            .all(|variant| { variant.pointer("/content/text") == Some(&json!("another day")) })
-    );
+    assert!(resolution.variants.iter().all(|variant| {
+        variant.value.pointer("/content/text") == Some(&json!("another day"))
+            && variant.crdt_fields.contains_key("/content")
+    }));
     assert_eq!(
         resolution
             .variants
             .iter()
-            .map(|variant| variant.pointer("/metadata/source").unwrap().clone())
+            .map(|variant| variant.value.pointer("/metadata/source").unwrap().clone())
             .collect::<Vec<_>>(),
         [json!("first"), json!("second")]
     );
@@ -58,7 +55,7 @@ fn automerge_combines_structured_fields_and_collapses_identical_mvcc_data() {
 
     assert_eq!(resolution.variants.len(), 1);
     assert_eq!(
-        resolution.variants[0].pointer("/content/value"),
+        resolution.variants[0].value.pointer("/content/value"),
         Some(&json!({ "left": 1, "right": 2 }))
     );
 }
@@ -75,7 +72,6 @@ fn incompatible_content_kinds_remain_separate_mvcc_versions() {
     let resolution = resolve_conflict(&merge_plan(), &base, &[text, structured]).unwrap();
 
     assert_eq!(resolution.variants.len(), 2);
-    assert!(resolution.merged_fields.is_empty());
 }
 
 #[test]
@@ -88,7 +84,10 @@ fn request_selected_mvcc_and_reject_modes_are_applied_directly() {
     assert_eq!(
         resolve_conflict(&plan, &base, &candidates)
             .unwrap()
-            .variants,
+            .variants
+            .into_iter()
+            .map(|candidate| candidate.value)
+            .collect::<Vec<_>>(),
         candidates
     );
 

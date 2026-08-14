@@ -41,11 +41,13 @@ test('OpenRPC, TypeScript methods, and error codes stay in sync', () => {
     DeadlineExceeded: errorCodes.deadlineExceeded,
     Forbidden: errorCodes.forbidden,
     IdempotencyConflict: errorCodes.idempotencyConflict,
+    InvalidRequest: errorCodes.invalidRequest,
     NotFound: errorCodes.notFound,
     Overloaded: errorCodes.overloaded,
     Unauthenticated: errorCodes.unauthenticated,
     UnsupportedCapability: errorCodes.unsupportedCapability,
     VersionConflict: errorCodes.versionConflict,
+    WorkUnitExpired: errorCodes.workUnitExpired,
   })
 })
 

@@ -7,7 +7,11 @@ use async_trait::async_trait;
 use patchouli_backend::{
     BackendConfig, BackendEngine, BackendErrorReason, BackendService, CreateEntityData, RpcParams,
 };
-use patchouli_provider::{Provider, ProviderError, ProviderRecovery};
+use patchouli_provider::{
+    EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot, Provider, ProviderCapabilities,
+    ProviderError, ProviderRecovery, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome,
+    WorkUnitPublish, WorkUnitReadOutcome,
+};
 
 const EXAMPLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -28,6 +32,18 @@ impl Provider for HealthyProvider {
         "test"
     }
 
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            authority: true,
+            replica: true,
+            change_stream: true,
+            retrieval: true,
+            idempotency: true,
+            work_units: true,
+            causal_sessions: true,
+        }
+    }
+
     async fn initialize(&self) -> Result<ProviderRecovery, ProviderError> {
         Ok(ProviderRecovery {
             generation: 1,
@@ -37,6 +53,39 @@ impl Provider for HealthyProvider {
 
     async fn health_check(&self) -> Result<(), ProviderError> {
         Ok(())
+    }
+
+    async fn read_entity(&self, _key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn commit_entity(
+        &self,
+        _commit: EntityCommit,
+    ) -> Result<EntityCommitOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn read_entity_in_work_unit(
+        &self,
+        _work_unit: &WorkUnit,
+        _key: &EntityKey,
+    ) -> Result<WorkUnitReadOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn commit_entity_in_work_unit(
+        &self,
+        _commit: WorkUnitCommit,
+    ) -> Result<WorkUnitCommitOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn publish_work_unit(
+        &self,
+        _publish: WorkUnitPublish,
+    ) -> Result<WorkUnitCommitOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
     }
 
     async fn checkpoint(&self) -> Result<(), ProviderError> {
@@ -54,12 +103,49 @@ impl Provider for UnhealthyProvider {
         "test"
     }
 
+    fn capabilities(&self) -> ProviderCapabilities {
+        HealthyProvider.capabilities()
+    }
+
     async fn initialize(&self) -> Result<ProviderRecovery, ProviderError> {
         Err(ProviderError::new("test provider is unavailable"))
     }
 
     async fn health_check(&self) -> Result<(), ProviderError> {
         Ok(())
+    }
+
+    async fn read_entity(&self, _key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn commit_entity(
+        &self,
+        _commit: EntityCommit,
+    ) -> Result<EntityCommitOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn read_entity_in_work_unit(
+        &self,
+        _work_unit: &WorkUnit,
+        _key: &EntityKey,
+    ) -> Result<WorkUnitReadOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn commit_entity_in_work_unit(
+        &self,
+        _commit: WorkUnitCommit,
+    ) -> Result<WorkUnitCommitOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn publish_work_unit(
+        &self,
+        _publish: WorkUnitPublish,
+    ) -> Result<WorkUnitCommitOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
     }
 
     async fn checkpoint(&self) -> Result<(), ProviderError> {
@@ -77,6 +163,10 @@ impl Provider for FailedHealthProvider {
         "failed-health"
     }
 
+    fn capabilities(&self) -> ProviderCapabilities {
+        HealthyProvider.capabilities()
+    }
+
     async fn initialize(&self) -> Result<ProviderRecovery, ProviderError> {
         Ok(ProviderRecovery {
             generation: 1,
@@ -86,6 +176,39 @@ impl Provider for FailedHealthProvider {
 
     async fn health_check(&self) -> Result<(), ProviderError> {
         Err(ProviderError::new("unhealthy after initialization"))
+    }
+
+    async fn read_entity(&self, _key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn commit_entity(
+        &self,
+        _commit: EntityCommit,
+    ) -> Result<EntityCommitOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn read_entity_in_work_unit(
+        &self,
+        _work_unit: &WorkUnit,
+        _key: &EntityKey,
+    ) -> Result<WorkUnitReadOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn commit_entity_in_work_unit(
+        &self,
+        _commit: WorkUnitCommit,
+    ) -> Result<WorkUnitCommitOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
+    }
+
+    async fn publish_work_unit(
+        &self,
+        _publish: WorkUnitPublish,
+    ) -> Result<WorkUnitCommitOutcome, ProviderError> {
+        Err(ProviderError::new("test provider has no storage"))
     }
 
     async fn checkpoint(&self) -> Result<(), ProviderError> {
@@ -99,7 +222,7 @@ impl Provider for FailedHealthProvider {
 }
 
 #[tokio::test]
-async fn engine_starts_with_validated_config_and_routes_to_placeholders() {
+async fn engine_starts_with_validated_config_and_routes_to_provider() {
     let engine = BackendEngine::start(
         BackendConfig::from_json(EXAMPLE).expect("valid config"),
         Arc::new(HealthyProvider),
@@ -127,8 +250,8 @@ async fn engine_starts_with_validated_config_and_routes_to_placeholders() {
             },
         })
         .await
-        .expect_err("business logic is still a placeholder");
-    assert_eq!(error.reason, BackendErrorReason::UnsupportedCapability);
+        .expect_err("test provider has no storage");
+    assert_eq!(error.reason, BackendErrorReason::InvalidRequest);
 }
 
 #[tokio::test]

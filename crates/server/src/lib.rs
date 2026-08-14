@@ -1,6 +1,7 @@
 mod transport;
 
 use std::{
+    collections::{BTreeMap, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -8,14 +9,17 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use futures_util::StreamExt;
 use patchouli_backend::{
-    BackendEngine, BackendError, BackendErrorReason, BackendService, ClientIdentity,
-    ControlCheckpointResult, ControlCheckpointResultData, ControlShutdownResult,
-    ControlShutdownResultData, ControlStatusResult, ControlStatusResultData, CreateEntityParams,
-    DeleteEntityParams, EmptyData, EngineError, HandshakeParams, HandshakeResult, Meta,
-    PROTOCOL_VERSION, ProtocolErrorData, ProtocolErrorReason, ReadEntityParams, RpcParams,
-    RpcResult, ServerIdentity, ServerLimits, SubscribeChangesParams, UnsubscribeChangesParams,
-    UpdateEntityParams, error_codes, methods,
+    BackendEngine, BackendError, BackendErrorReason, BackendService, ChangesEventData,
+    ChangesEventParams, ClientIdentity, ControlCheckpointResult, ControlCheckpointResultData,
+    ControlShutdownResult, ControlShutdownResultData, ControlStatusResult, ControlStatusResultData,
+    CreateEntityParams, DeleteEntityParams, EmptyData, EngineError, HandshakeParams,
+    HandshakeResult, Meta, PROTOCOL_VERSION, ProtocolEntityConflict, ProtocolErrorData,
+    ProtocolErrorReason, ReadEntityParams, RetrieveEntitiesParams, RpcParams, RpcResult,
+    ServerIdentity, ServerLimits, SubscribeChangesParams, SubscribeChangesResult,
+    SubscribeChangesResultData, UnsubscribeChangesParams, UnsubscribeChangesResult,
+    UnsubscribeChangesResultData, UpdateEntityParams, error_codes, methods,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -24,11 +28,11 @@ use tokio::{
     io::{
         AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, Lines, ReadHalf, WriteHalf, split,
     },
-    sync::watch,
-    task::{JoinError, JoinSet},
+    sync::{Mutex, watch},
+    task::{JoinError, JoinHandle, JoinSet},
 };
 
-const SERVER_CAPABILITIES: &[&str] = &["control.status", "control.checkpoint", "control.shutdown"];
+const SERVER_CAPABILITIES: &[&str] = &["subscriptions"];
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -153,10 +157,13 @@ impl ConnectionState {
     async fn serve(self, stream: transport::Stream) -> Result<(), IpcError> {
         self.active_connections.fetch_add(1, Ordering::Relaxed);
         let _connection_guard = ConnectionGuard(Arc::clone(&self.active_connections));
-        let (read_half, mut write_half) = split(stream);
+        let (read_half, write_half) = split(stream);
+        let writer = Arc::new(Mutex::new(write_half));
         let mut lines = BufReader::new(read_half).lines();
         let mut handshaken = false;
         let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let mut subscriptions = BTreeMap::<String, JoinHandle<()>>::new();
+        let mut next_subscription_id = 1_u64;
 
         loop {
             if *shutdown_rx.borrow() {
@@ -174,14 +181,142 @@ impl ConnectionState {
             let Some(line) = line else {
                 break;
             };
+            if handshaken
+                && self
+                    .handle_subscription(
+                        &line,
+                        &writer,
+                        &mut subscriptions,
+                        &mut next_subscription_id,
+                    )
+                    .await?
+            {
+                continue;
+            }
             let (response, shutdown) = self.dispatch(&line, &mut handshaken).await;
-            write_json_line(&mut write_half, &response).await?;
+            write_json_line(&mut *writer.lock().await, &response).await?;
             if shutdown {
                 let _ = self.shutdown_tx.send(true);
                 break;
             }
         }
+        for (_, task) in subscriptions {
+            task.abort();
+        }
         Ok(())
+    }
+
+    async fn handle_subscription(
+        &self,
+        line: &str,
+        writer: &Arc<Mutex<WriteHalf<transport::Stream>>>,
+        subscriptions: &mut BTreeMap<String, JoinHandle<()>>,
+        next_subscription_id: &mut u64,
+    ) -> Result<bool, IpcError> {
+        let Ok(request) = serde_json::from_str::<Value>(line) else {
+            return Ok(false);
+        };
+        let Some(object) = request.as_object() else {
+            return Ok(false);
+        };
+        let Some(method) = object.get("method").and_then(Value::as_str) else {
+            return Ok(false);
+        };
+        if method != methods::CHANGES_SUBSCRIBE && method != methods::CHANGES_UNSUBSCRIBE {
+            return Ok(false);
+        }
+        let id = object.get("id").cloned().unwrap_or(Value::Null);
+        if object.get("jsonrpc") != Some(&Value::String("2.0".to_owned()))
+            || !matches!(id, Value::Number(_) | Value::String(_))
+        {
+            return Ok(false);
+        }
+        let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
+        if method == methods::CHANGES_UNSUBSCRIBE {
+            let params = match serde_json::from_value::<UnsubscribeChangesParams>(params) {
+                Ok(params) => params,
+                Err(error) => {
+                    write_json_line(
+                        &mut *writer.lock().await,
+                        &rpc_error(id, -32602, &error.to_string()),
+                    )
+                    .await?;
+                    return Ok(true);
+                }
+            };
+            let removed = subscriptions
+                .remove(&params.data.subscription_id)
+                .is_some_and(|task| {
+                    task.abort();
+                    true
+                });
+            let result: UnsubscribeChangesResult = RpcResult {
+                meta: Meta::new(),
+                data: UnsubscribeChangesResultData { removed },
+            };
+            write_json_line(&mut *writer.lock().await, &rpc_success(id, result)).await?;
+            return Ok(true);
+        }
+
+        let params = match serde_json::from_value::<SubscribeChangesParams>(params) {
+            Ok(params) => params,
+            Err(error) => {
+                write_json_line(
+                    &mut *writer.lock().await,
+                    &rpc_error(id, -32602, &error.to_string()),
+                )
+                .await?;
+                return Ok(true);
+            }
+        };
+        let subscription = match self.engine.subscribe(params).await {
+            Ok(subscription) => subscription,
+            Err(error) => {
+                write_json_line(&mut *writer.lock().await, &rpc_backend_error(id, error)).await?;
+                return Ok(true);
+            }
+        };
+        let subscription_id = format!("subscription-{}", *next_subscription_id);
+        *next_subscription_id += 1;
+        let result: SubscribeChangesResult = RpcResult {
+            meta: Meta::new(),
+            data: SubscribeChangesResultData {
+                subscription_id: subscription_id.clone(),
+                cursor: subscription.cursor,
+            },
+        };
+        write_json_line(&mut *writer.lock().await, &rpc_success(id, result)).await?;
+
+        let writer = Arc::clone(writer);
+        let event_subscription_id = subscription_id.clone();
+        let mut stream = subscription.stream;
+        subscriptions.insert(
+            subscription_id,
+            tokio::spawn(async move {
+                while let Some(event) = stream.next().await {
+                    let Ok(event) = event else { break };
+                    let params: ChangesEventParams = RpcParams {
+                        meta: event.meta,
+                        data: ChangesEventData {
+                            subscription_id: event_subscription_id.clone(),
+                            change: event.change,
+                        },
+                    };
+                    let notification = json!({
+                        "jsonrpc": "2.0",
+                        "method": methods::CHANGES_EVENT,
+                        "params": params,
+                    });
+                    if write_json_line(&mut *writer.lock().await, &notification)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }),
+        );
+        Ok(true)
     }
 
     async fn dispatch(&self, line: &str, handshaken: &mut bool) -> (Value, bool) {
@@ -221,20 +356,11 @@ impl ConnectionState {
                     false,
                 );
             }
-            if let Some(capability) = params
-                .capabilities
+            let capabilities = SERVER_CAPABILITIES
                 .iter()
-                .find(|capability| !SERVER_CAPABILITIES.contains(&capability.as_str()))
-            {
-                return (
-                    rpc_error(
-                        id,
-                        -32006,
-                        &format!("unsupported capability {capability:?}"),
-                    ),
-                    false,
-                );
-            }
+                .filter(|capability| params.capabilities.iter().any(|item| item == **capability))
+                .map(|capability| (*capability).to_owned())
+                .collect();
             *handshaken = true;
             let result = HandshakeResult {
                 protocol_version: PROTOCOL_VERSION,
@@ -243,15 +369,12 @@ impl ConnectionState {
                     cluster_id: self.options.cluster_id.clone(),
                     node_id: self.options.node_id.clone(),
                 },
-                capabilities: SERVER_CAPABILITIES
-                    .iter()
-                    .map(|value| (*value).to_owned())
-                    .collect(),
+                capabilities,
                 limits: ServerLimits {
                     max_request_bytes: MAX_REQUEST_BYTES as u64,
-                    max_result_items: 1,
-                    idempotency_retention_seconds: 1,
-                    change_retention_seconds: 1,
+                    max_result_items: 100,
+                    idempotency_retention_seconds: self.engine.idempotency_retention_seconds(),
+                    change_retention_seconds: self.engine.change_retention_seconds(),
                 },
             };
             return (rpc_success(id, result), false);
@@ -328,6 +451,16 @@ impl ConnectionState {
                     Err(error) => (rpc_backend_error(id, error), false),
                 }
             }
+            methods::ENTITY_RETRIEVE => {
+                let params = match serde_json::from_value::<RetrieveEntitiesParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                match self.engine.retrieve(params).await {
+                    Ok(result) => (rpc_success(id, result), false),
+                    Err(error) => (rpc_backend_error(id, error), false),
+                }
+            }
             methods::ENTITY_UPDATE => {
                 let params = match serde_json::from_value::<UpdateEntityParams>(params) {
                     Ok(params) => params,
@@ -348,34 +481,6 @@ impl ConnectionState {
                     Err(error) => (rpc_backend_error(id, error), false),
                 }
             }
-            methods::CHANGES_SUBSCRIBE => {
-                let params = match serde_json::from_value::<SubscribeChangesParams>(params) {
-                    Ok(params) => params,
-                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
-                };
-                match self.engine.subscribe(params).await {
-                    Ok(_) => (
-                        rpc_error(id, -32603, "subscription delivery is not wired"),
-                        false,
-                    ),
-                    Err(error) => (rpc_backend_error(id, error), false),
-                }
-            }
-            methods::CHANGES_UNSUBSCRIBE => {
-                if let Err(error) = serde_json::from_value::<UnsubscribeChangesParams>(params) {
-                    return (rpc_error(id, -32602, &error.to_string()), false);
-                }
-                (
-                    rpc_protocol_error(
-                        id,
-                        error_codes::UNSUPPORTED_CAPABILITY,
-                        "change subscription is not implemented by the backend engine",
-                        ProtocolErrorReason::UnsupportedCapability,
-                        None,
-                    ),
-                    false,
-                )
-            }
             _ => (rpc_error(id, -32601, "method not found"), false),
         }
     }
@@ -388,6 +493,7 @@ pub struct LocalClient {
     lines: ClientReader,
     writer: ClientWriter,
     next_id: i64,
+    notifications: VecDeque<ChangesEventParams>,
 }
 
 impl LocalClient {
@@ -396,15 +502,27 @@ impl LocalClient {
         client_name: &str,
         client_version: &str,
     ) -> Result<Self, IpcError> {
+        Self::connect_with_capabilities(endpoint, client_name, client_version, Vec::new())
+            .await
+            .map(|(client, _)| client)
+    }
+
+    pub async fn connect_with_capabilities(
+        endpoint: &str,
+        client_name: &str,
+        client_version: &str,
+        capabilities: Vec<String>,
+    ) -> Result<(Self, HandshakeResult), IpcError> {
         let stream = transport::connect(endpoint).await?;
         let (read_half, writer) = split(stream);
         let mut client = Self {
             lines: BufReader::new(read_half).lines(),
             writer,
             next_id: 1,
+            notifications: VecDeque::new(),
         };
         let instance_id = format!("{}-{}", std::process::id(), unix_time_ms());
-        client
+        let handshake = client
             .call::<_, HandshakeResult>(
                 methods::HANDSHAKE,
                 &HandshakeParams {
@@ -414,11 +532,11 @@ impl LocalClient {
                         instance_id,
                     },
                     protocol_versions: vec![PROTOCOL_VERSION],
-                    capabilities: Vec::new(),
+                    capabilities,
                 },
             )
             .await?;
-        Ok(client)
+        Ok((client, handshake))
     }
 
     pub async fn status(&mut self) -> Result<ControlStatusResult, IpcError> {
@@ -468,6 +586,13 @@ impl LocalClient {
         self.call(methods::ENTITY_READ, params).await
     }
 
+    pub async fn retrieve(
+        &mut self,
+        params: &RetrieveEntitiesParams,
+    ) -> Result<patchouli_backend::RetrieveEntitiesResult, IpcError> {
+        self.call(methods::ENTITY_RETRIEVE, params).await
+    }
+
     pub async fn update(
         &mut self,
         params: &UpdateEntityParams,
@@ -480,6 +605,32 @@ impl LocalClient {
         params: &DeleteEntityParams,
     ) -> Result<patchouli_backend::MutationResult, IpcError> {
         self.call(methods::ENTITY_DELETE, params).await
+    }
+
+    pub async fn subscribe(
+        &mut self,
+        params: &SubscribeChangesParams,
+    ) -> Result<SubscribeChangesResult, IpcError> {
+        self.call(methods::CHANGES_SUBSCRIBE, params).await
+    }
+
+    pub async fn unsubscribe(
+        &mut self,
+        params: &UnsubscribeChangesParams,
+    ) -> Result<UnsubscribeChangesResult, IpcError> {
+        self.call(methods::CHANGES_UNSUBSCRIBE, params).await
+    }
+
+    pub async fn next_change(&mut self) -> Result<ChangesEventParams, IpcError> {
+        if let Some(event) = self.notifications.pop_front() {
+            return Ok(event);
+        }
+        let response = self.read_message().await?;
+        if response.get("method") == Some(&json!(methods::CHANGES_EVENT)) {
+            return serde_json::from_value(response.get("params").cloned().unwrap_or(Value::Null))
+                .map_err(IpcError::from);
+        }
+        Err(IpcError::ResponseIdMismatch)
     }
 
     async fn call<TParams: Serialize, TResult: DeserializeOwned>(
@@ -497,15 +648,19 @@ impl LocalClient {
         });
         write_json_line(&mut self.writer, &request).await?;
 
-        let line = self
-            .lines
-            .next_line()
-            .await?
-            .ok_or(IpcError::ConnectionClosed)?;
-        let response: Value = serde_json::from_str(&line)?;
-        if response.get("id") != Some(&json!(id)) {
-            return Err(IpcError::ResponseIdMismatch);
-        }
+        let response = loop {
+            let response = self.read_message().await?;
+            if response.get("method") == Some(&json!(methods::CHANGES_EVENT)) {
+                let event =
+                    serde_json::from_value(response.get("params").cloned().unwrap_or(Value::Null))?;
+                self.notifications.push_back(event);
+                continue;
+            }
+            if response.get("id") != Some(&json!(id)) {
+                return Err(IpcError::ResponseIdMismatch);
+            }
+            break response;
+        };
         if let Some(error) = response.get("error") {
             return Err(IpcError::Rpc {
                 code: error.get("code").and_then(Value::as_i64).unwrap_or(-32603),
@@ -518,6 +673,15 @@ impl LocalClient {
         }
         serde_json::from_value(response.get("result").cloned().unwrap_or(Value::Null))
             .map_err(IpcError::from)
+    }
+
+    async fn read_message(&mut self) -> Result<Value, IpcError> {
+        let line = self
+            .lines
+            .next_line()
+            .await?
+            .ok_or(IpcError::ConnectionClosed)?;
+        serde_json::from_str(&line).map_err(IpcError::from)
     }
 }
 
@@ -537,6 +701,16 @@ fn rpc_success(id: Value, result: impl Serialize) -> Value {
 }
 
 fn rpc_error(id: Value, code: i64, message: &str) -> Value {
+    let reason = match code as i32 {
+        error_codes::INVALID_REQUEST => Some(ProtocolErrorReason::InvalidRequest),
+        error_codes::UNAUTHENTICATED => Some(ProtocolErrorReason::Unauthenticated),
+        error_codes::FORBIDDEN => Some(ProtocolErrorReason::Forbidden),
+        error_codes::UNSUPPORTED_CAPABILITY => Some(ProtocolErrorReason::UnsupportedCapability),
+        _ => None,
+    };
+    if let Some(reason) = reason {
+        return rpc_protocol_error(id, code as i32, message, reason, None, None);
+    }
     json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -559,6 +733,10 @@ fn rpc_backend_error(id: Value, error: BackendError) -> Value {
             error_codes::IDEMPOTENCY_CONFLICT,
             ProtocolErrorReason::IdempotencyConflict,
         ),
+        BackendErrorReason::InvalidRequest => (
+            error_codes::INVALID_REQUEST,
+            ProtocolErrorReason::InvalidRequest,
+        ),
         BackendErrorReason::NotFound => (error_codes::NOT_FOUND, ProtocolErrorReason::NotFound),
         BackendErrorReason::Overloaded => {
             (error_codes::OVERLOADED, ProtocolErrorReason::Overloaded)
@@ -571,9 +749,30 @@ fn rpc_backend_error(id: Value, error: BackendError) -> Value {
             error_codes::VERSION_CONFLICT,
             ProtocolErrorReason::VersionConflict,
         ),
+        BackendErrorReason::WorkUnitExpired => (
+            error_codes::WORK_UNIT_EXPIRED,
+            ProtocolErrorReason::WorkUnitExpired,
+        ),
     };
     let current_versions = (!error.current_versions.is_empty()).then_some(error.current_versions);
-    rpc_protocol_error(id, code, &error.message, reason, current_versions)
+    let conflicts = (!error.conflicts.is_empty()).then(|| {
+        error
+            .conflicts
+            .into_iter()
+            .map(|conflict| ProtocolEntityConflict {
+                entity_ref: conflict.entity_ref,
+                current_versions: conflict.current_versions,
+            })
+            .collect()
+    });
+    rpc_protocol_error(
+        id,
+        code,
+        &error.message,
+        reason,
+        current_versions,
+        conflicts,
+    )
 }
 
 fn rpc_protocol_error(
@@ -582,6 +781,7 @@ fn rpc_protocol_error(
     message: &str,
     reason: ProtocolErrorReason,
     current_versions: Option<Vec<String>>,
+    conflicts: Option<Vec<ProtocolEntityConflict>>,
 ) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -589,7 +789,7 @@ fn rpc_protocol_error(
         "error": {
             "code": code,
             "message": message,
-            "data": ProtocolErrorData { reason, current_versions },
+            "data": ProtocolErrorData { reason, current_versions, conflicts },
         },
     })
 }

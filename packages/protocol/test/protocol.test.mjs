@@ -18,6 +18,7 @@ test('publishes the versioned generic CRUD and reactive method names', () => {
     controlShutdown: 'patchouli.control.shutdown@1',
     entityCreate: 'patchouli.entity.create@1',
     entityRead: 'patchouli.entity.read@1',
+    entityRetrieve: 'patchouli.entity.retrieve@1',
     entityUpdate: 'patchouli.entity.update@1',
     entityDelete: 'patchouli.entity.delete@1',
     changesSubscribe: 'patchouli.changes.subscribe@1',
@@ -39,7 +40,9 @@ test('publishes the typed fact identities without adding RPC methods', () => {
 })
 
 test('keeps domain errors in the JSON-RPC server error range', () => {
-  for (const code of Object.values(errorCodes)) {
+  assert.equal(errorCodes.invalidRequest, -32602)
+  for (const [name, code] of Object.entries(errorCodes)) {
+    if (name === 'invalidRequest') continue
     assert.ok(code >= -32099 && code <= -32000)
   }
 })

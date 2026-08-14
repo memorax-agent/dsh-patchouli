@@ -1,4 +1,9 @@
-use patchouli_provider::Provider;
+use patchouli_provider::{
+    ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit, EntityCommitOutcome,
+    EntityKey, Provider, StoredChangeKind, StoredCrdtChange, StoredCrdtField, StoredEntityVersion,
+    StoredVersionState, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitExpiryAction,
+    WorkUnitReadOutcome,
+};
 use patchouli_provider_sqlite::SqliteProvider;
 use tokio_rusqlite::rusqlite::{Connection, params};
 
@@ -26,6 +31,66 @@ async fn opens_a_database_and_reports_health() {
     provider.checkpoint().await.expect("checkpoint SQLite");
     provider.shutdown().await.expect("shut down SQLite");
     assert!(path.exists());
+}
+
+#[tokio::test]
+async fn change_reads_prune_records_outside_configured_retention() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let provider = SqliteProvider::open(directory.path().join("patchouli.db"))
+        .await
+        .expect("open SQLite");
+    provider.initialize().await.expect("initialize SQLite");
+    let scope = r#"{"workspace_id":"workspace-1"}"#.to_owned();
+    provider
+        .commit_entity(EntityCommit {
+            key: EntityKey {
+                scope_json: scope.clone(),
+                entity_type: "knowledge".to_owned(),
+                entity_id: "retained".to_owned(),
+            },
+            expected_heads: vec![],
+            new_versions: vec![StoredEntityVersion {
+                version: "v1".to_owned(),
+                state: StoredVersionState::Active,
+                value_json: Some(KNOWLEDGE.to_owned()),
+                crdt_fields: vec![],
+            }],
+            head_versions: vec!["v1".to_owned()],
+            change_kind: StoredChangeKind::Created,
+            causal_token: "retention-token".to_owned(),
+            event_meta_json: "{}".to_owned(),
+            session_keys: vec![],
+            recorded_at_unix_ms: 10,
+        })
+        .await
+        .expect("commit entity");
+    let page = provider
+        .read_changes(ChangeQuery {
+            scope_json: scope,
+            entity_types: None,
+            entity_ids: None,
+            after_cursor: 0,
+            limit: 10,
+            retained_after_unix_ms: 11,
+        })
+        .await
+        .expect("read retained changes");
+    assert!(page.changes.is_empty());
+    assert_eq!(page.oldest_cursor, None);
+    assert_eq!(
+        provider
+            .acquire_consistency(ConsistencyQuery {
+                scope_json: r#"{"workspace_id":"workspace-1"}"#.to_owned(),
+                minimum_tokens: vec!["retention-token".to_owned()],
+                session_keys: vec![r#"{"session":"one"}"#.to_owned()],
+            })
+            .await
+            .expect("acquire retained causal frontier"),
+        ConsistencyAcquireOutcome::Acquired {
+            causal_token: Some("retention-token".to_owned()),
+        }
+    );
+    provider.shutdown().await.expect("shutdown SQLite");
 }
 
 #[tokio::test]
@@ -85,7 +150,7 @@ async fn defines_generic_entries_and_typed_fact_views() {
     let schema_version: u32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read schema version");
-    assert_eq!(schema_version, 3);
+    assert_eq!(schema_version, 9);
 
     insert_active_version(
         &connection,
@@ -230,6 +295,213 @@ async fn defines_crdt_change_graph_and_entity_frontiers() {
     assert_eq!(frontier, ("/content".to_owned(), "branch".to_owned()));
 }
 
+#[tokio::test]
+async fn entity_commit_compares_heads_and_rolls_back_on_conflict() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("patchouli.db");
+    let provider = SqliteProvider::open(&path).await.expect("open SQLite");
+    provider.initialize().await.expect("initialize SQLite");
+    let key = EntityKey {
+        scope_json: r#"{"channel_id":"channel-7"}"#.to_owned(),
+        entity_type: "knowledge".to_owned(),
+        entity_id: "knowledge-cas".to_owned(),
+    };
+    let create = EntityCommit {
+        key: key.clone(),
+        expected_heads: vec![],
+        new_versions: vec![StoredEntityVersion {
+            version: "v1".to_owned(),
+            state: StoredVersionState::Active,
+            value_json: Some(KNOWLEDGE.to_owned()),
+            crdt_fields: vec![],
+        }],
+        head_versions: vec!["v1".to_owned()],
+        change_kind: StoredChangeKind::Created,
+        causal_token: "causal-v1".to_owned(),
+        event_meta_json: "{}".to_owned(),
+        session_keys: vec![],
+        recorded_at_unix_ms: 1,
+    };
+    assert_eq!(
+        provider.commit_entity(create.clone()).await.unwrap(),
+        EntityCommitOutcome::Committed
+    );
+    assert_eq!(
+        provider.commit_entity(create).await.unwrap(),
+        EntityCommitOutcome::Conflict {
+            current_heads: vec!["v1".to_owned()]
+        }
+    );
+    provider.shutdown().await.expect("shut down SQLite");
+
+    let connection = Connection::open(path).expect("inspect SQLite");
+    let counts: (u32, u32) = connection
+        .query_row(
+            "SELECT
+                (SELECT count(*) FROM patchouli_entity_version),
+                (SELECT count(*) FROM patchouli_change)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (1, 1));
+}
+
+#[tokio::test]
+async fn expired_work_unit_discards_staged_versions_without_publication() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("patchouli.db");
+    let provider = SqliteProvider::open(&path).await.expect("open SQLite");
+    provider.initialize().await.expect("initialize SQLite");
+    let key = EntityKey {
+        scope_json: r#"{"channel_id":"channel-7"}"#.to_owned(),
+        entity_type: "knowledge".to_owned(),
+        entity_id: "knowledge-expired".to_owned(),
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let work_unit = WorkUnit {
+        identity_json:
+            r#"{"fields":{"transaction_id":"expired"},"scope":{"channel_id":"channel-7"}}"#
+                .to_owned(),
+        policy_json: r#"{"publication":"discard"}"#.to_owned(),
+        expiry_action: WorkUnitExpiryAction::Discard,
+        now_unix_ms: now,
+        expires_at_unix_ms: now + 60_000,
+    };
+    assert_eq!(
+        provider
+            .read_entity_in_work_unit(&work_unit, &key)
+            .await
+            .unwrap(),
+        WorkUnitReadOutcome::Open(None)
+    );
+    assert_eq!(
+        provider
+            .commit_entity_in_work_unit(WorkUnitCommit {
+                work_unit: work_unit.clone(),
+                entity: EntityCommit {
+                    key: key.clone(),
+                    expected_heads: vec![],
+                    new_versions: vec![StoredEntityVersion {
+                        version: "staged-v1".to_owned(),
+                        state: StoredVersionState::Active,
+                        value_json: Some(KNOWLEDGE.to_owned()),
+                        crdt_fields: vec![StoredCrdtField {
+                            path: "/content".to_owned(),
+                            heads: vec!["staged-change".to_owned()],
+                            changes: vec![StoredCrdtChange {
+                                hash: "staged-change".to_owned(),
+                                parents: vec![],
+                                bytes: vec![1],
+                            }],
+                        }],
+                    }],
+                    head_versions: vec!["staged-v1".to_owned()],
+                    change_kind: StoredChangeKind::Created,
+                    causal_token: "causal-staged-v1".to_owned(),
+                    event_meta_json: "{}".to_owned(),
+                    session_keys: vec![],
+                    recorded_at_unix_ms: now,
+                },
+                conflict_policy_json: r#"{"strategy":"mvcc"}"#.to_owned(),
+                idempotency: None,
+                close: false,
+            })
+            .await
+            .unwrap(),
+        WorkUnitCommitOutcome::Staged
+    );
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE patchouli_work_unit
+             SET opened_at_unix_ms = ?1, expires_at_unix_ms = ?2",
+            params![now - 2, now - 1],
+        )
+        .unwrap();
+    assert_eq!(provider.read_entity(&key).await.unwrap(), None);
+    assert_eq!(
+        provider
+            .read_entity_in_work_unit(
+                &WorkUnit {
+                    now_unix_ms: now + 1,
+                    expires_at_unix_ms: now + 60_001,
+                    ..work_unit
+                },
+                &key,
+            )
+            .await
+            .unwrap(),
+        WorkUnitReadOutcome::Expired
+    );
+    provider.shutdown().await.expect("shut down SQLite");
+
+    let connection = Connection::open(path).expect("inspect SQLite");
+    let counts: (u32, u32, u32, String) = connection
+        .query_row(
+            "SELECT
+                (SELECT count(*) FROM patchouli_entity_version),
+                (SELECT count(*) FROM patchouli_change),
+                (SELECT count(*) FROM patchouli_crdt_change),
+                (SELECT state FROM patchouli_work_unit)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (0, 0, 0, "expired".to_owned()));
+}
+
+#[tokio::test]
+async fn work_unit_identity_is_bound_to_its_opening_policy() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let provider = SqliteProvider::open(directory.path().join("patchouli.db"))
+        .await
+        .expect("open SQLite");
+    provider.initialize().await.expect("initialize SQLite");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let key = EntityKey {
+        scope_json: r#"{"channel_id":"channel-7"}"#.to_owned(),
+        entity_type: "knowledge".to_owned(),
+        entity_id: "policy-bound".to_owned(),
+    };
+    let work_unit = WorkUnit {
+        identity_json:
+            r#"{"fields":{"transaction_id":"policy"},"scope":{"channel_id":"channel-7"}}"#
+                .to_owned(),
+        policy_json: r#"{"ttl":60000}"#.to_owned(),
+        expiry_action: WorkUnitExpiryAction::Discard,
+        now_unix_ms: now,
+        expires_at_unix_ms: now + 60_000,
+    };
+    assert_eq!(
+        provider
+            .read_entity_in_work_unit(&work_unit, &key)
+            .await
+            .unwrap(),
+        WorkUnitReadOutcome::Open(None)
+    );
+    assert_eq!(
+        provider
+            .read_entity_in_work_unit(
+                &WorkUnit {
+                    policy_json: r#"{"ttl":120000}"#.to_owned(),
+                    ..work_unit
+                },
+                &key,
+            )
+            .await
+            .unwrap(),
+        WorkUnitReadOutcome::PolicyMismatch
+    );
+    provider.shutdown().await.expect("shut down SQLite");
+}
+
 fn insert_active_version(
     connection: &Connection,
     entity_type: &str,
@@ -264,3 +536,4 @@ fn insert_active_version(
         )
         .expect("insert entity head");
 }
+use std::time::{SystemTime, UNIX_EPOCH};

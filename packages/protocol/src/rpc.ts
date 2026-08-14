@@ -9,6 +9,7 @@ export const methods = {
   controlShutdown: 'patchouli.control.shutdown@1',
   entityCreate: 'patchouli.entity.create@1',
   entityRead: 'patchouli.entity.read@1',
+  entityRetrieve: 'patchouli.entity.retrieve@1',
   entityUpdate: 'patchouli.entity.update@1',
   entityDelete: 'patchouli.entity.delete@1',
   changesSubscribe: 'patchouli.changes.subscribe@1',

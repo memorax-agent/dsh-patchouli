@@ -11,6 +11,7 @@ publish = false
 async-trait.workspace = true
 fs4.workspace = true
 patchouli-provider = { path = "../provider" }
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-rusqlite.workspace = true

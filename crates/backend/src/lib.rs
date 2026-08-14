@@ -9,7 +9,7 @@ mod service;
 mod wire;
 
 pub use engine::{BackendEngine, EngineError};
-pub use error::{BackendError, BackendErrorReason};
+pub use error::{BackendError, BackendErrorReason, EntityVersionConflict};
 pub use fact::{
     AbstractionLevel, Actionability, ArtifactReference, EmbeddingArtifactMetadata,
     EmbeddingMediaType, EmbeddingMetric, EpistemicStatus, FACT_COMMON_SCHEMA_URI, FactLifecycle,
@@ -24,19 +24,20 @@ pub use model::{
     ChangeCursor, ChangeFilter, ChangeKind, ChangeRecord, CreateEntityData, CreateEntityParams,
     DeleteEntityData, DeleteEntityParams, EntityRef, EntityVersion, Meta, MutationData,
     MutationResult, ReadEntityData, ReadEntityParams, ReadEntityResult, ReadEntityResultData,
-    ReadState, RpcParams, RpcResult, SubscribeChangesData, SubscribeChangesParams,
+    ReadState, RetrievalHit, RetrieveEntitiesData, RetrieveEntitiesParams, RetrieveEntitiesResult,
+    RetrieveEntitiesResultData, RpcParams, RpcResult, SubscribeChangesData, SubscribeChangesParams,
     UpdateEntityData, UpdateEntityParams, VersionToken,
 };
-pub use service::{BackendService, ChangeStream};
+pub use service::{BackendService, ChangeStream, ChangeSubscription, PublishedChange};
 pub use wire::{
     ChangesEventData, ChangesEventParams, ClientIdentity, ControlCheckpointParams,
     ControlCheckpointResult, ControlCheckpointResultData, ControlShutdownParams,
     ControlShutdownResult, ControlShutdownResultData, ControlStatusParams, ControlStatusResult,
     ControlStatusResultData, EmptyData, HandshakeParams, HandshakeResult, JsonRpcError,
     JsonRpcFailure, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcSuccess, JsonRpcVersion,
-    ProtocolErrorData, ProtocolErrorReason, ServerIdentity, ServerLimits, SubscribeChangesResult,
-    SubscribeChangesResultData, UnsubscribeChangesData, UnsubscribeChangesParams,
-    UnsubscribeChangesResult, UnsubscribeChangesResultData, error_codes,
+    ProtocolEntityConflict, ProtocolErrorData, ProtocolErrorReason, ServerIdentity, ServerLimits,
+    SubscribeChangesResult, SubscribeChangesResultData, UnsubscribeChangesData,
+    UnsubscribeChangesParams, UnsubscribeChangesResult, UnsubscribeChangesResultData, error_codes,
 };
 
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -48,6 +49,7 @@ pub mod methods {
     pub const CONTROL_SHUTDOWN: &str = "patchouli.control.shutdown@1";
     pub const ENTITY_CREATE: &str = "patchouli.entity.create@1";
     pub const ENTITY_READ: &str = "patchouli.entity.read@1";
+    pub const ENTITY_RETRIEVE: &str = "patchouli.entity.retrieve@1";
     pub const ENTITY_UPDATE: &str = "patchouli.entity.update@1";
     pub const ENTITY_DELETE: &str = "patchouli.entity.delete@1";
     pub const CHANGES_SUBSCRIBE: &str = "patchouli.changes.subscribe@1";
@@ -62,7 +64,8 @@ pub use config::{
     PolicyRule, PublicationPolicy, RuleMatch, SessionGuarantee, SessionPolicy, SnapshotPolicy,
 };
 pub use conflict::{
-    ConflictError, ConflictResolution, CrdtChange, CrdtDocument, MergedField, resolve_conflict,
+    ConflictCandidate, ConflictError, ConflictResolution, CrdtChange, CrdtDocument,
+    resolve_conflict, resolve_prepared_conflict,
 };
 pub use controller::{
     CausalConsistencyPlan, ConflictPlan, ConsistencyPlan, ControlKey, PolicyError, PolicySelection,

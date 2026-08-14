@@ -25,6 +25,11 @@ single-node SQLite policy is
 advanced shared-transaction example is
 [`config/patchouli.example.json`](../config/patchouli.example.json).
 
+`retention.idempotency_seconds` and `retention.changes_seconds` define the
+durable retry and replay guarantees reported by the protocol handshake. SQLite
+prunes expired records during normal access; the advertised interval therefore
+comes from the same validated configuration as storage behavior.
+
 The default configuration registers the built-in fact schemas by stable URN:
 
 ```json
@@ -92,8 +97,8 @@ The configuration deliberately separates identities by engine role:
   deduplication.
 - batch `publication.key_by` identifies candidates published together.
 
-Every durable control key is `configured scope + key_by`. The scope is an
-authorization and isolation prefix; `key_by` supplies only the role-specific
+Every durable control key is `configured scope + key_by`. The scope is a
+namespace and isolation prefix, not an authorization decision; `key_by` supplies only the role-specific
 suffix. A `key_by` must not repeat a field already used by `scope_by`. A plugin
 participant ID can therefore identify a mutation without
 entering the entity storage key. Concurrent plugins still address the same
@@ -145,10 +150,10 @@ of phase-specific constraints rather than one level enum:
 - `conflict.otherwise` chooses `mvcc` or `reject` outside a merge rule.
 - `publication.mode` is explicitly `immediate` or `batch`.
 
-A batch publication additionally declares its `key_by`, exactly one
-`close_when` condition, a positive `staging_ttl_ms`, and `on_expire` behavior.
-Close conditions are marker equality, expected member count, or an event-time
-window.
+A batch publication additionally declares its `key_by`, a marker-equality
+`close_when` condition, a positive `staging_ttl_ms`, and
+`on_expire: discard`. Other close/expiry modes are intentionally absent from
+configuration version 1 until they have a complete runtime implementation.
 
 Configuration rules are alternatives: the first matching rule selects one
 behavior. Constraints inside that behavior combine with logical AND. Source
@@ -174,17 +179,18 @@ the plan.
 shipped default:
 
 - one request snapshot acquired from the authority;
-- linearizable acquisition within the configured channel scope;
-- commits serialized within that same scope;
+- entity and change scope keyed by `workspace_id + user_id`;
+- linearizable acquisition and serialized commits within that stable knowledge scope;
 - immediate publication;
 - `merge` by default for Knowledge: Automerge at `/content`, grouped by
   `/content/kind`, with MVCC for every other field;
 - `mvcc` by default for KnowledgeRelation;
 - no session, batch, replica, or idempotency state.
 
-Both ordering declarations use an empty `key_by` because `channel_id` is
-already supplied as the implicit scope prefix. The resulting domain is the
-channel, not a process-global lock.
+Both ordering declarations use an empty `key_by` because the configured
+workspace and user are already supplied as the implicit scope prefix. A
+`channel_id` remains available for session control without fragmenting durable
+knowledge by conversation.
 
 ### Eventual multi-source reads
 
@@ -199,19 +205,36 @@ concurrent candidates remain visible.
 accepts authority or replica snapshots, joins an optional opaque causal token
 with persisted `monotonic_reads` and `read_your_writes` progress for one routed
 plugin, and serializes commits within scope. The participant field is required;
-the causal token is optional, and its absence contributes no lower bound.
+the causal token is optional, and its absence contributes no lower bound. The
+SQLite adapter executes this pattern against its authority frontier and
+persists session progress across daemon restarts. A future replica provider
+must advertise replica and frontier support before this configuration starts.
 
 ### Shared transaction batch
 
 [`config/patterns/shared_transaction.json`](../config/patterns/shared_transaction.json)
-requires transaction, participant, and request identities for its selected
-behavior. The shared-snapshot and publication keys are identical, each plugin
-gets scoped session and idempotency identities, and a commit marker publishes
-the group. [`config/patchouli.example.json`](../config/patchouli.example.json)
-shows how to select this pattern by metadata presence and retain the
-default-style linearizable fallback for other requests.
+uses one configured transaction identity for both the shared snapshot and
+publication key. Creating the work unit records one global change cursor;
+entities first accessed later reconstruct their baseline at that same cursor.
+Mutations are durably staged and are visible only to later requests with the
+same key. The first request fixes the transaction-level policy descriptor;
+later requests with the same identity must select the same snapshot,
+publication, TTL, and ordering policy. Each mutation also persists its
+effective conflict policy. A configured marker publishes every mutated entity
+and its change record in one SQLite transaction. The example uses discard-on-expiry
+and leaves idempotency disabled. [`config/patchouli.example.json`](../config/patchouli.example.json)
+shows how to select this pattern by metadata presence while retaining the
+default-style linearizable fallback for requests without a transaction key.
 
 ## Transaction boundary
+
+The current engine executes request snapshots with immediate publication and
+shared snapshots with marker publication plus discard-on-expiry. SQLite uses
+authority reads. Immediate and batch acceptance both support durable keyed
+idempotency. Causal tokens use the published change frontier, and session
+frontiers are persisted by configured session identity. Causal/session state
+is currently restricted to immediate publication so an accepted-but-unpublished
+batch cannot claim a published frontier.
 
 Every CRUD mutation uses one short database transaction. It atomically records
 the immutable candidate or tombstone, enabled idempotency and causal/group
@@ -222,6 +245,15 @@ transaction open between RPC calls. The closing mutation publishes all accepted
 candidates and their change records in one short transaction. A successful
 mutation response means durable acceptance; the change stream reports
 publication.
+
+The captured baseline never advances. If another immediate request or work unit
+publishes a mutated entity after capture, the engine reconciles the staged and
+published heads with that entity's persisted Automerge/MVCC/reject policy.
+Resolved heads are then published with one atomic compare-and-swap. Only
+`reject`, or a write racing that final compare, returns `VERSION_CONFLICT`;
+grouped conflicts identify every affected entity. Open units that exceed their
+configured TTL are discarded during normal provider activity and lifecycle
+operations.
 
 ## Conflict resolution
 

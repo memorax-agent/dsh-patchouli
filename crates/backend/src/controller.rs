@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -26,7 +27,7 @@ pub struct PolicySelection {
     pub behavior: Behavior,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ControlKey {
     pub scope: BTreeMap<String, Value>,
     pub fields: BTreeMap<String, Value>,
@@ -54,7 +55,7 @@ pub struct SessionConsistencyPlan {
     pub guarantees: BTreeSet<SessionGuarantee>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConflictPlan {
     pub strategy: ConflictStrategy,
     pub base_versions_field: String,
@@ -119,9 +120,12 @@ impl PolicySelector {
         let conflict = build_conflict_plan(&fields, behavior)?;
         let idempotency_key = match &behavior.idempotency {
             IdempotencyPolicy::Disabled => None,
-            IdempotencyPolicy::Keyed { key_by } => {
+            IdempotencyPolicy::Keyed { key_by }
+                if key_by.iter().all(|field| fields.contains_key(field)) =>
+            {
                 Some(control_key(entity_type, &fields, &scope, key_by)?)
             }
+            IdempotencyPolicy::Keyed { .. } => None,
         };
         let publication_key = match &behavior.publication {
             PublicationPolicy::Immediate => None,
@@ -140,6 +144,31 @@ impl PolicySelector {
             publication_key,
             behavior: behavior.clone(),
         })
+    }
+
+    pub fn select_scope(&self, meta: &Value) -> Result<BTreeMap<String, Value>, PolicyError> {
+        let fields = self
+            .config
+            .meta_fields
+            .iter()
+            .filter_map(|(name, selector)| {
+                selector.select(meta).map(|value| (name, selector, value))
+            })
+            .map(|(name, selector, value)| {
+                selector
+                    .validate_value(value)
+                    .map(|()| (name.clone(), value.clone()))
+                    .map_err(|message| PolicyError::InvalidField {
+                        field: name.clone(),
+                        message,
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        select_key(
+            "change subscription",
+            &fields,
+            &self.config.entity_identity.scope_by,
+        )
     }
 }
 

@@ -14,9 +14,17 @@ pub struct BackendConfig {
     #[serde(rename = "$schema")]
     pub schema_uri: String,
     pub version: u16,
+    pub retention: RetentionPolicy,
     pub meta_fields: BTreeMap<String, MetaField>,
     pub entity_identity: EntityIdentityPolicy,
     pub entity_types: BTreeMap<String, EntityPolicy>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetentionPolicy {
+    pub idempotency_seconds: u64,
+    pub changes_seconds: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,26 +213,13 @@ pub enum PublicationPolicy {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BatchCloseCondition {
-    Marker {
-        field: String,
-        equals: Value,
-    },
-    ExpectedCount {
-        field: String,
-    },
-    TimeWindow {
-        field: String,
-        size_ms: u64,
-        #[serde(default)]
-        allowed_lateness_ms: u64,
-    },
+    Marker { field: String, equals: Value },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchExpiryPolicy {
     Discard,
-    Publish,
 }
 
 #[derive(Debug, Error)]
@@ -272,6 +267,18 @@ impl BackendConfig {
             return Err(invalid(
                 "entity_types",
                 "at least one entity type is required",
+            ));
+        }
+        if self.retention.idempotency_seconds == 0 {
+            return Err(invalid(
+                "retention.idempotency_seconds",
+                "idempotency retention must be greater than zero",
+            ));
+        }
+        if self.retention.changes_seconds == 0 {
+            return Err(invalid(
+                "retention.changes_seconds",
+                "change retention must be greater than zero",
             ));
         }
 
@@ -420,22 +427,12 @@ fn validate_behavior(
                 "staging TTL must be greater than zero",
             ));
         }
-        let (field, size_ms) = match close_when {
-            BatchCloseCondition::Marker { field, .. }
-            | BatchCloseCondition::ExpectedCount { field } => (field, None),
-            BatchCloseCondition::TimeWindow { field, size_ms, .. } => (field, Some(*size_ms)),
-        };
+        let BatchCloseCondition::Marker { field, .. } = close_when;
         validate_aliases(
             &format!("{root}.publication.close_when.field"),
             std::slice::from_ref(field),
             fields,
         )?;
-        if size_ms == Some(0) {
-            return Err(invalid(
-                format!("{root}.publication.close_when.size_ms"),
-                "time window size must be greater than zero",
-            ));
-        }
     }
 
     Ok(())
@@ -643,6 +640,20 @@ fn validate_consistency(
                 "session guarantees must be unique",
             ));
         }
+    }
+
+    if matches!(publication, PublicationPolicy::Batch { .. })
+        && (!consistency.sessions.is_empty()
+            || consistency
+                .acquire
+                .requirements
+                .iter()
+                .any(|requirement| matches!(requirement, AcquireRequirement::CausalAfter { .. })))
+    {
+        return Err(invalid(
+            root,
+            "causal/session consistency currently requires immediate publication",
+        ));
     }
 
     if let CommitOrderingPolicy::Serialize { key_by } = &consistency.commit.ordering {

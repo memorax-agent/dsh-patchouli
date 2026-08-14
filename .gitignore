@@ -23,6 +23,7 @@ coverage/
 .env.*
 !.env.example
 *.local
+PRODUCT.md
 
 # Logs
 *.log

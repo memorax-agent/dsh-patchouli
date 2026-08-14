@@ -18,6 +18,7 @@ sqlite = ["dep:patchouli-provider-sqlite"]
 
 [dependencies]
 clap.workspace = true
+futures-util.workspace = true
 patchouli-backend = { path = "../backend" }
 patchouli-provider = { path = "../provider" }
 patchouli-provider-sqlite = { path = "../provider-sqlite", optional = true }
