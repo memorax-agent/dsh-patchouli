@@ -52,20 +52,40 @@
         {
           "name": "transaction_batch",
           "when": {
-            "all_present": ["transaction_id", "event_time", "participant_id"]
+            "all_present": ["transaction_id", "participant_id", "request_id"]
           },
           "behavior": {
-            "baseline": {
-              "mode": "shared",
-              "consistency": "causal",
-              "source": "replica",
-              "key_by": ["channel_id", "transaction_id"],
-              "at": "event_time",
-              "causal_token": "causal_token"
+            "consistency": {
+              "snapshot": {
+                "mode": "shared",
+                "key_by": ["transaction_id"]
+              },
+              "acquire": {
+                "allow_sources": ["authority"],
+                "requirements": [
+                  {
+                    "kind": "causal_after",
+                    "token": "causal_token",
+                    "optional": true
+                  }
+                ]
+              },
+              "sessions": [
+                {
+                  "key_by": ["participant_id"],
+                  "guarantees": ["monotonic_reads", "read_your_writes"]
+                }
+              ],
+              "commit": {
+                "ordering": {
+                  "kind": "serialize",
+                  "key_by": []
+                }
+              }
             },
             "idempotency": {
               "mode": "keyed",
-              "key_by": ["channel_id", "transaction_id", "participant_id", "request_id"]
+              "key_by": ["transaction_id", "participant_id", "request_id"]
             },
             "conflict": {
               "strategy": "preserve_heads",
@@ -73,7 +93,7 @@
             },
             "publication": {
               "mode": "batch",
-              "key_by": ["channel_id", "transaction_id"],
+              "key_by": ["transaction_id"],
               "close_when": {
                 "kind": "marker",
                 "field": "transaction_state",
@@ -86,10 +106,26 @@
         }
       ],
       "fallback": {
-        "baseline": {
-          "mode": "request",
-          "consistency": "linearizable",
-          "source": "authority"
+        "consistency": {
+          "snapshot": {
+            "mode": "request"
+          },
+          "acquire": {
+            "allow_sources": ["authority"],
+            "requirements": [
+              {
+                "kind": "linearizable",
+                "key_by": []
+              }
+            ]
+          },
+          "sessions": [],
+          "commit": {
+            "ordering": {
+              "kind": "serialize",
+              "key_by": []
+            }
+          }
         },
         "idempotency": {
           "mode": "disabled"
@@ -111,20 +147,40 @@
         {
           "name": "transaction_batch",
           "when": {
-            "all_present": ["transaction_id", "event_time", "participant_id"]
+            "all_present": ["transaction_id", "participant_id", "request_id"]
           },
           "behavior": {
-            "baseline": {
-              "mode": "shared",
-              "consistency": "causal",
-              "source": "replica",
-              "key_by": ["channel_id", "transaction_id"],
-              "at": "event_time",
-              "causal_token": "causal_token"
+            "consistency": {
+              "snapshot": {
+                "mode": "shared",
+                "key_by": ["transaction_id"]
+              },
+              "acquire": {
+                "allow_sources": ["authority"],
+                "requirements": [
+                  {
+                    "kind": "causal_after",
+                    "token": "causal_token",
+                    "optional": true
+                  }
+                ]
+              },
+              "sessions": [
+                {
+                  "key_by": ["participant_id"],
+                  "guarantees": ["monotonic_reads", "read_your_writes"]
+                }
+              ],
+              "commit": {
+                "ordering": {
+                  "kind": "serialize",
+                  "key_by": []
+                }
+              }
             },
             "idempotency": {
               "mode": "keyed",
-              "key_by": ["channel_id", "transaction_id", "participant_id", "request_id"]
+              "key_by": ["transaction_id", "participant_id", "request_id"]
             },
             "conflict": {
               "strategy": "preserve_heads",
@@ -132,7 +188,7 @@
             },
             "publication": {
               "mode": "batch",
-              "key_by": ["channel_id", "transaction_id"],
+              "key_by": ["transaction_id"],
               "close_when": {
                 "kind": "marker",
                 "field": "transaction_state",
@@ -145,10 +201,26 @@
         }
       ],
       "fallback": {
-        "baseline": {
-          "mode": "request",
-          "consistency": "linearizable",
-          "source": "authority"
+        "consistency": {
+          "snapshot": {
+            "mode": "request"
+          },
+          "acquire": {
+            "allow_sources": ["authority"],
+            "requirements": [
+              {
+                "kind": "linearizable",
+                "key_by": []
+              }
+            ]
+          },
+          "sessions": [],
+          "commit": {
+            "ordering": {
+              "kind": "serialize",
+              "key_by": []
+            }
+          }
         },
         "idempotency": {
           "mode": "disabled"

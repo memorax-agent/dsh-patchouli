@@ -96,50 +96,140 @@
     "behavior": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["baseline", "idempotency", "conflict", "publication"],
+      "required": ["consistency", "idempotency", "conflict", "publication"],
       "properties": {
-        "baseline": { "$ref": "#/$defs/baseline" },
+        "consistency": { "$ref": "#/$defs/consistency_policy" },
         "idempotency": { "$ref": "#/$defs/idempotency" },
         "conflict": { "$ref": "#/$defs/conflict" },
         "publication": { "$ref": "#/$defs/publication" }
       }
     },
-    "baseline": {
+    "consistency_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot", "acquire", "sessions", "commit"],
+      "properties": {
+        "snapshot": { "$ref": "#/$defs/snapshot_policy" },
+        "acquire": { "$ref": "#/$defs/acquire_policy" },
+        "sessions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/session_policy" },
+          "uniqueItems": true
+        },
+        "commit": { "$ref": "#/$defs/commit_consistency" }
+      }
+    },
+    "snapshot_policy": {
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["mode", "consistency", "source"],
+          "required": ["mode"],
           "properties": {
-            "mode": { "const": "request" },
-            "consistency": { "$ref": "#/$defs/consistency" },
-            "source": { "$ref": "#/$defs/baseline_source" },
-            "at": { "$ref": "#/$defs/alias" },
-            "causal_token": { "$ref": "#/$defs/alias" }
+            "mode": { "const": "request" }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["mode", "consistency", "source", "key_by"],
+          "required": ["mode", "key_by"],
           "properties": {
             "mode": { "const": "shared" },
-            "consistency": { "$ref": "#/$defs/consistency" },
-            "source": { "$ref": "#/$defs/baseline_source" },
-            "key_by": { "$ref": "#/$defs/non_empty_alias_list" },
-            "at": { "$ref": "#/$defs/alias" },
-            "causal_token": { "$ref": "#/$defs/alias" }
+            "key_by": { "$ref": "#/$defs/non_empty_alias_list" }
           }
         }
       ]
     },
-    "consistency": {
-      "type": "string",
-      "enum": ["eventual", "causal", "linearizable"]
+    "acquire_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow_sources", "requirements"],
+      "properties": {
+        "allow_sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/consistency_source" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "requirements": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/acquire_requirement" },
+          "uniqueItems": true
+        }
+      }
     },
-    "baseline_source": {
+    "consistency_source": {
       "type": "string",
-      "enum": ["any", "authority", "replica"]
+      "enum": ["authority", "replica"]
+    },
+    "acquire_requirement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "token"],
+          "properties": {
+            "kind": { "const": "causal_after" },
+            "token": { "$ref": "#/$defs/alias" },
+            "optional": { "type": "boolean", "default": false }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "key_by"],
+          "properties": {
+            "kind": { "const": "linearizable" },
+            "key_by": { "$ref": "#/$defs/alias_list" }
+          }
+        }
+      ]
+    },
+    "session_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_by", "guarantees"],
+      "properties": {
+        "key_by": { "$ref": "#/$defs/non_empty_alias_list" },
+        "guarantees": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["monotonic_reads", "read_your_writes"]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "commit_consistency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordering"],
+      "properties": {
+        "ordering": { "$ref": "#/$defs/commit_ordering" }
+      }
+    },
+    "commit_ordering": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "none" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "key_by"],
+          "properties": {
+            "kind": { "const": "serialize" },
+            "key_by": { "$ref": "#/$defs/alias_list" }
+          }
+        }
+      ]
     },
     "idempotency": {
       "oneOf": [

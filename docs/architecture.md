@@ -54,7 +54,12 @@ JSON-RPC adapter
     -> database provider primitives
 ```
 
-The controller owns schemas, identity extraction, consistency selection, logical transaction/batch state, conflicts and publication. A database provider does not interpret business fields and is never called directly by the frontend adapter.
+The controller owns schemas, identity extraction, consistency planning, logical
+transaction/batch state, conflicts and publication. A selected behavior
+compiles metadata aliases into scoped snapshot, acquisition, session, and
+commit-order constraints. Rules are alternatives; constraints inside one
+behavior combine without fallback or downgrade. A database provider does not
+interpret business fields and is never called directly by the frontend adapter.
 
 `BackendEngine` is the runtime owner of the immutable validated policy and one
 injected provider. JSON-RPC sessions call it only through `BackendService`.

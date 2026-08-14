@@ -59,7 +59,7 @@ cargo install --path crates/server
 
 ```bash
 mkdir -p "$HOME/.patchouli"
-cp config/patchouli.example.json "$HOME/.patchouli/config.json"
+cp config/patchouli.default.json "$HOME/.patchouli/config.json"
 ```
 
 插件加载时会连接默认本地 endpoint；若 daemon 不存在，则执行

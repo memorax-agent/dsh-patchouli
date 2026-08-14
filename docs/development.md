@@ -29,7 +29,7 @@ first automatic start:
 
 ```bash
 mkdir -p "$HOME/.patchouli"
-cp config/patchouli.example.json "$HOME/.patchouli/config.json"
+cp config/patchouli.default.json "$HOME/.patchouli/config.json"
 ```
 
 Default endpoints are:
@@ -80,7 +80,7 @@ committed WAL transactions at the next open and the status recovery flag is set.
 Validate the existing backend policy file without starting a daemon:
 
 ```bash
-patchouli config check config/patchouli.example.json
+patchouli config check config/patchouli.default.json
 ```
 
 The two entries in `pnpm-workspace.yaml` are explicit exceptions to pnpm's minimum-release-age policy. DeepSeek Harness and its Cordis dependency were newly published when this repository was initialized; all other dependencies remain subject to the active supply-chain policy.

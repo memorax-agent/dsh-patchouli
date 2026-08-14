@@ -54,9 +54,13 @@ pub mod methods {
     pub const CHANGES_EVENT: &str = "patchouli.changes.event@1";
 }
 pub use config::{
-    BackendConfig, BaselinePolicy, BaselineSource, BatchCloseCondition, BatchExpiryPolicy,
-    Behavior, ConfigError, ConfiguredConsistency, ConflictPolicy, ConflictStrategy,
-    EntityIdentityPolicy, EntityPolicy, IdempotencyPolicy, MetaField, PolicyRule,
-    PublicationPolicy, RuleMatch,
+    AcquirePolicy, AcquireRequirement, BackendConfig, BatchCloseCondition, BatchExpiryPolicy,
+    Behavior, CommitConsistencyPolicy, CommitOrderingPolicy, ConfigError, ConflictPolicy,
+    ConflictStrategy, ConsistencyPolicy, ConsistencySource, EntityIdentityPolicy, EntityPolicy,
+    IdempotencyPolicy, MetaField, PolicyRule, PublicationPolicy, RuleMatch, SessionGuarantee,
+    SessionPolicy, SnapshotPolicy,
 };
-pub use controller::{PolicyError, PolicySelection, PolicySelector};
+pub use controller::{
+    CausalConsistencyPlan, ConsistencyPlan, ControlKey, PolicyError, PolicySelection,
+    PolicySelector, SessionConsistencyPlan,
+};

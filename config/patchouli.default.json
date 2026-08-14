@@ -1,0 +1,102 @@
+{
+  "$schema": "./patchouli.schema.json",
+  "version": 1,
+  "meta_fields": {
+    "channel_id": {
+      "pointer": "/channel_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "base_versions": {
+      "pointer": "/base_versions",
+      "schema": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1,
+        "uniqueItems": true
+      }
+    }
+  },
+  "entity_identity": {
+    "scope_by": ["channel_id"]
+  },
+  "entity_types": {
+    "knowledge": {
+      "value_schema": {
+        "$ref": "urn:patchouli:schema:knowledge:1"
+      },
+      "rules": [],
+      "fallback": {
+        "consistency": {
+          "snapshot": {
+            "mode": "request"
+          },
+          "acquire": {
+            "allow_sources": ["authority"],
+            "requirements": [
+              {
+                "kind": "linearizable",
+                "key_by": []
+              }
+            ]
+          },
+          "sessions": [],
+          "commit": {
+            "ordering": {
+              "kind": "serialize",
+              "key_by": []
+            }
+          }
+        },
+        "idempotency": {
+          "mode": "disabled"
+        },
+        "conflict": {
+          "strategy": "reject",
+          "base_versions": "base_versions"
+        },
+        "publication": {
+          "mode": "immediate"
+        }
+      }
+    },
+    "knowledge_relation": {
+      "value_schema": {
+        "$ref": "urn:patchouli:schema:knowledge-relation:1"
+      },
+      "rules": [],
+      "fallback": {
+        "consistency": {
+          "snapshot": {
+            "mode": "request"
+          },
+          "acquire": {
+            "allow_sources": ["authority"],
+            "requirements": [
+              {
+                "kind": "linearizable",
+                "key_by": []
+              }
+            ]
+          },
+          "sessions": [],
+          "commit": {
+            "ordering": {
+              "kind": "serialize",
+              "key_by": []
+            }
+          }
+        },
+        "idempotency": {
+          "mode": "disabled"
+        },
+        "conflict": {
+          "strategy": "reject",
+          "base_versions": "base_versions"
+        },
+        "publication": {
+          "mode": "immediate"
+        }
+      }
+    }
+  }
+}

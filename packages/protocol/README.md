@@ -1,7 +1,7 @@
 # Patchouli Protocol
 
 This package defines the harness-neutral JSON-RPC contract between Patchouli
-clients and the database backend. Entity kinds such as memories, relations, or
+clients and the database backend. Entity kinds such as knowledge, relations, or
 future records are values of the generic `type` parameter; they do not create
 separate RPC method families.
 

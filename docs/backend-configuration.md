@@ -17,8 +17,10 @@ JSON-RPC adapter -> backend engine -> policy selector -> database provider
 ```
 
 The normative configuration shape is
-[`config/patchouli.schema.json`](../config/patchouli.schema.json). A complete
-deployment example is
+[`config/patchouli.schema.json`](../config/patchouli.schema.json). The default
+single-node SQLite policy is
+[`config/patchouli.default.json`](../config/patchouli.default.json). The more
+advanced shared-transaction example is
 [`config/patchouli.example.json`](../config/patchouli.example.json).
 
 The default configuration registers the built-in fact schemas by stable URN:
@@ -64,6 +66,10 @@ Each field also contains a JSON Schema for its runtime value.
 }
 ```
 
+The policy selector validates every present bound value before it matches a
+rule or derives a key. An invalid value fails the request; it is never treated
+as an absent field to select a weaker fallback behavior.
+
 Channel, transaction, timestamp, routed-plugin, request, causal, and
 base-version values are ordinary configured metadata. Renaming one changes only
 the deployment configuration and frontend metadata mapping, not CRUD `data` or
@@ -75,16 +81,21 @@ The configuration deliberately separates identities by engine role:
 
 - `entity_identity.scope_by` optionally namespaces every entity and change
   record. The storage identity is `configured scope + (type, id)`.
-- shared `baseline.key_by` identifies requests that share database baseline
-  state.
+- shared `consistency.snapshot.key_by` identifies requests that share one
+  fixed database baseline.
+- session `consistency.sessions[].key_by` identifies persisted monotonic-read
+  and read-your-writes progress.
+- acquisition and commit ordering keys identify their linearization domains.
 - keyed `idempotency.key_by` identifies one logical mutation for retry
   deduplication.
 - batch `publication.key_by` identifies candidates published together.
 
-Every `key_by` is complete and used exactly as written; the engine never adds
-the entity scope implicitly. A plugin participant ID can therefore identify a
-mutation without entering the entity storage key. Concurrent plugins still
-address the same entity and enter the configured conflict policy.
+Every durable control key is `configured scope + key_by`. The scope is an
+authorization and isolation prefix; `key_by` supplies only the role-specific
+suffix. A `key_by` must not repeat a field already used by `scope_by`. A plugin
+participant ID can therefore identify a mutation without
+entering the entity storage key. Concurrent plugins still address the same
+entity and enter the configured conflict policy.
 
 ## Entity policies and rules
 
@@ -101,16 +112,23 @@ another policy.
 
 ## Behavior
 
-Every behavior maps directly to an engine phase:
+Every behavior maps directly to an engine phase. Consistency is a conjunction
+of phase-specific constraints rather than one level enum:
 
-- `baseline.mode: request` creates no persistent baseline key.
-- `baseline.mode: shared` requires the complete `key_by` used for persistent
-  baseline state.
-- `baseline.consistency` selects eventual, causal, or linearizable reads.
-- `baseline.source` selects any node, an authority, or a replica.
-- `baseline.at` optionally anchors a new baseline to configured logical time.
-- `baseline.causal_token` identifies the opaque token field read from request
-  `meta` and written to result/event `meta`.
+- `consistency.snapshot.mode: request` chooses one snapshot per request and
+  stores no shared baseline.
+- `consistency.snapshot.mode: shared` fixes a baseline by `key_by`. It is valid
+  only with batch publication using the same key fields.
+- `consistency.acquire.allow_sources` defines the initial authority/replica
+  candidate set.
+- `causal_after` contributes an opaque causal-token lower bound. Multiple
+  bounds are joined by the provider.
+- `linearizable` intersects the source set with authority and identifies one
+  linearization domain.
+- `consistency.sessions` adds monotonic-read and read-your-writes lower bounds
+  keyed by configured identities.
+- `consistency.commit.ordering` either adds no ordering or serializes commits
+  in one configured domain.
 - `idempotency.mode: disabled` creates no idempotency record or key.
 - `idempotency.mode: keyed` requires the complete `key_by` for a mutation and
   its stored result.
@@ -123,6 +141,64 @@ A batch publication additionally declares its `key_by`, exactly one
 `close_when` condition, a positive `staging_ttl_ms`, and `on_expire` behavior.
 Close conditions are marker equality, expected member count, or an event-time
 window.
+
+Configuration rules are alternatives: the first matching rule selects one
+behavior. Constraints inside that behavior combine with logical AND. Source
+sets are intersected, causal/session lower bounds are joined, and exact shared
+baselines cannot move forward. An impossible combination rejects configuration
+at startup when static, or rejects the request when it depends on persisted
+frontiers. The engine never weakens a guarantee to find a fallback execution.
+
+Each session identity is declared once. Put all guarantees for the same
+`key_by` in that declaration; two declarations with the same effective key are
+rejected instead of creating two writers for one persisted session frontier.
+
+## Common consistency patterns
+
+All patterns below are complete configuration files validated by the same
+Schema and semantic checker. They compile into execution plans; a selected
+provider must still advertise the sources and frontier operations required by
+the plan.
+
+### Default single-node SQLite
+
+[`config/patchouli.default.json`](../config/patchouli.default.json) is the
+shipped default:
+
+- one request snapshot acquired from the authority;
+- linearizable acquisition within the configured channel scope;
+- commits serialized within that same scope;
+- immediate publication and `reject` conflict handling;
+- no session, batch, replica, or idempotency state.
+
+Both ordering declarations use an empty `key_by` because `channel_id` is
+already supplied as the implicit scope prefix. The resulting domain is the
+channel, not a process-global lock.
+
+### Eventual multi-source reads
+
+[`config/patterns/eventual.json`](../config/patterns/eventual.json)
+allows authority or replica snapshots, adds no freshness/session constraint,
+and adds no commit ordering. It uses `preserve_heads`, so independently
+accepted concurrent candidates remain visible for explicit resolution.
+
+### Causal plugin session
+
+[`config/patterns/causal_session.json`](../config/patterns/causal_session.json)
+accepts authority or replica snapshots, joins an optional opaque causal token
+with persisted `monotonic_reads` and `read_your_writes` progress for one routed
+plugin, and serializes commits within scope. The participant field is required;
+the causal token is optional, and its absence contributes no lower bound.
+
+### Shared transaction batch
+
+[`config/patterns/shared_transaction.json`](../config/patterns/shared_transaction.json)
+requires transaction, participant, and request identities for its selected
+behavior. The shared-snapshot and publication keys are identical, each plugin
+gets scoped session and idempotency identities, and a commit marker publishes
+the group. [`config/patchouli.example.json`](../config/patchouli.example.json)
+shows how to select this pattern by metadata presence and retain the
+default-style linearizable fallback for other requests.
 
 ## Transaction boundary
 

@@ -17,7 +17,7 @@ patchouli serve --endpoint <endpoint> --database <path> --config <policy-path>
 patchouli status --endpoint <endpoint>
 patchouli checkpoint --endpoint <endpoint>
 patchouli stop --endpoint <endpoint>
-patchouli config check config/patchouli.example.json
+patchouli config check config/patchouli.default.json
 ```
 
 The server library accepts the provider contract rather than a SQLite

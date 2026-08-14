@@ -36,6 +36,11 @@ impl MetaField {
     pub fn select<'a>(&self, meta: &'a Value) -> Option<&'a Value> {
         meta.pointer(&self.pointer)
     }
+
+    pub(crate) fn validate_value(&self, value: &Value) -> Result<(), String> {
+        let validator = build_json_schema(&self.schema)?;
+        validator.validate(value).map_err(|error| error.to_string())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -63,48 +68,80 @@ pub struct RuleMatch {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Behavior {
-    pub baseline: BaselinePolicy,
+    pub consistency: ConsistencyPolicy,
     pub idempotency: IdempotencyPolicy,
     pub conflict: ConflictPolicy,
     pub publication: PublicationPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsistencyPolicy {
+    pub snapshot: SnapshotPolicy,
+    pub acquire: AcquirePolicy,
+    pub sessions: Vec<SessionPolicy>,
+    pub commit: CommitConsistencyPolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub enum BaselinePolicy {
-    Request {
-        consistency: ConfiguredConsistency,
-        source: BaselineSource,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        at: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        causal_token: Option<String>,
-    },
-    Shared {
-        consistency: ConfiguredConsistency,
-        source: BaselineSource,
-        key_by: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        at: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        causal_token: Option<String>,
-    },
+pub enum SnapshotPolicy {
+    Request,
+    Shared { key_by: Vec<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfiguredConsistency {
-    Causal,
-    Eventual,
-    Linearizable,
+#[serde(deny_unknown_fields)]
+pub struct AcquirePolicy {
+    pub allow_sources: Vec<ConsistencySource>,
+    pub requirements: Vec<AcquireRequirement>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BaselineSource {
-    Any,
+pub enum ConsistencySource {
     Authority,
     Replica,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AcquireRequirement {
+    CausalAfter {
+        token: String,
+        #[serde(default)]
+        optional: bool,
+    },
+    Linearizable {
+        key_by: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionPolicy {
+    pub key_by: Vec<String>,
+    pub guarantees: Vec<SessionGuarantee>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionGuarantee {
+    MonotonicReads,
+    ReadYourWrites,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitConsistencyPolicy {
+    pub ordering: CommitOrderingPolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CommitOrderingPolicy {
+    None,
+    Serialize { key_by: Vec<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,12 +299,18 @@ impl BackendConfig {
                     &rule.when.all_present,
                     &self.meta_fields,
                 )?;
-                validate_behavior(&rule_root, &rule.behavior, &self.meta_fields)?;
+                validate_behavior(
+                    &format!("{rule_root}.behavior"),
+                    &rule.behavior,
+                    &self.meta_fields,
+                    &self.entity_identity.scope_by,
+                )?;
             }
             validate_behavior(
                 &format!("{root}.fallback"),
                 &policy.fallback,
                 &self.meta_fields,
+                &self.entity_identity.scope_by,
             )?;
         }
 
@@ -301,49 +344,32 @@ fn validate_behavior(
     root: &str,
     behavior: &Behavior,
     fields: &BTreeMap<String, MetaField>,
+    scope_by: &[String],
 ) -> Result<(), ConfigError> {
-    let (at, causal_token) = match &behavior.baseline {
-        BaselinePolicy::Request {
-            at, causal_token, ..
-        } => (at, causal_token),
-        BaselinePolicy::Shared {
-            key_by,
-            at,
-            causal_token,
-            ..
-        } => {
-            if key_by.is_empty() {
-                return Err(invalid(
-                    format!("{root}.behavior.baseline.key_by"),
-                    "shared baseline requires at least one identity field",
-                ));
-            }
-            validate_aliases(&format!("{root}.behavior.baseline.key_by"), key_by, fields)?;
-            (at, causal_token)
-        }
-    };
-    validate_optional_alias(&format!("{root}.behavior.baseline.at"), at.as_ref(), fields)?;
-    validate_optional_alias(
-        &format!("{root}.behavior.baseline.causal_token"),
-        causal_token.as_ref(),
+    validate_consistency(
+        &format!("{root}.consistency"),
+        &behavior.consistency,
+        &behavior.publication,
         fields,
+        scope_by,
     )?;
 
     if let IdempotencyPolicy::Keyed { key_by } = &behavior.idempotency {
         if key_by.is_empty() {
             return Err(invalid(
-                format!("{root}.behavior.idempotency.key_by"),
+                format!("{root}.idempotency.key_by"),
                 "keyed idempotency requires at least one identity field",
             ));
         }
-        validate_aliases(
-            &format!("{root}.behavior.idempotency.key_by"),
+        validate_control_key_aliases(
+            &format!("{root}.idempotency.key_by"),
             key_by,
             fields,
+            scope_by,
         )?;
     }
     validate_aliases(
-        &format!("{root}.behavior.conflict.base_versions"),
+        &format!("{root}.conflict.base_versions"),
         std::slice::from_ref(&behavior.conflict.base_versions),
         fields,
     )?;
@@ -357,18 +383,19 @@ fn validate_behavior(
     {
         if key_by.is_empty() {
             return Err(invalid(
-                format!("{root}.behavior.publication.key_by"),
+                format!("{root}.publication.key_by"),
                 "batch publication requires at least one grouping field",
             ));
         }
-        validate_aliases(
-            &format!("{root}.behavior.publication.key_by"),
+        validate_control_key_aliases(
+            &format!("{root}.publication.key_by"),
             key_by,
             fields,
+            scope_by,
         )?;
         if *staging_ttl_ms == 0 {
             return Err(invalid(
-                format!("{root}.behavior.publication.staging_ttl_ms"),
+                format!("{root}.publication.staging_ttl_ms"),
                 "staging TTL must be greater than zero",
             ));
         }
@@ -378,13 +405,13 @@ fn validate_behavior(
             BatchCloseCondition::TimeWindow { field, size_ms, .. } => (field, Some(*size_ms)),
         };
         validate_aliases(
-            &format!("{root}.behavior.publication.close_when.field"),
+            &format!("{root}.publication.close_when.field"),
             std::slice::from_ref(field),
             fields,
         )?;
         if size_ms == Some(0) {
             return Err(invalid(
-                format!("{root}.behavior.publication.close_when.size_ms"),
+                format!("{root}.publication.close_when.size_ms"),
                 "time window size must be greater than zero",
             ));
         }
@@ -393,13 +420,175 @@ fn validate_behavior(
     Ok(())
 }
 
-fn validate_optional_alias(
-    path: &str,
-    alias: Option<&String>,
+fn validate_consistency(
+    root: &str,
+    consistency: &ConsistencyPolicy,
+    publication: &PublicationPolicy,
     fields: &BTreeMap<String, MetaField>,
+    scope_by: &[String],
 ) -> Result<(), ConfigError> {
-    if let Some(alias) = alias {
-        validate_aliases(path, std::slice::from_ref(alias), fields)?;
+    match (&consistency.snapshot, publication) {
+        (SnapshotPolicy::Request, PublicationPolicy::Immediate) => {}
+        (
+            SnapshotPolicy::Shared {
+                key_by: snapshot_key,
+            },
+            PublicationPolicy::Batch {
+                key_by: publication_key,
+                ..
+            },
+        ) => {
+            if snapshot_key.is_empty() {
+                return Err(invalid(
+                    format!("{root}.snapshot.key_by"),
+                    "a shared snapshot requires at least one identity field",
+                ));
+            }
+            validate_control_key_aliases(
+                &format!("{root}.snapshot.key_by"),
+                snapshot_key,
+                fields,
+                scope_by,
+            )?;
+            if snapshot_key.iter().collect::<BTreeSet<_>>()
+                != publication_key.iter().collect::<BTreeSet<_>>()
+            {
+                return Err(invalid(
+                    format!("{root}.snapshot.key_by"),
+                    "shared snapshot and batch publication must use the same key fields",
+                ));
+            }
+        }
+        (SnapshotPolicy::Shared { .. }, PublicationPolicy::Immediate) => {
+            return Err(invalid(
+                format!("{root}.snapshot.mode"),
+                "a shared snapshot requires batch publication",
+            ));
+        }
+        (SnapshotPolicy::Request, PublicationPolicy::Batch { .. }) => {
+            return Err(invalid(
+                format!("{root}.snapshot.mode"),
+                "batch publication requires a shared snapshot",
+            ));
+        }
+    }
+
+    if consistency.acquire.allow_sources.is_empty() {
+        return Err(invalid(
+            format!("{root}.acquire.allow_sources"),
+            "at least one snapshot source is required",
+        ));
+    }
+    let allowed_sources = consistency
+        .acquire
+        .allow_sources
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if allowed_sources.len() != consistency.acquire.allow_sources.len() {
+        return Err(invalid(
+            format!("{root}.acquire.allow_sources"),
+            "snapshot sources must be unique",
+        ));
+    }
+
+    let mut linearizable_requirements = 0;
+    for (index, requirement) in consistency.acquire.requirements.iter().enumerate() {
+        let requirement_root = format!("{root}.acquire.requirements[{index}]");
+        match requirement {
+            AcquireRequirement::CausalAfter { token, .. } => validate_aliases(
+                &format!("{requirement_root}.token"),
+                std::slice::from_ref(token),
+                fields,
+            )?,
+            AcquireRequirement::Linearizable { key_by } => {
+                linearizable_requirements += 1;
+                validate_control_key_aliases(
+                    &format!("{requirement_root}.key_by"),
+                    key_by,
+                    fields,
+                    scope_by,
+                )?;
+            }
+        }
+    }
+    if linearizable_requirements > 1 {
+        return Err(invalid(
+            format!("{root}.acquire.requirements"),
+            "only one linearization domain may be configured",
+        ));
+    }
+    if linearizable_requirements == 1 && !allowed_sources.contains(&ConsistencySource::Authority) {
+        return Err(invalid(
+            format!("{root}.acquire.allow_sources"),
+            "linearizable acquisition requires authority to be an allowed source",
+        ));
+    }
+
+    let mut session_keys = BTreeSet::new();
+    for (index, session) in consistency.sessions.iter().enumerate() {
+        let session_root = format!("{root}.sessions[{index}]");
+        if session.key_by.is_empty() {
+            return Err(invalid(
+                format!("{session_root}.key_by"),
+                "a session requires at least one identity field",
+            ));
+        }
+        validate_control_key_aliases(
+            &format!("{session_root}.key_by"),
+            &session.key_by,
+            fields,
+            scope_by,
+        )?;
+        let mut normalized_key = session.key_by.clone();
+        normalized_key.sort();
+        if !session_keys.insert(normalized_key) {
+            return Err(invalid(
+                format!("{session_root}.key_by"),
+                "a session identity may be declared only once; combine its guarantees",
+            ));
+        }
+        if session.guarantees.is_empty() {
+            return Err(invalid(
+                format!("{session_root}.guarantees"),
+                "a session requires at least one guarantee",
+            ));
+        }
+        if session.guarantees.iter().collect::<BTreeSet<_>>().len() != session.guarantees.len() {
+            return Err(invalid(
+                format!("{session_root}.guarantees"),
+                "session guarantees must be unique",
+            ));
+        }
+    }
+
+    if let CommitOrderingPolicy::Serialize { key_by } = &consistency.commit.ordering {
+        validate_control_key_aliases(
+            &format!("{root}.commit.ordering.key_by"),
+            key_by,
+            fields,
+            scope_by,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn validate_control_key_aliases(
+    path: &str,
+    aliases: &[String],
+    fields: &BTreeMap<String, MetaField>,
+    scope_by: &[String],
+) -> Result<(), ConfigError> {
+    validate_aliases(path, aliases, fields)?;
+    let scope_fields = scope_by.iter().collect::<BTreeSet<_>>();
+    if let Some(alias) = aliases.iter().find(|alias| scope_fields.contains(alias)) {
+        return Err(invalid(
+            path,
+            format!(
+                "metadata field {alias:?} is already an implicit scope prefix and must not be repeated"
+            ),
+        ));
     }
     Ok(())
 }

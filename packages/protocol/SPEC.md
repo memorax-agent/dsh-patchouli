@@ -71,7 +71,8 @@ Configuration MAY define:
 - a global scope that namespaces `(type, id)` and change records;
 - a JSON Schema for each entity type's `value`;
 - ordered rules selected by metadata presence;
-- separate baseline, idempotency, conflict, and publication keys and policies.
+- phase-specific snapshot acquisition, session, and commit-ordering constraints;
+- separate consistency, idempotency, conflict, and publication keys and policies.
 
 Channel IDs, transaction IDs, timestamps, causal tokens, idempotency keys,
 deadlines, and plugin-route IDs remain ordinary configured metadata. They MUST
@@ -113,8 +114,10 @@ result.
 
 v1 does not expose a transaction lifecycle in JSON-RPC. Cross-request grouping
 is controller state driven by configuration and requires an explicit marker,
-expected-count, or time-window close condition. Reads use one database snapshot
-per request.
+expected-count, or time-window close condition. Request snapshot mode reads one
+database snapshot per request. Shared snapshot mode fixes one baseline for the
+configured scoped group, exposes that group's staged overlay to its own reads,
+and requires batch publication with the same grouping fields.
 
 ## 5. Versions and conflicts
 
@@ -143,17 +146,32 @@ from one that never existed. A never-existing identity returns `NOT_FOUND`.
 
 ## 6. Consistency
 
-- `eventual` rules may read any controller-selected published state.
-- `causal` rules use the controller's persisted identity/group state to choose
-  a baseline that includes prior dependent publications.
-- `linearizable` rules read from a cluster-authoritative ordering point.
-- Mixed consistency is selected from configured fields and never from a client
-  request flag.
+Consistency is a conjunction of constraints compiled from the selected backend
+behavior. Metadata fields supply identities, tokens, or bounds; they do not
+select a client-controlled consistency level.
 
-When configured, the controller reads and writes an opaque causal token in
-`meta`. It uses the token alongside other configured identities for baselines,
-publication grouping, and cross-node progress. The CRUD business `data` schema
-does not contain causal fields.
+- request snapshots have no persistent baseline identity;
+- shared snapshots use `scope + configured key fields` and remain fixed for the
+  lifetime of the durable transaction group;
+- allowed source sets are intersected by acquisition requirements;
+- causal and session frontiers are joined into the minimum acceptable frontier;
+- linearizable acquisition requires an authority ordering point between request
+  invocation and response;
+- commit serialization applies one configured total-order domain;
+- eventual behavior is expressed by the absence of a causal, session, or
+  linearizable freshness requirement.
+
+The first matching policy rule is an alternative to later rules. Within the
+selected behavior every consistency constraint applies. A fixed baseline that
+is older than a later causal/session lower bound is unsatisfiable; the backend
+MUST reject it rather than advance the baseline or weaken the lower bound.
+Statically impossible combinations MUST prevent startup. Provider capability
+mismatches MUST also prevent startup once a provider is selected.
+
+When configured, the controller reads and writes opaque causal tokens in
+`meta`. A provider joins multiple tokens using its frontier representation.
+Clients store and forward tokens but never parse them. The CRUD business `data`
+schema does not contain causal fields.
 
 ## 7. Change subscriptions
 
