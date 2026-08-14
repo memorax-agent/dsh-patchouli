@@ -21,7 +21,7 @@ dsh plugin --profile web add .
 dsh --profile web --dump-config
 ```
 
-The effective configuration should contain an enabled row with id `patchouli` and module name `dsh-patchouli`.
+The effective configuration should contain enabled rows for `patchouli` (`dsh-patchouli`) and `patchouli-agent-loop` (`dsh-patchouli/agent-loop`).
 
 ## CI policy
 

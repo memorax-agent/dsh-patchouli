@@ -22,6 +22,7 @@ export interface MemoryRetrieveRequest {
   readonly scope: string
   readonly query: string
   readonly limit?: number
+  readonly metadata?: MemoryMetadata
 }
 
 export interface MemoryHit {

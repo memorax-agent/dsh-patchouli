@@ -2,7 +2,7 @@
 
 Patchouli 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地知识依赖。目标是在不要求模型发起 Tool Call 的前提下，按当前任务检索相关知识，并通过 Harness 原生、可记录的上下文链路注入模型请求。
 
-> 当前状态：已提供通用 Memory Service，以及面向官方 Agent Loop 的 Consumer MVP。Consumer 会对真实用户输入执行自动 `retrieve`，并注册主动 `memory_update` / `memory_retrieve` Tool；尚未接入具体记忆实现或数据库后端。
+> 当前状态：已提供通用 Memory Service，以及面向官方 Agent Loop 的 Consumer MVP。Consumer 会对真实用户输入执行自动 `retrieve`，注册主动 `memory_update` / `memory_retrieve` Tool，并可选择在成功提交一个 turn 后自动 `update`；尚未接入具体记忆实现或数据库后端。
 
 ## 设计方向
 
@@ -15,7 +15,7 @@ Patchouli 将以 monorepo 形式围绕四个边界逐步实现：
 
 数据库后端使用 Rust 实现，独立于 DeepSeek Harness；TypeScript 仅承担插件和客户端协议类型。
 
-当前 MVP 同时提供自动上下文注入和主动 Tool；后续再根据真实使用效果确定默认策略。详细约束见 [架构文档](docs/architecture.md)。
+当前 MVP 同时提供自动上下文注入和主动 Tool。自动 retrieve 默认开启，提交 turn 后的自动 update 默认关闭，后续再根据真实使用效果增加轮数、字符数和不活跃时间等策略。详细约束见 [架构文档](docs/architecture.md)。
 
 ## 环境要求
 
@@ -46,6 +46,17 @@ dsh --profile web --dump-config
 ```
 
 配置中应出现 `patchouli` 和 `patchouli-agent-loop` 两个插件行。未注册具体 Memory Plugin 时，自动召回不会注入内容，主动 Tool 会返回没有可用插件。
+
+官方 Agent Loop Consumer 支持以下配置：
+
+```yaml
+- id: patchouli-agent-loop
+  config:
+    autoRetrieve: true
+    autoUpdate: false
+```
+
+`autoUpdate` 开启后，Consumer 会在 `completed` 或 `max-tokens` 的 `turn/end` 已经写入 Session Log 后提交一次 update。它只采集直接用户消息和 assistant 的可见文本，不回灌插件上下文、reasoning、tool call 或 tool result。
 
 ## 仓库结构
 

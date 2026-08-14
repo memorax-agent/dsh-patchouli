@@ -53,9 +53,13 @@ The controller owns schemas, identity extraction, consistency selection, logical
 
 ### Agent Loop Consumer
 
-The Consumer is a separate `dsh-patchouli/agent-loop` Cordis plugin. It registers model-facing `memory_update` and `memory_retrieve` tools and listens to `agent/pre-step` for automatic retrieval. Tool scope is derived from the session working directory, falling back to the session id, rather than accepted from model input.
+The Consumer is a separate `dsh-patchouli/agent-loop` Cordis plugin. It registers model-facing `memory_update` and `memory_retrieve` tools, listens to `agent/pre-step` for automatic retrieval, and can observe committed `session/event` turn boundaries for automatic update. Scope is derived from the session working directory, falling back to the session id, rather than accepted from model input.
 
 The retrieval Hook calls `next()`, extracts text only from directly sourced user messages, retrieves through the common service, and appends one plugin-sourced recall message to the returned decision. Tool continuations, rejected steps, empty results, and retrieval failures inject nothing.
+
+Automatic update is opt-in. A `completed` or `max-tokens` `turn/end` is the post-commit boundary; the Consumer reconstructs that bracket from the canonical Session Log and submits direct-user plus assistant text once. Plugin-injected user context, reasoning, tool calls, and tool results are excluded. Updates are serialized per live Session, failures do not affect the Agent Loop, and Consumer disposal aborts and drains admitted work.
+
+Every call includes normalized Consumer metadata identifying the official Agent Loop, the trigger (`manual-tool`, `pre-step`, or `turn-end`), and the available session/turn/step position. Concrete Memory Plugins therefore do not depend on Agent or Session objects.
 
 The injected message must be:
 
@@ -67,7 +71,7 @@ The injected message must be:
 
 ## MVP model interface
 
-The current Consumer enables automatic retrieval and also exposes explicit update/retrieve tools. Whether automatic retrieval remains enabled by default is intentionally deferred until the end-to-end MemoraX path can be evaluated.
+The current Consumer enables automatic retrieval and exposes explicit update/retrieve tools. Automatic retrieval defaults on; committed-turn automatic update defaults off. Additional turn-count, character-count, and inactivity policies remain separate follow-up work rather than provider-specific behavior in the common frontend.
 
 ## Initial delivery sequence
 
