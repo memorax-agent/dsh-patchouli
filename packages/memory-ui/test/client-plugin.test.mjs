@@ -3,18 +3,21 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-const memoryRoot = '../packages/memory-ui/src/client/'
+const memoryRoot = '../src/client/'
 
 test('declares a self-contained DSH web client bundle', async () => {
+  assert.equal(packageJson.dsh.plugin.schemaVersion, 1)
+  assert.equal(packageJson.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(packageJson.exports['./package.json'], './package.json')
   assert.equal(packageJson.exports['./client'].default, './lib/client.js')
   assert.equal(packageJson.dsh.client.platform, 'web')
+  assert.ok(packageJson.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-primitives'))
   assert.ok(packageJson.dsh.client.inject.includes('@ch4acko3/dsh-ui-container'))
   assert.ok(packageJson.dsh.client.inject.includes('@ch4acko3/dsh-ui-workspace'))
 
   const bundle = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   assert.match(bundle, /window\.__ModuleLoader__\.load/)
-  assert.match(bundle, /id:\s*["']dsh-patchouli["']/)
+  assert.match(bundle, /id:\s*["']@memorax-agent\/dsh-memory-ui["']/)
   assert.doesNotMatch(bundle, /require\(["']@memorax-agent\//)
   assert.match(bundle, /require\(["']@ch4acko3\/dsh-ui-container\/client["']\)/)
   assert.match(bundle, /require\(["']@ch4acko3\/dsh-ui-workspace\/client["']\)/)
@@ -30,20 +33,13 @@ test('mounts the memory page inside recursive visual surface boundaries', async 
 })
 
 test('consumes the container and Workspace without taking ownership of them', async () => {
-  const entry = await readFile(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
   const memory = await readFile(new URL(`${memoryRoot}index.tsx`, import.meta.url), 'utf8')
-  const memoryPackage = JSON.parse(await readFile(
-    new URL('../packages/memory-ui/package.json', import.meta.url),
-    'utf8',
-  ))
 
   assert.equal(packageJson.peerDependencies['@ch4acko3/dsh-ui-container'], '^0.1.0')
   assert.equal(packageJson.peerDependencies['@ch4acko3/dsh-ui-workspace'], '^0.1.0')
   assert.equal(packageJson.peerDependenciesMeta, undefined)
-  assert.equal(memoryPackage.peerDependenciesMeta, undefined)
   assert.match(packageJson.devDependencies['@ch4acko3/dsh-ui-container'], /github:CH4ACKO3\/dsh-ui-container#/)
   assert.match(packageJson.devDependencies['@ch4acko3/dsh-ui-workspace'], /github:CH4ACKO3\/dsh-ui-workspace#/)
-  assert.doesNotMatch(entry, /ctx\.plugin\(uiContainer\)/)
   assert.match(memory, /connectSurface\(\{ id: 'patchouli\.memory' \}\)/)
   assert.match(memory, /name: 'conversation\.view'/)
 })

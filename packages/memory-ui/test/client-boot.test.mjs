@@ -11,7 +11,7 @@ const packageRoots = [
   new URL('../', import.meta.url),
 ]
 
-test('boots prefetched UI bundles before Patchouli materialization', async () => {
+test('boots prefetched UI bundles before Memory UI materialization', async () => {
   const packages = await Promise.all(packageRoots.map(async (root) => ({
     root,
     manifest: JSON.parse(await readFile(new URL('package.json', root), 'utf8')),
@@ -54,19 +54,18 @@ test('boots prefetched UI bundles before Patchouli materialization', async () =>
   for (const pkg of packages.filter(({ manifest }) => manifest.dsh.client.immediately === true)) {
     await arrive(pkg)
   }
-  const patchouli = packages.find(({ manifest }) => manifest.name === 'dsh-patchouli')
-  assert.ok(patchouli)
-  await arrive(patchouli)
+  const memoryUi = packages.find(({ manifest }) => (
+    manifest.name === '@memorax-agent/dsh-memory-ui'
+  ))
+  assert.ok(memoryUi)
+  await arrive(memoryUi)
 
-  const plugin = materialize('dsh-patchouli')
-  const mounted = []
-  plugin.apply({ plugin(child) { mounted.push(child) } })
+  const plugin = materialize('@memorax-agent/dsh-memory-ui')
 
   assert.deepEqual([...factories.keys()], [
     '@ch4acko3/dsh-ui-container',
     '@ch4acko3/dsh-ui-workspace',
-    'dsh-patchouli',
+    '@memorax-agent/dsh-memory-ui',
   ])
-  assert.equal(mounted.length, 1)
-  assert.equal(mounted[0].name, '@memorax-agent/dsh-memory-ui')
+  assert.equal(plugin.name, '@memorax-agent/dsh-memory-ui')
 })

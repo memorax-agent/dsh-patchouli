@@ -10,10 +10,6 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./client": {
-      "types": "./lib/client/index.d.ts",
-      "default": "./lib/client.js"
-    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -23,75 +19,62 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "pnpm run build:client && pnpm run build:host && tsc -p packages/protocol/tsconfig.json",
-    "build:host": "tsc -p tsconfig.json",
-    "build:client": "tsdown --config-loader unrun && tsdown --config tsdown.client-types.config.ts --config-loader unrun",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p packages/protocol/tsconfig.json --noEmit",
-    "test": "pnpm run build && node --test test/*.test.mjs packages/*/test/*.test.mjs",
+    "build": "pnpm run build:host && pnpm --filter @memorax-agent/patchouli-protocol run build && pnpm --filter @memorax-agent/dsh-memory-ui run build",
+    "build:host": "pnpm run clean:host && tsc -p tsconfig.json",
+    "clean:host": "node --eval \"require('node:fs').rmSync('lib', { recursive: true, force: true })\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @memorax-agent/patchouli-protocol run typecheck && pnpm --filter @memorax-agent/dsh-memory-ui run typecheck",
+    "test": "pnpm run build && node --test",
     "check": "pnpm run typecheck && pnpm run test",
-    "prepare": "pnpm run build"
+    "prepare": "pnpm run build:host"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
   "packageManager": "pnpm@11.19.0",
   "dsh": {
+    "plugin": {
+      "schemaVersion": 1,
+      "displayName": {
+        "zh-CN": "Patchouli 知识服务",
+        "en": "Patchouli Knowledge Service"
+      },
+      "summary": {
+        "zh-CN": "为 DeepSeek Harness 提供本地知识检索与上下文注入服务。",
+        "en": "Provide local knowledge retrieval and context injection for DeepSeek Harness."
+      },
+      "category": "knowledge"
+    },
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-conversation",
-        "@ch4acko3/dsh-ui-container",
-        "@ch4acko3/dsh-ui-workspace"
-      ],
-      "platform": "web"
     }
   },
   "peerDependencies": {
-    "@ch4acko3/dsh-ui-container": "^0.1.0",
-    "@ch4acko3/dsh-ui-workspace": "^0.1.0",
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-locale": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-conversation": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
-    "react": "^18.2.0"
+    "@deepseek-ai/cordis": "^4.0.1"
   },
   "devDependencies": {
-    "@memorax-agent/dsh-memory-ui": "workspace:*",
-    "@ch4acko3/dsh-ui-container": "github:CH4ACKO3/dsh-ui-container#e0046c6f2eb684776d615297fdcf3f3321e64c3a",
-    "@ch4acko3/dsh-ui-workspace": "github:CH4ACKO3/dsh-ui-workspace#890a7602a31a65a5fdf0a3682c0d7bac2d1d21ce",
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-locale": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-conversation": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
-    "@types/react": "~18.3.1",
-    "@types/react-dom": "~18.3.0",
     "@types/node": "^24.0.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "tsdown": "0.22.14",
-    "typescript": "^6.0.3",
-    "unrun": "0.3.1"
+    "typescript": "^6.0.3"
   },
   "keywords": [
+    "deepseek",
     "deepseek-harness",
+    "deepseek-harness-plugin",
     "dsh",
     "dsh-plugin",
     "cordis",
     "knowledge",
-    "context"
+    "context",
+    "plugin"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/memorax-agent/dsh-patchouli.git"
+  },
+  "homepage": "https://github.com/memorax-agent/dsh-patchouli#readme",
+  "bugs": {
+    "url": "https://github.com/memorax-agent/dsh-patchouli/issues"
   },
   "publishConfig": {
     "access": "public"

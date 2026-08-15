@@ -31,24 +31,25 @@ pnpm check
 cargo test --workspace
 ```
 
-根插件和各 package 的构建产物位于各自的 `lib/`。生成可安装的 npm tarball：
+根插件和各 package 的构建产物位于各自的 `lib/`。各发布单元独立打包：
 
 ```bash
 pnpm pack
+pnpm --dir packages/memory-ui pack
+pnpm --dir packages/protocol pack
 ```
 
-在本地 DeepSeek Harness profile 中安装当前 checkout：
+在本地 DeepSeek Harness profile 中安装当前 checkout。Memory UI、Container 和 Workspace 都是独立插件，必须分别成为 profile 的直接依赖：
 
 ```bash
 dsh plugin --profile web add github:CH4ACKO3/dsh-ui-container
 dsh plugin --profile web add github:CH4ACKO3/dsh-ui-workspace
+dsh plugin --profile web add ./packages/memory-ui
 dsh plugin --profile web add .
 dsh --profile web --dump-config
 ```
 
-三个客户端 bundle 都是运行时必需项，必须安装在同一个 profile；缺少 Container 或
-Workspace 时 Patchouli 会拒绝安装或保持未激活。配置中应各出现一个对应插件行。
-当前插件不会向模型注入任何内容。
+GitHub URL 只能安装仓库根 package，不能定位到 workspace 子包；发布后可把本地路径替换为 `@memorax-agent/dsh-memory-ui`。根知识服务和 Memory UI 独立安装、独立版本化，当前根插件不会向模型注入任何内容。完整约定见 [package 与插件规范](docs/packages.md)。
 
 浏览器端分为 UI 容器、Workspace 预设和记忆前端。容器通过 Cordis 的
 `uiContainer` service 接受多个具名 surface；每个前端取得隔离的
@@ -79,9 +80,9 @@ Patchouli 以 `patchouli.memory` surface 接入，用 Workspace 模板组装页�
 ├── crates/
 │   └── backend/              # Rust 数据库后端核心
 ├── packages/
-│   ├── memory-ui/            # Patchouli 记忆前端与 Harness 会话视图
-│   └── protocol/             # 与 Harness 无关的数据库 JSON-RPC 契约
-├── src/                      # Cordis 插件源码
+│   ├── memory-ui/            # 独立 DSH Web 插件
+│   └── protocol/             # 普通库：Harness 无关的 JSON-RPC 契约
+├── src/                      # 根知识服务插件源码
 ├── test/                     # 最小契约测试
 ├── cordis.patch.yml          # DeepSeek Harness bundle 配置层
 ├── package.json
@@ -96,7 +97,7 @@ Patchouli 以 `patchouli.memory` surface 接入，用 Workspace 模板组装页�
 ## CI 与交付
 
 - Pull Request 和普通分支提交在 GitHub-hosted runner 上执行安装、类型检查、构建和测试。
-- `main` 分支提交或手动运行工作流时，在仓库已注册的 `self-hosted` runner 上构建 npm tarball，并上传为 Actions artifact。
+- `main` 分支提交或手动运行工作流时，在仓库已注册的 `self-hosted` runner 上分别打包根插件、Memory UI 和协议库，并作为同一个 Actions artifact 上传。
 - 自动安装到服务器上的某个 DSH profile 尚未启用；需要先确定目标 profile、持久部署目录和回滚方式。
 
 开发约定见 [docs/development.md](docs/development.md) 和 [CONTRIBUTING.md](CONTRIBUTING.md)。

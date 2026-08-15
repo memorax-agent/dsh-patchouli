@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsdown'
 
 const moduleHeader = `window.__ModuleLoader__.load({
-  id: "dsh-patchouli",
+  id: "@memorax-agent/dsh-memory-ui",
   factory: (require) => {
     const module = { exports: {} };
     const exports = module.exports;`
@@ -16,9 +16,6 @@ export default defineConfig({
   format: 'cjs',
   platform: 'browser',
   target: 'es2023',
-  deps: {
-    alwaysBundle: [/^@memorax-agent\//],
-  },
   outDir: 'lib',
   clean: true,
   fixedExtension: false,

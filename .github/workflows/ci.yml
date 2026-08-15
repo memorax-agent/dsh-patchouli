@@ -76,17 +76,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build packages
+        run: pnpm build
+
       - name: Create artifact directory
         run: |
           node --eval "require('node:fs').mkdirSync('artifacts', { recursive: true })"
 
-      - name: Pack plugin
-        run: pnpm pack --pack-destination artifacts
+      - name: Pack publishable packages
+        run: |
+          pnpm pack --pack-destination artifacts
+          pnpm --dir packages/memory-ui pack --pack-destination ../../artifacts
+          pnpm --dir packages/protocol pack --pack-destination ../../artifacts
 
-      - name: Upload plugin package
+      - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-patchouli-${{ github.sha }}
+          name: patchouli-packages-${{ github.sha }}
           path: artifacts/*.tgz
           if-no-files-found: error
           retention-days: 14

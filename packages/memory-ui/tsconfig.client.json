@@ -14,8 +14,6 @@
   },
   "include": [
     "src/client/**/*.ts",
-    "src/client/**/*.tsx",
-    "packages/memory-ui/src/client/**/*.ts",
-    "packages/memory-ui/src/client/**/*.tsx"
+    "src/client/**/*.tsx"
   ]
 }

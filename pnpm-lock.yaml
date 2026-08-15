@@ -8,6 +8,18 @@ importers:
 
   .:
     devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.1
+        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  packages/memory-ui:
+    devDependencies:
       '@ch4acko3/dsh-ui-container':
         specifier: github:CH4ACKO3/dsh-ui-container#e0046c6f2eb684776d615297fdcf3f3321e64c3a
         version: https://codeload.github.com/CH4ACKO3/dsh-ui-container/tar.gz/e0046c6f2eb684776d615297fdcf3f3321e64c3a(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-client-runtime@0.1.0-rc.6(5ee287bd07c00b3171c7ee342e9431a4))(react@18.3.1)
@@ -32,12 +44,6 @@ importers:
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: 0.1.0-rc.6
         version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
-      '@memorax-agent/dsh-memory-ui':
-        specifier: workspace:*
-        version: link:packages/memory-ui
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
@@ -59,37 +65,6 @@ importers:
       unrun:
         specifier: 0.3.1
         version: 0.3.1
-
-  packages/memory-ui:
-    dependencies:
-      '@deepseek-ai/cordis':
-        specifier: ^4.0.1
-        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
-      '@deepseek-ai/dsh-client-locale':
-        specifier: 0.1.0-rc.6
-        version: 0.1.0-rc.6(9e8db6c5abfb5dfda585a92ec8fe7fec)
-      '@deepseek-ai/dsh-client-runtime':
-        specifier: 0.1.0-rc.6
-        version: 0.1.0-rc.6(5ee287bd07c00b3171c7ee342e9431a4)
-      '@deepseek-ai/dsh-client-ui-conversation':
-        specifier: 0.1.0-rc.6
-        version: 0.1.0-rc.6(d29c9974ac2869171d8d115d6553c6f8)
-      '@deepseek-ai/dsh-client-ui-primitives':
-        specifier: 0.1.0-rc.6
-        version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
-      '@deepseek-ai/dsh-client-ui-slots':
-        specifier: 0.1.0-rc.6
-        version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
-      react:
-        specifier: ^18.2.0
-        version: 18.3.1
-    devDependencies:
-      '@ch4acko3/dsh-ui-container':
-        specifier: github:CH4ACKO3/dsh-ui-container#e0046c6f2eb684776d615297fdcf3f3321e64c3a
-        version: https://codeload.github.com/CH4ACKO3/dsh-ui-container/tar.gz/e0046c6f2eb684776d615297fdcf3f3321e64c3a(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-client-runtime@0.1.0-rc.6(5ee287bd07c00b3171c7ee342e9431a4))(react@18.3.1)
-      '@ch4acko3/dsh-ui-workspace':
-        specifier: github:CH4ACKO3/dsh-ui-workspace#890a7602a31a65a5fdf0a3682c0d7bac2d1d21ce
-        version: https://codeload.github.com/CH4ACKO3/dsh-ui-workspace/tar.gz/890a7602a31a65a5fdf0a3682c0d7bac2d1d21ce(@ch4acko3/dsh-ui-container@https://codeload.github.com/CH4ACKO3/dsh-ui-container/tar.gz/e0046c6f2eb684776d615297fdcf3f3321e64c3a(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-client-runtime@0.1.0-rc.6(5ee287bd07c00b3171c7ee342e9431a4))(react@18.3.1))(@deepseek-ai/dsh-client-runtime@0.1.0-rc.6(5ee287bd07c00b3171c7ee342e9431a4))(@deepseek-ai/dsh-client-ui-primitives@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(react@18.3.1)
 
   packages/protocol:
     devDependencies:

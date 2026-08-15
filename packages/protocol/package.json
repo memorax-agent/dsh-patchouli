@@ -9,7 +9,8 @@
     ".": {
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "lib",
@@ -30,6 +31,14 @@
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
+  "packageManager": "pnpm@11.19.0",
+  "keywords": [
+    "json-rpc",
+    "knowledge",
+    "memory",
+    "patchouli",
+    "protocol"
+  ],
   "publishConfig": {
     "access": "public"
   },
@@ -38,5 +47,9 @@
     "type": "git",
     "url": "git+https://github.com/memorax-agent/dsh-patchouli.git",
     "directory": "packages/protocol"
+  },
+  "homepage": "https://github.com/memorax-agent/dsh-patchouli/tree/main/packages/protocol#readme",
+  "bugs": {
+    "url": "https://github.com/memorax-agent/dsh-patchouli/issues"
   }
 }
