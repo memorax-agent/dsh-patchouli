@@ -3,7 +3,7 @@
 Patchouli 同时提供与 Harness 无关的知识存储后端，以及面向
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的通用记忆前端。具体记忆插件通过统一的 `update` / `retrieve` 接口接入；官方 Agent Loop Consumer 决定何时调用这些接口，本地存储型插件还可以按需连接 Patchouli daemon。
 
-> 当前状态：Rust 后端已经实现类型化知识、事务、冲突解决、通用检索、cursor 变更订阅、SQLite/远程 provider 路由和 daemon 生命周期；DSH 侧已经实现通用 Memory Service、主动 Tool、自动 retrieve 和可选的 turn-end 自动 update。尚未提供具体 MemoryPlugin，TypeScript storage client 也尚未桥接 entity retrieve 和响应式订阅。
+> 当前状态：Rust 后端已经实现类型化知识、事务、冲突解决、通用检索、cursor 变更订阅、SQLite/远程 provider 路由和 daemon 生命周期；DSH 侧已经实现通用 Memory Service、主动 Tool、自动 retrieve、可选的 turn-end 自动 update，以及 TypeScript storage client 的 entity retrieve 和响应式订阅。尚未提供具体 MemoryPlugin。
 
 ## 架构边界
 
@@ -66,7 +66,7 @@ cp config/providers.local.json "$HOME/.patchouli/providers.json"
     autoStart: true
 ```
 
-storage client 当前提供 `status`、`checkpoint` 和实体 `create/read/update/delete`。后端协议已经支持 `entity.retrieve`、`changes.subscribe`、`changes.unsubscribe` 和 change notification，对应的 TypeScript 响应式桥接仍是后续工作。
+storage client 当前提供 `status`、`checkpoint`、实体 `create/read/retrieve/update/delete`，以及带 handler 的 `subscribe` / `unsubscribe`。handler 按 wire 顺序触发；调用方负责 cursor 幂等与所需的异步串行，并应显式取消订阅。断连或 storage plugin 卸载时，连接上的 handler 会统一清理。
 
 ## 本地开发
 

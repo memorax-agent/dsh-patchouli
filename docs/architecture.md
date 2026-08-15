@@ -11,8 +11,8 @@ Patchouli currently combines two implemented surfaces:
 - a DSH common Memory Service plus an MVP Consumer for the official Agent Loop.
 
 Concrete Memory Plugins are not implemented yet. The optional TypeScript
-storage client exposes control and CRUD, but does not yet bridge entity
-retrieval or change subscriptions from the backend protocol.
+storage client exposes control, CRUD, entity retrieval, and cursor-based change
+subscriptions from the backend protocol.
 
 ## Goal
 
@@ -94,10 +94,12 @@ daemon, and may start one when the configured endpoint is unavailable. It is
 not part of the default bundle, so remote-only MemoryPlugins do not require a
 local daemon.
 
-The client currently exposes status, checkpoint, and generic entity
-create/read/update/delete. The backend protocol also implements entity retrieve
-and cursor-based change subscriptions, but the TypeScript client does not yet
-expose those methods or dispatch `patchouli.changes.event@1` notifications.
+The client exposes status, checkpoint, generic entity create/read/retrieve/
+update/delete, and cursor-based subscriptions. A caller registers one handler
+per subscription; the client dispatches `patchouli.changes.event@1`
+notifications to it and removes the handler after unsubscribe or disconnect.
+Callers own cursor deduplication, async application ordering, and explicit
+unsubscribe during their own lifecycle.
 
 The daemon remains independent of plugin lifecycle: unloading the storage
 plugin closes its IPC connection but does not administratively stop the daemon.
@@ -169,14 +171,13 @@ Completed:
 2. Official Agent Loop Consumer with Hook and Tool paths.
 3. Harness-neutral storage protocol, transactional daemon, retrieval, change
    stream, and local/remote providers.
-4. Optional TypeScript control and CRUD client.
+4. Optional TypeScript control, CRUD, retrieval, and change-subscription client.
 
 Next:
 
 1. A MemoraX MemoryPlugin working end to end through the common service.
 2. A local storage-backed MemoryPlugin.
-3. TypeScript entity retrieve and change-subscription bridging.
-4. Operational memory surfaces such as inspection and rebuild.
+3. Operational memory surfaces such as inspection and rebuild.
 
 The root package is the DSH frontend bundle. Rust backend crates live under
 `crates/`, and only `packages/protocol` is a Harness-neutral TypeScript package.

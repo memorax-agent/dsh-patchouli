@@ -112,8 +112,10 @@ storage-backed MemoryPlugin:
     autoStart: true
 ```
 
-The current TypeScript storage client covers control and CRUD. Entity retrieve
-and change-subscription notification handling remain follow-up frontend work.
+The TypeScript storage client covers control, CRUD, entity retrieval, and
+cursor-based change subscriptions. Subscription callers register a handler,
+persist and deduplicate cursors as needed, and explicitly unsubscribe when their
+own lifecycle ends.
 
 ## CI policy
 
