@@ -111,11 +111,13 @@ impl BackendEngine {
         validate_provider_capabilities(&config, provider.capabilities())?;
         let recovery = provider.initialize().await?;
         if let Err(health_error) = provider.health_check().await {
+            let reason = health_error.reason();
             return match provider.shutdown().await {
                 Ok(()) => Err(EngineError::Provider(health_error)),
-                Err(shutdown_error) => Err(EngineError::Provider(ProviderError::new(format!(
-                    "{health_error}; provider cleanup also failed: {shutdown_error}"
-                )))),
+                Err(shutdown_error) => Err(EngineError::Provider(ProviderError::with_reason(
+                    reason,
+                    format!("{health_error}; provider cleanup also failed: {shutdown_error}"),
+                ))),
             };
         }
         let selector = PolicySelector::new(config.clone());
@@ -1617,7 +1619,9 @@ fn conflict_backend_error(error: crate::ConflictError) -> BackendError {
 
 fn provider_backend_error(error: ProviderError) -> BackendError {
     let reason = match error.reason() {
-        ProviderErrorReason::Internal => BackendErrorReason::Overloaded,
+        ProviderErrorReason::Internal
+        | ProviderErrorReason::Unauthenticated
+        | ProviderErrorReason::Unavailable => BackendErrorReason::Overloaded,
         ProviderErrorReason::DeadlineExceeded => BackendErrorReason::DeadlineExceeded,
     };
     BackendError::new(reason, error.to_string())

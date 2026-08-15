@@ -40,26 +40,34 @@ cargo test --workspace
 
 默认数据库 scope 是 `workspace_id + user_id`，所以知识可以跨 channel 复用；`channel_id` 仅作为会话控制 metadata。
 
-先安装 daemon/CLI：
+推荐从 GitHub Release 安装预编译 daemon/CLI。macOS 和 Linux：
 
 ```bash
-cargo install --path crates/server
+curl -fsSL https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.sh | sh
 ```
 
-将 backend policy 放到插件的默认配置位置：
+Windows PowerShell：
+
+```powershell
+irm https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.ps1 | iex
+```
+
+安装脚本校验 Release SHA-256，在用户目录安装二进制，并执行
+`patchouli-db init --root ~/.patchouli`。已有配置不会被覆盖。也可以从源码安装：
 
 ```bash
-mkdir -p "$HOME/.patchouli"
-cp config/patchouli.default.json "$HOME/.patchouli/config.json"
-cp config/providers.local.json "$HOME/.patchouli/providers.json"
+cargo install --locked --git https://github.com/memorax-agent/dsh-patchouli \
+  --package patchouli-server
+patchouli-db init --root "$HOME/.patchouli"
 ```
 
-daemon 通过 `patchouli serve` 同时加载业务 policy 和 provider/routing 配置。
+daemon 通过 `patchouli-db serve` 同时加载业务 policy 和 provider/routing 配置。
 `providers.json` 中唯一的本地 provider 固定命名为 `local`，相对数据库路径以该文件目录为基准。
-它由 `patchouli stop --endpoint <endpoint>`
+它由 `patchouli-db stop --endpoint <endpoint>`
 显式停止。运行期间可用
-`patchouli checkpoint --endpoint <endpoint>` 主动执行一次 WAL checkpoint。详细的三平台命令见
+`patchouli-db checkpoint --endpoint <endpoint>` 主动执行一次 WAL checkpoint。详细的三平台命令见
 [开发文档](docs/development.md)。
+完整的平台、升级和卸载说明见[安装文档](docs/installation.md)。
 
 ## 仓库结构
 

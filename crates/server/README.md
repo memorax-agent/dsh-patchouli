@@ -15,13 +15,19 @@ Local transports:
 
 ```bash
 cargo install --path crates/server
-patchouli serve --endpoint <endpoint> --providers <provider-config> --config <policy-path>
-patchouli provide --listen 127.0.0.1:8080 --database <path> --token-env PATCHOULI_PROVIDER_TOKEN
-patchouli status --endpoint <endpoint>
-patchouli checkpoint --endpoint <endpoint>
-patchouli stop --endpoint <endpoint>
-patchouli config check config/patchouli.default.json --providers config/providers.local.json
+patchouli-db init --root "$HOME/.patchouli"
+patchouli-db serve --endpoint <endpoint> --providers <provider-config> --config <policy-path>
+patchouli-db provide --listen 127.0.0.1:8080 --database <path> --token-env PATCHOULI_PROVIDER_TOKEN
+patchouli-db status --endpoint <endpoint>
+patchouli-db checkpoint --endpoint <endpoint>
+patchouli-db stop --endpoint <endpoint>
+patchouli-db config check config/patchouli.default.json --providers config/providers.local.json
 ```
+
+Release installation and supported architectures are documented in
+[`docs/installation.md`](../../docs/installation.md). `init` creates the data
+and run directories plus validated default policy/provider files, and never
+overwrites an existing file.
 
 The server library accepts the provider contract rather than a SQLite
 connection. The shipped CLI always names its local SQLite provider `local`, may
@@ -38,7 +44,7 @@ and exposes subscribe/unsubscribe operations without depending on Harness.
 unclean shutdown. On `stop`, the daemon stops accepting clients, signals and
 drains connection tasks, then shuts down the engine and provider.
 
-`patchouli provide` owns one SQLite authority and exposes provider primitives.
+`patchouli-db provide` owns one SQLite authority and exposes provider primitives.
 Read its bearer token only from the named environment variable. Bind it to
 loopback behind an HTTPS reverse proxy for remote access; non-loopback remote
 clients reject cleartext HTTP.

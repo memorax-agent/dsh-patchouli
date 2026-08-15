@@ -146,19 +146,30 @@ impl Provider for RoutingProvider {
             generation: 0,
             recovered_after_unclean_shutdown: false,
         };
-        for provider in self.providers.values() {
+        for (name, provider) in &self.providers {
             match provider.initialize().await {
                 Ok(current) => {
                     recovery.generation = recovery.generation.max(current.generation);
                     recovery.recovered_after_unclean_shutdown |=
                         current.recovered_after_unclean_shutdown;
-                    initialized.push(Arc::clone(provider));
+                    initialized.push((name.as_str(), Arc::clone(provider)));
                 }
                 Err(error) => {
-                    for provider in initialized.into_iter().rev() {
-                        let _ = provider.shutdown().await;
+                    let reason = error.reason();
+                    let mut message = format!("provider {name:?} initialization failed: {error}");
+                    let mut cleanup_errors = Vec::new();
+                    for (initialized_name, provider) in initialized.into_iter().rev() {
+                        if let Err(error) = provider.shutdown().await {
+                            cleanup_errors.push(format!(
+                                "provider {initialized_name:?} shutdown failed: {error}"
+                            ));
+                        }
                     }
-                    return Err(error);
+                    if !cleanup_errors.is_empty() {
+                        message.push_str("; initialization rollback also failed: ");
+                        message.push_str(&cleanup_errors.join("; "));
+                    }
+                    return Err(ProviderError::with_reason(reason, message));
                 }
             }
         }
@@ -166,8 +177,11 @@ impl Provider for RoutingProvider {
     }
 
     async fn health_check(&self) -> Result<(), ProviderError> {
-        for provider in self.providers.values() {
-            provider.health_check().await?;
+        for (name, provider) in &self.providers {
+            provider
+                .health_check()
+                .await
+                .map_err(|error| error.context(format!("provider {name:?} health check failed")))?;
         }
         Ok(())
     }
@@ -313,21 +327,27 @@ impl Provider for RoutingProvider {
     }
 
     async fn checkpoint(&self) -> Result<(), ProviderError> {
-        for provider in self.providers.values() {
-            provider.checkpoint().await?;
+        for (name, provider) in &self.providers {
+            provider
+                .checkpoint()
+                .await
+                .map_err(|error| error.context(format!("provider {name:?} checkpoint failed")))?;
         }
         Ok(())
     }
 
     async fn shutdown(&self) -> Result<(), ProviderError> {
-        let mut first_error = None;
-        for provider in self.providers.values().rev() {
-            if let Err(error) = provider.shutdown().await
-                && first_error.is_none()
-            {
-                first_error = Some(error);
+        let mut reason = None;
+        let mut errors = Vec::new();
+        for (name, provider) in self.providers.iter().rev() {
+            if let Err(error) = provider.shutdown().await {
+                reason.get_or_insert(error.reason());
+                errors.push(format!("provider {name:?} shutdown failed: {error}"));
             }
         }
-        first_error.map_or(Ok(()), Err)
+        match reason {
+            Some(reason) => Err(ProviderError::with_reason(reason, errors.join("; "))),
+            None => Ok(()),
+        }
     }
 }

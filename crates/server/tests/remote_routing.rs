@@ -22,10 +22,12 @@ async fn backend_routes_one_scope_to_a_remote_storage_node() {
             .unwrap(),
     );
     let recovery = remote_storage.initialize().await.unwrap();
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let app = remote_provider_router(
         Arc::clone(&remote_storage),
         "routing-secret".to_owned(),
         recovery,
+        shutdown_rx,
     )
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -1,8 +1,10 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use async_trait::async_trait;
 use patchouli_provider::{
-    EntityCommit, EntityCommitOutcome, EntityKey, Provider, StoredChangeKind, StoredEntityVersion,
-    StoredVersionState,
+    EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot, Provider, ProviderError,
+    ProviderRecovery, StoredChangeKind, StoredEntityVersion, StoredVersionState, WorkUnit,
+    WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitPublish, WorkUnitReadOutcome,
 };
 use patchouli_provider_router::{RoutingProvider, ScopeRoute};
 use patchouli_provider_sqlite::SqliteProvider;
@@ -57,6 +59,125 @@ async fn routes_each_scope_to_one_provider() {
     assert!(remote.read_entity(&remote_key).await.unwrap().is_some());
     assert!(remote.read_entity(&local_key).await.unwrap().is_none());
     router.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn lifecycle_errors_identify_the_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let local: Arc<dyn Provider> = Arc::new(
+        SqliteProvider::open(directory.path().join("local.db"))
+            .await
+            .unwrap(),
+    );
+    let shared: Arc<dyn Provider> = Arc::new(
+        SqliteProvider::open(directory.path().join("shared.db"))
+            .await
+            .unwrap(),
+    );
+    let router = RoutingProvider::new(
+        BTreeMap::from([
+            ("local".to_owned(), Arc::clone(&local)),
+            ("shared".to_owned(), Arc::clone(&shared)),
+        ]),
+        "local".to_owned(),
+        Vec::new(),
+    )
+    .unwrap();
+    router.initialize().await.unwrap();
+    shared.shutdown().await.unwrap();
+
+    let health = router.health_check().await.unwrap_err();
+    assert!(
+        health
+            .to_string()
+            .contains("provider \"shared\" health check failed")
+    );
+    let checkpoint = router.checkpoint().await.unwrap_err();
+    assert!(
+        checkpoint
+            .to_string()
+            .contains("provider \"shared\" checkpoint failed")
+    );
+    router.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_errors_identify_the_provider() {
+    let provider: Arc<dyn Provider> = Arc::new(FailingShutdownProvider);
+    let router = RoutingProvider::new(
+        BTreeMap::from([("broken".to_owned(), provider)]),
+        "broken".to_owned(),
+        Vec::new(),
+    )
+    .unwrap();
+
+    let error = router.shutdown().await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("provider \"broken\" shutdown failed")
+    );
+}
+
+struct FailingShutdownProvider;
+
+#[async_trait]
+impl Provider for FailingShutdownProvider {
+    fn kind(&self) -> &'static str {
+        "test"
+    }
+
+    async fn initialize(&self) -> Result<ProviderRecovery, ProviderError> {
+        Ok(ProviderRecovery {
+            generation: 0,
+            recovered_after_unclean_shutdown: false,
+        })
+    }
+
+    async fn health_check(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
+    async fn read_entity(&self, _key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+        unreachable!()
+    }
+
+    async fn commit_entity(
+        &self,
+        _commit: EntityCommit,
+    ) -> Result<EntityCommitOutcome, ProviderError> {
+        unreachable!()
+    }
+
+    async fn read_entity_in_work_unit(
+        &self,
+        _work_unit: &WorkUnit,
+        _key: &EntityKey,
+    ) -> Result<WorkUnitReadOutcome, ProviderError> {
+        unreachable!()
+    }
+
+    async fn commit_entity_in_work_unit(
+        &self,
+        _commit: WorkUnitCommit,
+    ) -> Result<WorkUnitCommitOutcome, ProviderError> {
+        unreachable!()
+    }
+
+    async fn publish_work_unit(
+        &self,
+        _publish: WorkUnitPublish,
+    ) -> Result<WorkUnitCommitOutcome, ProviderError> {
+        unreachable!()
+    }
+
+    async fn checkpoint(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
+    async fn shutdown(&self) -> Result<(), ProviderError> {
+        Err(ProviderError::new("test shutdown failure"))
+    }
 }
 
 fn key(workspace: &str, id: &str) -> EntityKey {

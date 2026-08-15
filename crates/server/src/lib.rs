@@ -63,8 +63,11 @@ pub enum IpcError {
     ResponseIdMismatch,
     #[error("backend engine lifecycle failed: {0}")]
     Engine(#[from] EngineError),
-    #[error("connection task failed: {0}")]
-    Task(#[from] JoinError),
+    #[error("{operation}; backend shutdown also failed: {shutdown}")]
+    ShutdownAfterError {
+        operation: Box<IpcError>,
+        shutdown: EngineError,
+    },
 }
 
 pub struct LocalServer {
@@ -96,7 +99,9 @@ impl LocalServer {
     pub async fn run(mut self) -> Result<(), IpcError> {
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let mut connections = JoinSet::new();
-        let mut result = loop {
+        let shutdown = shutdown_signal();
+        tokio::pin!(shutdown);
+        let result = loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
                     match accepted {
@@ -118,22 +123,66 @@ impl LocalServer {
                         break Ok(());
                     }
                 }
-                interrupt = tokio::signal::ctrl_c() => break interrupt.map_err(IpcError::Io),
+                joined = connections.join_next(), if !connections.is_empty() => {
+                    report_connection_result(joined.expect("non-empty JoinSet must yield a task"));
+                }
+                signal = &mut shutdown => break signal.map_err(IpcError::Io),
             }
         };
 
         let _ = self.shutdown_tx.send(true);
         while let Some(joined) = connections.join_next().await {
-            if let Err(error) = joined
-                && result.is_ok()
-            {
-                result = Err(IpcError::Task(error));
-            }
+            report_connection_result(joined);
         }
-        let shutdown = self.engine.shutdown().await.map_err(IpcError::Engine);
-        result?;
-        shutdown
+        let shutdown = self.engine.shutdown().await;
+        match (result, shutdown) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(IpcError::Engine(error)),
+            (Err(operation), Err(shutdown)) => Err(IpcError::ShutdownAfterError {
+                operation: Box::new(operation),
+                shutdown,
+            }),
+        }
     }
+}
+
+fn report_connection_result(result: Result<Result<(), IpcError>, JoinError>) {
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!("Patchouli connection closed with error: {error}"),
+        Err(error) => eprintln!("Patchouli connection task failed: {error}"),
+    }
+}
+
+pub async fn shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            _ = terminate.recv() => {},
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        let mut break_signal = tokio::signal::windows::ctrl_break()?;
+        let mut close_signal = tokio::signal::windows::ctrl_close()?;
+        let mut shutdown_signal = tokio::signal::windows::ctrl_shutdown()?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            _ = break_signal.recv() => {},
+            _ = close_signal.recv() => {},
+            _ = shutdown_signal.recv() => {},
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    tokio::signal::ctrl_c().await
 }
 
 struct ConnectionState {

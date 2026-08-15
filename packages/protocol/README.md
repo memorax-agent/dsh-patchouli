@@ -17,7 +17,7 @@ identities against the OpenRPC document.
 
 Version 1 contains:
 
-- generic entity create, read, update, and delete methods;
+- generic entity create, read, retrieve, update, and delete methods;
 - an open `meta` envelope plus strict CRUD business data;
 - configuration-selected preconditions, consistency, causal metadata, and an
   optional conflict-strategy request;
@@ -39,6 +39,7 @@ patchouli.control.checkpoint@1
 patchouli.control.shutdown@1
 patchouli.entity.create@1
 patchouli.entity.read@1
+patchouli.entity.retrieve@1
 patchouli.entity.update@1
 patchouli.entity.delete@1
 patchouli.changes.subscribe@1

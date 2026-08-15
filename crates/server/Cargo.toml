@@ -8,7 +8,7 @@ repository.workspace = true
 publish = false
 
 [[bin]]
-name = "patchouli"
+name = "patchouli-db"
 path = "src/main.rs"
 required-features = ["sqlite"]
 
@@ -32,4 +32,6 @@ tokio.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+jsonschema.workspace = true
+reqwest.workspace = true
 tempfile = "3"

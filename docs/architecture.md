@@ -107,7 +107,11 @@ The frontend-owned Cordis plugin may register `ctx.patchouli`, connect to an exi
 daemon, and optionally starts one when the configured endpoint is unavailable.
 The daemon remains independent of the plugin lifecycle: unloading the plugin
 closes its IPC connection but does not stop the daemon. Administrative shutdown
-goes through the `patchouli stop` CLI.
+goes through the `patchouli-db stop` CLI.
+
+For a routed provider, control status reports the maximum recovery generation
+and marks recovery after an unclean shutdown when any configured provider
+reports one. Lifecycle errors always identify the provider that failed.
 
 The IPC framing and JSON-RPC dispatcher are shared across platforms:
 

@@ -18,8 +18,10 @@ use patchouli_provider::{
 use reqwest::{Client, Url, redirect::Policy};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use subtle::ConstantTimeEq;
+use tokio::sync::watch;
 
-const REMOTE_PROVIDER_PROTOCOL: u16 = 1;
+// Bump this whenever a serialized provider call, reply, info, or error shape changes.
+const REMOTE_PROVIDER_PROTOCOL: u16 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteProviderInfo {
@@ -51,12 +53,17 @@ impl RemoteProvider {
         let client = Client::builder()
             .redirect(Policy::none())
             .build()
-            .map_err(remote_error)?;
+            .map_err(|error| transport_error("build HTTP client", endpoint.as_str(), error))?;
+        let info_url = endpoint
+            .join("info")
+            .map_err(|error| endpoint_error("provider info", &endpoint, error))?;
         let info: RemoteProviderInfo = send(
             client
-                .get(endpoint.join("info").map_err(remote_error)?)
+                .get(info_url.clone())
                 .timeout(Duration::from_secs(30)),
             &token,
+            "fetch provider info",
+            info_url.as_str(),
         )
         .await?;
         if info.protocol != REMOTE_PROVIDER_PROTOCOL {
@@ -83,19 +90,23 @@ impl RemoteProvider {
         call: ProviderCall,
         timeout: Option<Duration>,
     ) -> Result<ProviderReply, ProviderError> {
-        let mut request = self
-            .client
-            .post(self.endpoint.join("call").map_err(remote_error)?)
-            .json(&call);
+        let operation = call.operation();
+        let call_url = self
+            .endpoint
+            .join("call")
+            .map_err(|error| endpoint_error(operation, &self.endpoint, error))?;
+        let mut request = self.client.post(call_url.clone()).json(&call);
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-        send(request, &self.token).await
+        send(request, &self.token, operation, call_url.as_str()).await
     }
 }
 
 fn normalize_endpoint(endpoint: &str) -> Result<Url, ProviderError> {
-    let mut url = Url::parse(endpoint).map_err(remote_error)?;
+    let mut url = Url::parse(endpoint).map_err(|error| {
+        ProviderError::new(format!("invalid remote provider endpoint: {error}"))
+    })?;
     match url.scheme() {
         "https" => {}
         "http" if url.host_str().is_some_and(is_loopback_host) => {}
@@ -109,7 +120,9 @@ fn normalize_endpoint(endpoint: &str) -> Result<Url, ProviderError> {
         let path = format!("{}/", url.path());
         url.set_path(&path);
     }
-    url = url.join("provider/v1/").map_err(remote_error)?;
+    url = url.join("provider/v2/").map_err(|error| {
+        ProviderError::new(format!("invalid remote provider endpoint path: {error}"))
+    })?;
     Ok(url)
 }
 
@@ -120,28 +133,68 @@ fn is_loopback_host(host: &str) -> bool {
 async fn send<T: DeserializeOwned>(
     request: reqwest::RequestBuilder,
     token: &str,
+    operation: &str,
+    endpoint: &str,
 ) -> Result<T, ProviderError> {
     let response = request
         .bearer_auth(token)
         .send()
         .await
-        .map_err(remote_error)?;
+        .map_err(|error| transport_error(operation, endpoint, error))?;
     let status = response.status();
     if !status.is_success() {
+        let fallback_reason = reason_for_status(status);
         let error = response
             .json::<RemoteError>()
             .await
             .unwrap_or_else(|_| RemoteError {
-                reason: ProviderErrorReason::Internal,
+                reason: fallback_reason,
                 error: format!("remote provider returned HTTP {status}"),
             });
-        return Err(ProviderError::with_reason(error.reason, error.error));
+        let reason = match fallback_reason {
+            ProviderErrorReason::Internal => error.reason,
+            reason => reason,
+        };
+        return Err(ProviderError::with_reason(
+            reason,
+            format!("{operation} at {endpoint} failed: {}", error.error),
+        ));
     }
-    response.json().await.map_err(remote_error)
+    response.json().await.map_err(|error| {
+        ProviderError::new(format!(
+            "{operation} at {endpoint} returned an invalid response: {error}"
+        ))
+    })
 }
 
-fn remote_error(error: impl std::fmt::Display) -> ProviderError {
-    ProviderError::new(format!("remote provider error: {error}"))
+fn transport_error(operation: &str, endpoint: &str, error: reqwest::Error) -> ProviderError {
+    let reason = if error.is_timeout() {
+        ProviderErrorReason::DeadlineExceeded
+    } else if error.is_connect() || error.is_request() {
+        ProviderErrorReason::Unavailable
+    } else {
+        ProviderErrorReason::Internal
+    };
+    ProviderError::with_reason(reason, format!("{operation} at {endpoint} failed: {error}"))
+}
+
+fn endpoint_error(operation: &str, endpoint: &Url, error: impl std::fmt::Display) -> ProviderError {
+    ProviderError::new(format!(
+        "cannot resolve {operation} endpoint from {endpoint}: {error}"
+    ))
+}
+
+fn reason_for_status(status: StatusCode) -> ProviderErrorReason {
+    match status {
+        StatusCode::UNAUTHORIZED => ProviderErrorReason::Unauthenticated,
+        StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => {
+            ProviderErrorReason::DeadlineExceeded
+        }
+        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE => {
+            ProviderErrorReason::Unavailable
+        }
+        _ => ProviderErrorReason::Internal,
+    }
 }
 
 fn unexpected_reply(reply: ProviderReply) -> ProviderError {
@@ -353,12 +406,14 @@ struct ProviderServerState {
     provider: Arc<dyn Provider>,
     token: Arc<str>,
     info: RemoteProviderInfo,
+    shutdown: watch::Receiver<bool>,
 }
 
 pub fn remote_provider_router(
     provider: Arc<dyn Provider>,
     token: String,
     recovery: ProviderRecovery,
+    shutdown: watch::Receiver<bool>,
 ) -> Result<Router, ProviderError> {
     if token.is_empty() {
         return Err(ProviderError::new(
@@ -375,10 +430,11 @@ pub fn remote_provider_router(
         provider,
         token: token.into(),
         info,
+        shutdown,
     };
     Ok(Router::new()
-        .route("/provider/v1/info", get(provider_info))
-        .route("/provider/v1/call", post(provider_call))
+        .route("/provider/v2/info", get(provider_info))
+        .route("/provider/v2/call", post(provider_call))
         .with_state(state))
 }
 
@@ -386,6 +442,7 @@ async fn provider_info(State(state): State<ProviderServerState>, headers: Header
     if !authenticated(&headers, &state.token) {
         return remote_failure(
             StatusCode::UNAUTHORIZED,
+            ProviderErrorReason::Unauthenticated,
             "unauthenticated remote provider request",
         );
     }
@@ -400,13 +457,14 @@ async fn provider_call(
     if !authenticated(&headers, &state.token) {
         return remote_failure(
             StatusCode::UNAUTHORIZED,
+            ProviderErrorReason::Unauthenticated,
             "unauthenticated remote provider request",
         );
     }
-    match execute_call(state.provider.as_ref(), call).await {
+    match execute_call(state.provider.as_ref(), call, state.shutdown.clone()).await {
         Ok(reply) => Json(reply).into_response(),
         Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            status_for_reason(error.reason()),
             Json(RemoteError {
                 reason: error.reason(),
                 error: error.to_string(),
@@ -427,20 +485,30 @@ fn authenticated(headers: &HeaderMap, token: &str) -> bool {
     value.len() == expected.len() && bool::from(value.as_bytes().ct_eq(expected.as_bytes()))
 }
 
-fn remote_failure(status: StatusCode, message: &str) -> Response {
+fn remote_failure(status: StatusCode, reason: ProviderErrorReason, message: &str) -> Response {
     (
         status,
         Json(RemoteError {
-            reason: ProviderErrorReason::Internal,
+            reason,
             error: message.to_owned(),
         }),
     )
         .into_response()
 }
 
+fn status_for_reason(reason: ProviderErrorReason) -> StatusCode {
+    match reason {
+        ProviderErrorReason::Unauthenticated => StatusCode::UNAUTHORIZED,
+        ProviderErrorReason::DeadlineExceeded => StatusCode::REQUEST_TIMEOUT,
+        ProviderErrorReason::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        ProviderErrorReason::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 async fn execute_call(
     provider: &dyn Provider,
     call: ProviderCall,
+    mut shutdown: watch::Receiver<bool>,
 ) -> Result<ProviderReply, ProviderError> {
     Ok(match call {
         ProviderCall::Health => {
@@ -458,7 +526,17 @@ async fn execute_call(
             scope_json,
             after_cursor,
         } => {
-            provider.wait_for_changes(&scope_json, after_cursor).await?;
+            if *shutdown.borrow() {
+                return Err(provider_shutting_down());
+            }
+            tokio::select! {
+                result = provider.wait_for_changes(&scope_json, after_cursor) => result?,
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return Err(provider_shutting_down());
+                    }
+                }
+            }
             ProviderReply::Unit
         }
         ProviderCall::RetrieveEntities(query) => {
@@ -518,6 +596,13 @@ async fn execute_call(
     })
 }
 
+fn provider_shutting_down() -> ProviderError {
+    ProviderError::with_reason(
+        ProviderErrorReason::Unavailable,
+        "remote provider is shutting down",
+    )
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 enum ProviderCall {
@@ -557,6 +642,27 @@ enum ProviderCall {
     Checkpoint,
 }
 
+impl ProviderCall {
+    fn operation(&self) -> &'static str {
+        match self {
+            Self::Health => "health check",
+            Self::ReadEntity(_) => "read entity",
+            Self::AcquireConsistency(_) => "acquire consistency",
+            Self::ReadChanges(_) => "read changes",
+            Self::WaitForChanges { .. } => "wait for changes",
+            Self::RetrieveEntities(_) => "retrieve entities",
+            Self::CommitEntity(_) => "commit entity",
+            Self::ReadIdempotency { .. } => "read idempotency",
+            Self::ReadIdempotencyInWorkUnit { .. } => "read work-unit idempotency",
+            Self::CommitEntityIdempotent { .. } => "commit idempotent entity",
+            Self::ReadEntityInWorkUnit { .. } => "read entity in work unit",
+            Self::CommitEntityInWorkUnit(_) => "commit entity in work unit",
+            Self::PublishWorkUnit(_) => "publish work unit",
+            Self::Checkpoint => "checkpoint provider",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "result", content = "data", rename_all = "snake_case")]
 enum ProviderReply {
@@ -576,4 +682,91 @@ enum ProviderReply {
 struct RemoteError {
     reason: ProviderErrorReason,
     error: String,
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use patchouli_provider::{
+        EntityCommit, EntityCommitOutcome, EntityKey, StoredChangeKind, StoredCrdtChange,
+        StoredCrdtField, StoredEntityVersion, StoredVersionState,
+    };
+    use serde_json::json;
+
+    use super::{ProviderCall, ProviderReply, REMOTE_PROVIDER_PROTOCOL};
+
+    #[test]
+    fn protocol_v2_commit_fixture_is_stable() {
+        assert_eq!(REMOTE_PROVIDER_PROTOCOL, 2);
+        let call = ProviderCall::CommitEntity(EntityCommit {
+            key: EntityKey {
+                scope_json: r#"{"workspace_id":"one"}"#.to_owned(),
+                entity_type: "knowledge".to_owned(),
+                entity_id: "k1".to_owned(),
+            },
+            expected_heads: vec!["v0".to_owned()],
+            new_versions: vec![StoredEntityVersion {
+                version: "v1".to_owned(),
+                state: StoredVersionState::Active,
+                value_json: Some(r#"{"content":"value"}"#.to_owned()),
+                crdt_fields: vec![StoredCrdtField {
+                    path: "/content".to_owned(),
+                    heads: vec!["h1".to_owned()],
+                    changes: vec![StoredCrdtChange {
+                        hash: "h1".to_owned(),
+                        parents: Vec::new(),
+                        bytes: vec![1, 2],
+                    }],
+                }],
+            }],
+            head_versions: vec!["v1".to_owned()],
+            change_kind: StoredChangeKind::Created,
+            causal_token: "c1".to_owned(),
+            event_meta_json: "{}".to_owned(),
+            session_keys: vec!["s1".to_owned()],
+            recorded_at_unix_ms: 10,
+            deadline_unix_ms: Some(20),
+        });
+
+        assert_eq!(
+            serde_json::to_value(call).unwrap(),
+            json!({
+                "method": "commit_entity",
+                "params": {
+                    "key": {
+                        "scope_json": "{\"workspace_id\":\"one\"}",
+                        "entity_type": "knowledge",
+                        "entity_id": "k1"
+                    },
+                    "expected_heads": ["v0"],
+                    "new_versions": [{
+                        "version": "v1",
+                        "state": "Active",
+                        "value_json": "{\"content\":\"value\"}",
+                        "crdt_fields": [{
+                            "path": "/content",
+                            "heads": ["h1"],
+                            "changes": [{"hash": "h1", "parents": [], "bytes": [1, 2]}]
+                        }]
+                    }],
+                    "head_versions": ["v1"],
+                    "change_kind": "Created",
+                    "causal_token": "c1",
+                    "event_meta_json": "{}",
+                    "session_keys": ["s1"],
+                    "recorded_at_unix_ms": 10,
+                    "deadline_unix_ms": 20
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ProviderReply::EntityCommit(EntityCommitOutcome::Conflict {
+                current_heads: vec!["v2".to_owned()]
+            }))
+            .unwrap(),
+            json!({
+                "result": "entity_commit",
+                "data": {"Conflict": {"current_heads": ["v2"]}}
+            })
+        );
+    }
 }

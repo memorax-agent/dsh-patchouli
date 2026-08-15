@@ -4,7 +4,7 @@
   "providers": {
     "local": {
       "kind": "local",
-      "database": "patchouli.db"
+      "database": "data/patchouli.db"
     }
   },
   "routing": {
@@ -12,4 +12,3 @@
     "rules": []
   }
 }
-
