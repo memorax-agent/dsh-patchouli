@@ -16,7 +16,11 @@ test('bridges storage requests and change notifications', async (t) => {
     ? String.raw`\\.\pipe\patchouli-storage-${process.pid}-${randomUUID()}`
     : join(directory, 'patchouli.sock')
   let handshakeCapabilities
+  let serverSocket
+  let nextSubscriptionId = 1
+  let unsubscribeRequests = 0
   const server = createServer((socket) => {
+    serverSocket = socket
     let buffer = ''
     socket.setEncoding('utf8')
     socket.on('data', (chunk) => {
@@ -68,13 +72,14 @@ test('bridges storage requests and change notifications', async (t) => {
           continue
         }
         if (request.method === 'patchouli.changes.subscribe@1') {
+          const subscriptionId = `subscription-${nextSubscriptionId++}`
           socket.write([
             JSON.stringify({
               jsonrpc: '2.0',
               id: request.id,
               result: {
                 meta: {},
-                data: { subscription_id: 'subscription-1', cursor: 'cursor-0' },
+                data: { subscription_id: subscriptionId, cursor: 'cursor-0' },
               },
             }),
             JSON.stringify({
@@ -83,7 +88,7 @@ test('bridges storage requests and change notifications', async (t) => {
               params: {
                 meta: { transaction_id: 'transaction-1' },
                 data: {
-                  subscription_id: 'subscription-1',
+                  subscription_id: subscriptionId,
                   change: {
                     cursor: 'cursor-1',
                     ref: { type: 'event', id: 'event-1' },
@@ -97,6 +102,7 @@ test('bridges storage requests and change notifications', async (t) => {
           continue
         }
         if (request.method === 'patchouli.changes.unsubscribe@1') {
+          unsubscribeRequests += 1
           socket.write([
             JSON.stringify({
               jsonrpc: '2.0',
@@ -109,7 +115,7 @@ test('bridges storage requests and change notifications', async (t) => {
               params: {
                 meta: {},
                 data: {
-                  subscription_id: 'subscription-1',
+                  subscription_id: request.params.data.subscription_id,
                   change: {
                     cursor: 'cursor-2',
                     ref: { type: 'event', id: 'event-1' },
@@ -207,6 +213,7 @@ test('bridges storage requests and change notifications', async (t) => {
     data: { subscription_id: subscription.data.subscription_id },
   })
   assert.equal(unsubscribe.data.removed, true)
+  assert.deepEqual(await subscription.closed, { kind: 'unsubscribed' })
   assert.equal(events.length, 1)
 
   await assert.rejects(
@@ -214,6 +221,32 @@ test('bridges storage requests and change notifications', async (t) => {
       meta: {},
       data: { type: 'event', id: 'event-1', value: { payload: 'hello' } },
     }),
-    /RPC -32006: entity create is unavailable in this fixture/,
+    (error) => {
+      assert.ok(error instanceof storage.PatchouliRpcError)
+      assert.equal(error.method, 'patchouli.entity.create@1')
+      assert.equal(error.code, -32006)
+      assert.equal(error.reason, 'UNSUPPORTED_CAPABILITY')
+      assert.deepEqual(error.data, { reason: 'UNSUPPORTED_CAPABILITY' })
+      return true
+    },
   )
+
+  const handledSubscription = await ctx.patchouli.subscribe({
+    meta: { workspace: 'test' },
+    data: {},
+  }, () => {})
+  const firstUnsubscribe = handledSubscription.unsubscribe()
+  assert.equal(handledSubscription.unsubscribe(), firstUnsubscribe)
+  await firstUnsubscribe
+  assert.deepEqual(await handledSubscription.closed, { kind: 'unsubscribed' })
+  assert.equal(unsubscribeRequests, 2)
+
+  const disconnectedSubscription = await ctx.patchouli.subscribe({
+    meta: { workspace: 'test' },
+    data: {},
+  }, () => {})
+  serverSocket.destroy()
+  const disconnected = await disconnectedSubscription.closed
+  assert.equal(disconnected.kind, 'connection-lost')
+  assert.ok(disconnected.error instanceof Error)
 })

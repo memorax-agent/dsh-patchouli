@@ -7,7 +7,13 @@ import z from '@deepseek-ai/schemastery'
 
 import { PatchouliService } from './service.js'
 
-export { PatchouliService, type ChangeHandler } from './service.js'
+export {
+  PatchouliRpcError,
+  PatchouliService,
+  type ChangeHandler,
+  type ChangeSubscriptionClose,
+  type ChangeSubscriptionHandle,
+} from './service.js'
 
 /** Optional Cordis plugin that binds the Patchouli storage daemon. */
 export const name = 'dsh-patchouli-storage'

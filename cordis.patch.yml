@@ -4,3 +4,6 @@
 
     - id: patchouli-agent-loop
       name: dsh-patchouli/agent-loop
+
+    - id: patchouli-memory-cursors
+      name: dsh-patchouli/cursor-store

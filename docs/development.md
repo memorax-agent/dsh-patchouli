@@ -9,7 +9,7 @@ pnpm check
 cargo test --workspace
 ```
 
-`pnpm check` validates and tests the protocol package plus all three TypeScript
+`pnpm check` validates and tests the protocol package plus all four TypeScript
 frontends. The Rust backend is checked independently with Cargo. CI runs both
 stacks on Ubuntu, macOS, and Windows.
 
@@ -107,7 +107,46 @@ The default bundle contains:
 
 - `patchouli` → `dsh-patchouli`, registering `ctx.patchouliMemory`;
 - `patchouli-agent-loop` → `dsh-patchouli/agent-loop`, registering Hooks and
-  Tools.
+  Tools;
+- `patchouli-memory-cursors` → `dsh-patchouli/cursor-store`, registering
+  `ctx.patchouliMemoryCursors` when `storageDomain` is available.
+
+The Web bundle supplies `storageDomain`, so the cursor service opens its
+`patchouli_memory` domain and persists progress through the configured DSH
+storage backend. The standard Headless bundle has no storage stack: the
+cursor-service fiber remains pending on its injection, while the independent
+Memory Service, Agent Loop, Tools, and update/retrieve paths still load. Add the
+DSH storage stack for durable Headless subscriptions, or pass a custom
+`MemoryCursorStore` to `ctx.patchouliMemory.subscribe`.
+
+Bind one cursor store for each logical Consumer subscription:
+
+```ts
+const cursorStore = ctx.patchouliMemoryCursors.bind({
+  consumerId: 'example-consumer',
+  subscriptionKey: 'memory-changes',
+  scope,
+})
+
+const subscription = await ctx.patchouliMemory.subscribe(
+  { scope },
+  change => applyChangeIdempotently(change),
+  { cursorStore, signal, onError: reportSubscriptionError },
+)
+```
+
+The binding key is `(consumerId, subscriptionKey, scope, pluginId)`. Scope and
+cursors remain opaque. The service saves the provider boundary first, handles
+one plugin's events serially, deduplicates the current cursor, and advances it
+only after the Consumer handler succeeds. Plugins run independently.
+
+Only a `MemorySubscriptionError` marked `retryable` reconnects, with bounded
+exponential backoff and the last durable cursor. Fatal or unknown errors stop
+that plugin worker. `resetRequired` also stops and reports without deleting the
+cursor: complete snapshot/resync first, unsubscribe the old high-level handle,
+call `cursorStore.delete(pluginId)`, then create a replacement subscription.
+Explicit unsubscribe, the Consumer fiber lifecycle, and its AbortSignal all
+cancel retries, cancel provider handles, and drain admitted handlers.
 
 The storage daemon client is deliberately optional. Add it only for a local
 storage-backed MemoryPlugin:
@@ -120,9 +159,17 @@ storage-backed MemoryPlugin:
 ```
 
 The TypeScript storage client covers control, CRUD, entity retrieval, and
-cursor-based change subscriptions. Subscription callers register a handler,
-persist and deduplicate cursors as needed, and explicitly unsubscribe when their
-own lifecycle ends.
+cursor-based change subscriptions. JSON-RPC failures are `PatchouliRpcError`
+instances retaining `method`, `code`, `data`, and the optional protocol
+`reason`. A subscription handle exposes the server boundary plus `closed`,
+which resolves with `unsubscribed`, `connection-lost`, or `client-closed`, and
+an idempotent `unsubscribe()`.
+
+The low-level handler is invoked in wire order but is not awaited or serialized
+by the client. A storage-backed MemoryPlugin must serialize application and map
+connection loss or `CURSOR_EXPIRED` into the appropriate high-level
+`MemorySubscriptionError`; the common service then owns cursor persistence,
+deduplication, retry, and Consumer lifecycle draining.
 
 ## CI policy
 

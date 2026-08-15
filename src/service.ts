@@ -38,6 +38,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 interface PendingCall {
+  readonly method: string
   resolve(value: JsonValue): void
   reject(error: Error): void
 }
@@ -47,6 +48,39 @@ export type ChangeHandler<TType extends string = string> = (
   event: ChangesEventParams<TType>,
 ) => void | Promise<void>
 
+export interface ChangeSubscriptionClose {
+  readonly kind: 'unsubscribed' | 'connection-lost' | 'client-closed'
+  readonly error?: Error
+}
+
+/** A subscribe result with an observable, locally managed lifecycle. */
+export interface ChangeSubscriptionHandle extends SubscribeChangesResult {
+  readonly closed: Promise<ChangeSubscriptionClose>
+  unsubscribe(): Promise<void>
+}
+
+interface ActiveSubscription {
+  readonly handler: ChangeHandler
+  readonly resolveClosed: (result: ChangeSubscriptionClose) => void
+  settled: boolean
+}
+
+/** Structured JSON-RPC failure returned by the Patchouli daemon. */
+export class PatchouliRpcError extends Error {
+  readonly reason?: string
+
+  constructor(
+    readonly method: string,
+    readonly code: number,
+    message: string,
+    readonly data?: JsonValue,
+  ) {
+    super(`Patchouli RPC ${code}: ${message}`)
+    this.name = 'PatchouliRpcError'
+    this.reason = rpcErrorReason(data)
+  }
+}
+
 const subscriptionsCapability = 'subscriptions'
 
 export class PatchouliService extends Service {
@@ -54,7 +88,7 @@ export class PatchouliService extends Service {
   private buffer = ''
   private nextId = 1
   private readonly pending = new Map<JsonRpcId, PendingCall>()
-  private readonly changeHandlers = new Map<string, ChangeHandler>()
+  private readonly subscriptions = new Map<string, ActiveSubscription>()
   private handshake?: HandshakeResult
   private closing = false
 
@@ -127,28 +161,52 @@ export class PatchouliService extends Service {
   async subscribe<TType extends string = string>(
     params: SubscribeChangesParams<TType>,
     handler: ChangeHandler<TType>,
-  ): Promise<SubscribeChangesResult> {
+  ): Promise<ChangeSubscriptionHandle> {
     if (this.handshake && !this.handshake.capabilities.includes(subscriptionsCapability)) {
       throw new Error('Patchouli daemon did not negotiate change subscriptions')
     }
-    return this.call<SubscribeChangesResult>(methods.changesSubscribe, params, (result) => {
-      this.changeHandlers.set(
-        result.data.subscription_id,
-        event => handler(event as ChangesEventParams<TType>),
-      )
+    return this.call<ChangeSubscriptionHandle>(methods.changesSubscribe, params, (result) => {
+      const subscriptionId = result.data.subscription_id
+      let resolveClosed!: (result: ChangeSubscriptionClose) => void
+      const closed = new Promise<ChangeSubscriptionClose>((resolve) => {
+        resolveClosed = resolve
+      })
+      const subscription: ActiveSubscription = {
+        handler: event => handler(event as ChangesEventParams<TType>),
+        resolveClosed,
+        settled: false,
+      }
+      this.subscriptions.set(subscriptionId, subscription)
+
+      let unsubscribePromise: Promise<void> | undefined
+      Object.assign(result, {
+        closed,
+        unsubscribe: (): Promise<void> => {
+          if (unsubscribePromise) return unsubscribePromise
+          if (subscription.settled) {
+            unsubscribePromise = Promise.resolve()
+            return unsubscribePromise
+          }
+          unsubscribePromise = this.unsubscribe({
+            meta: {},
+            data: { subscription_id: subscriptionId },
+          }).then(() => undefined)
+          return unsubscribePromise
+        },
+      })
     })
   }
 
   async unsubscribe(params: UnsubscribeChangesParams): Promise<UnsubscribeChangesResult> {
     return this.call<UnsubscribeChangesResult>(methods.changesUnsubscribe, params, () => {
-      this.changeHandlers.delete(params.data.subscription_id)
+      this.settleSubscription(params.data.subscription_id, { kind: 'unsubscribed' })
     })
   }
 
   async close(): Promise<void> {
     this.closing = true
     this.handshake = undefined
-    this.changeHandlers.clear()
+    this.settleSubscriptions({ kind: 'client-closed' })
     this.socket?.destroy()
     this.socket = undefined
     this.rejectPending(new Error('Patchouli connection closed'))
@@ -222,6 +280,7 @@ export class PatchouliService extends Service {
     const request = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'
     return new Promise<TResult>((resolve, reject) => {
       this.pending.set(id, {
+        method,
         resolve: (value) => {
           try {
             const result = value as TResult
@@ -269,7 +328,12 @@ export class PatchouliService extends Service {
       if (!pending) continue
       this.pending.delete(responseId)
       if ('error' in message) {
-        pending.reject(new Error(`Patchouli RPC ${message.error.code}: ${message.error.message}`))
+        pending.reject(new PatchouliRpcError(
+          pending.method,
+          message.error.code,
+          message.error.message,
+          message.error.data,
+        ))
       } else {
         pending.resolve(message.result)
       }
@@ -279,10 +343,10 @@ export class PatchouliService extends Service {
   private receiveNotification(notification: JsonRpcNotification<ChangesEventParams>): void {
     if (notification.method !== methods.changesEvent) return
     const subscriptionId = notification.params.data.subscription_id
-    const handler = this.changeHandlers.get(subscriptionId)
-    if (!handler) return
+    const subscription = this.subscriptions.get(subscriptionId)
+    if (!subscription) return
     try {
-      const handling = handler(notification.params)
+      const handling = subscription.handler(notification.params)
       void handling?.catch(error => this.warnChangeHandler(subscriptionId, error))
     } catch (error) {
       this.warnChangeHandler(subscriptionId, error)
@@ -301,7 +365,7 @@ export class PatchouliService extends Service {
   private connectionFailed(error: Error): void {
     this.handshake = undefined
     this.socket = undefined
-    this.changeHandlers.clear()
+    this.settleSubscriptions({ kind: 'connection-lost', error })
     this.rejectPending(error)
     if (!this.closing) this.ctx.logger('patchouli').warn(error)
   }
@@ -309,6 +373,23 @@ export class PatchouliService extends Service {
   private rejectPending(error: Error): void {
     for (const pending of this.pending.values()) pending.reject(error)
     this.pending.clear()
+  }
+
+  private settleSubscription(
+    subscriptionId: string,
+    result: ChangeSubscriptionClose,
+  ): void {
+    const subscription = this.subscriptions.get(subscriptionId)
+    if (!subscription || subscription.settled) return
+    subscription.settled = true
+    this.subscriptions.delete(subscriptionId)
+    subscription.resolveClosed(result)
+  }
+
+  private settleSubscriptions(result: ChangeSubscriptionClose): void {
+    for (const subscriptionId of [...this.subscriptions.keys()]) {
+      this.settleSubscription(subscriptionId, result)
+    }
   }
 }
 
@@ -343,6 +424,12 @@ function isUnavailable(error: unknown): boolean {
 
 function unavailable(message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code: 'ENOENT' })
+}
+
+function rpcErrorReason(data: JsonValue | undefined): string | undefined {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return
+  const reason = (data as { readonly reason?: JsonValue }).reason
+  return typeof reason === 'string' ? reason : undefined
 }
 
 function delay(milliseconds: number): Promise<void> {

@@ -6,6 +6,7 @@ import {
   apply,
   inject,
   MemoryService,
+  MemorySubscriptionError,
   name,
 } from '../lib/index.js'
 
@@ -124,4 +125,379 @@ test('removes a memory plugin with its registering Cordis fiber', async (t) => {
 
   await pluginFiber.dispose()
   assert.deepEqual(await memory.retrieve(request), [])
+})
+
+test('persists the subscription boundary and processes unique changes in order', async (t) => {
+  const { fiber, memory } = await mountPatchouli()
+  t.after(() => fiber.dispose())
+
+  const providerClosed = Promise.withResolvers()
+  const boundarySaved = Promise.withResolvers()
+  const firstStarted = Promise.withResolvers()
+  const releaseFirst = Promise.withResolvers()
+  const operations = []
+  let emit
+  let early
+  let subscribeRequest
+  let unsubscribeCount = 0
+  const dispose = memory.register({
+    id: 'streaming',
+    async update() {
+      return { status: 'applied' }
+    },
+    async retrieve() {
+      return { items: [] }
+    },
+    async subscribe(request, handler) {
+      subscribeRequest = request
+      emit = handler
+      early = handler({ cursor: 'cursor-1', memoryId: 'memory-1' })
+      return {
+        cursor: 'cursor-0',
+        closed: providerClosed.promise,
+        async unsubscribe() {
+          unsubscribeCount += 1
+          providerClosed.resolve()
+        },
+      }
+    },
+  })
+  t.after(dispose)
+
+  const cursorStore = {
+    async load(pluginId) {
+      operations.push(['load', pluginId])
+      return 'cursor-before-subscribe'
+    },
+    async save(pluginId, cursor) {
+      operations.push(['save', pluginId, cursor])
+      if (cursor === 'cursor-0') boundarySaved.resolve()
+    },
+    async delete() {},
+  }
+  const changes = []
+  const subscription = await memory.subscribe(
+    { scope: '/workspace/patchouli', metadata: { consumer: 'test' } },
+    async (change) => {
+      changes.push(['start', change])
+      if (change.cursor === 'cursor-1') {
+        firstStarted.resolve()
+        await releaseFirst.promise
+      }
+      changes.push(['end', change.cursor])
+    },
+    { cursorStore },
+  )
+
+  await boundarySaved.promise
+  await firstStarted.promise
+  const duplicate = emit({ cursor: 'cursor-1', memoryId: 'duplicate' })
+  const second = emit({ cursor: 'cursor-2', metadata: { source: 'test' } })
+
+  assert.deepEqual(subscription.pluginIds, ['streaming'])
+  assert.deepEqual(subscribeRequest, {
+    scope: '/workspace/patchouli',
+    metadata: { consumer: 'test' },
+    afterCursor: 'cursor-before-subscribe',
+  })
+  assert.deepEqual(operations, [
+    ['load', 'streaming'],
+    ['save', 'streaming', 'cursor-0'],
+  ])
+  assert.deepEqual(changes, [[
+    'start',
+    { pluginId: 'streaming', cursor: 'cursor-1', memoryId: 'memory-1' },
+  ]])
+
+  releaseFirst.resolve()
+  await Promise.all([early, duplicate, second])
+  assert.deepEqual(operations, [
+    ['load', 'streaming'],
+    ['save', 'streaming', 'cursor-0'],
+    ['save', 'streaming', 'cursor-1'],
+    ['save', 'streaming', 'cursor-2'],
+  ])
+  assert.deepEqual(changes, [
+    ['start', { pluginId: 'streaming', cursor: 'cursor-1', memoryId: 'memory-1' }],
+    ['end', 'cursor-1'],
+    ['start', { pluginId: 'streaming', cursor: 'cursor-2', metadata: { source: 'test' } }],
+    ['end', 'cursor-2'],
+  ])
+
+  await subscription.unsubscribe()
+  await subscription.unsubscribe()
+  await subscription.closed
+  assert.equal(unsubscribeCount, 1)
+})
+
+test('retries only classified retryable subscription failures', async (t) => {
+  const { fiber, memory } = await mountPatchouli()
+  t.after(() => fiber.dispose())
+
+  const retryStarted = Promise.withResolvers()
+  const retryBoundarySaved = Promise.withResolvers()
+  const retryClosed = Promise.withResolvers()
+  let retryAttempts = 0
+  let fatalAttempts = 0
+  const subscribeRequests = []
+  const disposeRetry = memory.register({
+    id: 'retryable',
+    async update() {
+      return { status: 'applied' }
+    },
+    async retrieve() {
+      return { items: [] }
+    },
+    async subscribe(request, handler) {
+      retryAttempts += 1
+      subscribeRequests.push(request)
+      if (retryAttempts === 1) {
+        const disconnected = Promise.withResolvers()
+        void handler({ cursor: 'durable-cursor' }).then(() => {
+          disconnected.reject(new MemorySubscriptionError(
+            'temporarily offline',
+            { retryable: true },
+          ))
+        })
+        return {
+          cursor: 'first-boundary',
+          closed: disconnected.promise,
+          async unsubscribe() {},
+        }
+      }
+      retryStarted.resolve()
+      return {
+        cursor: 'retry-boundary',
+        closed: retryClosed.promise,
+        async unsubscribe() {
+          retryClosed.resolve()
+        },
+      }
+    },
+  })
+  const disposeFatal = memory.register({
+    id: 'fatal',
+    async update() {
+      return { status: 'applied' }
+    },
+    async retrieve() {
+      return { items: [] }
+    },
+    async subscribe() {
+      fatalAttempts += 1
+      throw new Error('invalid subscription')
+    },
+  })
+  t.after(() => {
+    disposeFatal()
+    disposeRetry()
+  })
+
+  const requests = []
+  const failures = []
+  const subscription = await memory.subscribe(
+    { scope: 'test' },
+    async () => {},
+    {
+      cursorStore: {
+        async load(pluginId) {
+          requests.push(['load', pluginId])
+          return 'saved-cursor'
+        },
+        async save(pluginId, cursor) {
+          requests.push(['save', pluginId, cursor])
+          if (pluginId === 'retryable' && cursor === 'retry-boundary') {
+            retryBoundarySaved.resolve()
+          }
+        },
+        async delete() {},
+      },
+      onError(failure) {
+        failures.push(failure)
+      },
+    },
+  )
+
+  await retryStarted.promise
+  await retryBoundarySaved.promise
+  assert.equal(retryAttempts, 2)
+  assert.equal(fatalAttempts, 1)
+  assert.deepEqual(subscribeRequests.map(request => request.afterCursor), [
+    'saved-cursor',
+    'durable-cursor',
+  ])
+  assert.deepEqual(failures.map(({ pluginId, error }) => ({
+    pluginId,
+    message: error.message,
+    retryable: error.retryable,
+    resetRequired: error.resetRequired,
+  })).sort((left, right) => left.pluginId.localeCompare(right.pluginId)), [
+    {
+      pluginId: 'fatal',
+      message: 'invalid subscription',
+      retryable: false,
+      resetRequired: false,
+    },
+    {
+      pluginId: 'retryable',
+      message: 'temporarily offline',
+      retryable: true,
+      resetRequired: false,
+    },
+  ])
+  assert.deepEqual(requests.filter(([operation]) => operation === 'save'), [
+    ['save', 'retryable', 'first-boundary'],
+    ['save', 'retryable', 'durable-cursor'],
+    ['save', 'retryable', 'retry-boundary'],
+  ])
+
+  await subscription.unsubscribe()
+  await subscription.closed
+})
+
+test('observes fast disconnects and resets retry only after a durable change', async (t) => {
+  const { fiber, memory } = await mountPatchouli()
+  t.after(() => fiber.dispose())
+
+  const originalSetTimeout = globalThis.setTimeout
+  const originalRandom = Math.random
+  const retryDelays = []
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    retryDelays.push(delay)
+    return originalSetTimeout(callback, 0, ...args)
+  }
+  Math.random = () => 0
+  t.after(() => {
+    globalThis.setTimeout = originalSetTimeout
+    Math.random = originalRandom
+  })
+
+  const stable = Promise.withResolvers()
+  const stableClosed = Promise.withResolvers()
+  let attempts = 0
+  const dispose = memory.register({
+    id: 'flapping',
+    async update() {
+      return { status: 'applied' }
+    },
+    async retrieve() {
+      return { items: [] }
+    },
+    async subscribe(_request, handler) {
+      attempts += 1
+      if (attempts <= 2) {
+        return {
+          cursor: `boundary-${attempts}`,
+          closed: Promise.reject(new MemorySubscriptionError(
+            'immediate disconnect',
+            { retryable: true },
+          )),
+          async unsubscribe() {},
+        }
+      }
+      if (attempts === 3) {
+        const disconnected = Promise.withResolvers()
+        void handler({ cursor: 'durable-change' }).then(() => {
+          disconnected.reject(new MemorySubscriptionError(
+            'disconnect after progress',
+            { retryable: true },
+          ))
+        })
+        return {
+          cursor: 'progress-boundary',
+          closed: disconnected.promise,
+          async unsubscribe() {},
+        }
+      }
+
+      stable.resolve()
+      return {
+        cursor: 'stable-boundary',
+        closed: stableClosed.promise,
+        async unsubscribe() {
+          stableClosed.resolve()
+        },
+      }
+    },
+  })
+  t.after(dispose)
+
+  const subscription = await memory.subscribe(
+    { scope: 'test' },
+    async () => {},
+    {
+      cursorStore: {
+        async load() {},
+        async save(_pluginId, cursor) {
+          if (cursor === 'boundary-1') {
+            await new Promise(resolve => originalSetTimeout(resolve, 20))
+          }
+        },
+        async delete() {},
+      },
+    },
+  )
+
+  await stable.promise
+  assert.equal(attempts, 4)
+  assert.deepEqual(retryDelays, [250, 500, 250])
+
+  globalThis.setTimeout = originalSetTimeout
+  Math.random = originalRandom
+  await subscription.unsubscribe()
+  await subscription.closed
+})
+
+test('disposes and drains a subscription with its consuming Cordis fiber', async (t) => {
+  const { ctx, fiber, memory } = await mountPatchouli()
+  t.after(() => fiber.dispose())
+
+  const providerStarted = Promise.withResolvers()
+  const providerClosed = Promise.withResolvers()
+  let unsubscribeCount = 0
+  const dispose = memory.register({
+    id: 'owned-stream',
+    async update() {
+      return { status: 'applied' }
+    },
+    async retrieve() {
+      return { items: [] }
+    },
+    async subscribe() {
+      providerStarted.resolve()
+      return {
+        cursor: 'boundary',
+        closed: providerClosed.promise,
+        async unsubscribe() {
+          unsubscribeCount += 1
+          providerClosed.resolve()
+        },
+      }
+    },
+  })
+  t.after(dispose)
+
+  let subscription
+  const consumerFiber = await ctx.plugin({
+    name: 'memory-change-consumer',
+    inject: ['patchouliMemory'],
+    async apply(pluginCtx) {
+      subscription = await pluginCtx.patchouliMemory.subscribe(
+        { scope: 'test' },
+        async () => {},
+        {
+          cursorStore: {
+            async load() {},
+            async save() {},
+            async delete() {},
+          },
+        },
+      )
+    },
+  })
+
+  await providerStarted.promise
+  await consumerFiber.dispose()
+  await subscription.closed
+  assert.equal(unsubscribeCount, 1)
 })
