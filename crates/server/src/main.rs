@@ -1,15 +1,25 @@
-use std::{error::Error, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    error::Error,
+    fs::OpenOptions,
+    io::Write,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use clap::{Parser, Subcommand};
 use patchouli_backend::{BackendConfig, BackendEngine};
 use patchouli_provider::Provider;
 use patchouli_provider_remote::remote_provider_router;
 use patchouli_provider_sqlite::SqliteProvider;
-use patchouli_server::{LocalClient, LocalServer, ServerOptions, load_provider};
+use patchouli_server::{LocalClient, LocalServer, ServerOptions, load_provider, shutdown_signal};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "patchouli",
+    name = "patchouli-db",
     version,
     about = "Patchouli local daemon and control CLI"
 )]
@@ -20,6 +30,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Create a local backend home with default policy and provider configuration.
+    Init {
+        #[arg(long)]
+        root: PathBuf,
+    },
     /// Run the backend daemon in the foreground.
     Serve {
         #[arg(long)]
@@ -81,6 +96,7 @@ enum ConfigCommand {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     match Cli::parse().command {
+        Command::Init { root } => initialize_home(&root)?,
         Command::Serve {
             endpoint,
             providers,
@@ -104,7 +120,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             {
                 Ok(server) => server,
                 Err(bind_error) => {
-                    engine.shutdown().await?;
+                    if let Err(shutdown_error) = engine.shutdown().await {
+                        return Err(format!(
+                            "{bind_error}; backend shutdown also failed: {shutdown_error}"
+                        )
+                        .into());
+                    }
                     return Err(Box::<dyn Error>::from(bind_error));
                 }
             };
@@ -118,32 +139,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         } => {
             let token = std::env::var(&token_env)
                 .map_err(|_| format!("environment variable {token_env:?} is not set"))?;
-            let provider: Arc<dyn Provider> = Arc::new(SqliteProvider::open(database).await?);
-            let recovery = provider.initialize().await?;
-            if let Err(error) = provider.health_check().await {
-                provider.shutdown().await?;
-                return Err(error.into());
-            }
-            let app = remote_provider_router(Arc::clone(&provider), token, recovery)?;
-            let listener = tokio::net::TcpListener::bind(listen).await?;
-            eprintln!("Patchouli remote provider listening on {listen}");
-            let result = axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = tokio::signal::ctrl_c().await;
-                })
-                .await;
-            let shutdown = provider.shutdown().await;
-            result?;
-            shutdown?;
+            serve_provider(listen, database, token).await?;
         }
         Command::Status { endpoint } => {
             let mut client =
-                LocalClient::connect(&endpoint, "patchouli-cli", env!("CARGO_PKG_VERSION")).await?;
+                LocalClient::connect(&endpoint, "patchouli-db-cli", env!("CARGO_PKG_VERSION"))
+                    .await?;
             println!("{}", serde_json::to_string_pretty(&client.status().await?)?);
         }
         Command::Checkpoint { endpoint } => {
             let mut client =
-                LocalClient::connect(&endpoint, "patchouli-cli", env!("CARGO_PKG_VERSION")).await?;
+                LocalClient::connect(&endpoint, "patchouli-db-cli", env!("CARGO_PKG_VERSION"))
+                    .await?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&client.checkpoint().await?)?
@@ -151,7 +158,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Command::Stop { endpoint } => {
             let mut client =
-                LocalClient::connect(&endpoint, "patchouli-cli", env!("CARGO_PKG_VERSION")).await?;
+                LocalClient::connect(&endpoint, "patchouli-db-cli", env!("CARGO_PKG_VERSION"))
+                    .await?;
             let result = client.shutdown().await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
@@ -167,5 +175,143 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("valid: {}", path.display());
         }
     }
+    Ok(())
+}
+
+fn initialize_home(root: &Path) -> Result<(), Box<dyn Error>> {
+    create_private_dir(root)?;
+    create_private_dir(&root.join("data"))?;
+    create_private_dir(&root.join("run"))?;
+    write_if_missing(
+        &root.join("config.json"),
+        include_bytes!("../../../config/patchouli.default.json"),
+    )?;
+    write_if_missing(
+        &root.join("providers.json"),
+        include_bytes!("../../../config/providers.local.json"),
+    )?;
+    write_if_missing(
+        &root.join("patchouli.schema.json"),
+        include_bytes!("../../../config/patchouli.schema.json"),
+    )?;
+    write_if_missing(
+        &root.join("providers.schema.json"),
+        include_bytes!("../../../config/providers.schema.json"),
+    )?;
+
+    let policy_path = root.join("config.json");
+    let provider_path = root.join("providers.json");
+    let policy = BackendConfig::from_json(&std::fs::read_to_string(&policy_path)?)?;
+    let providers = patchouli_server::ProviderConfig::from_json(
+        &std::fs::read_to_string(&provider_path)?,
+        &policy,
+    )?;
+    let database = match providers.providers.get("local") {
+        Some(patchouli_server::ProviderDefinition::Local { database }) => database,
+        _ => unreachable!("validated provider configuration requires local storage"),
+    };
+    SqliteProvider::validate_existing_storage(if database.is_absolute() {
+        database.clone()
+    } else {
+        root.join(database)
+    })?;
+    println!("initialized Patchouli home: {}", root.display());
+    println!("policy: {}", policy_path.display());
+    println!("providers: {}", provider_path.display());
+    Ok(())
+}
+
+async fn serve_provider(
+    listen: SocketAddr,
+    database: PathBuf,
+    token: String,
+) -> Result<(), Box<dyn Error>> {
+    let provider: Arc<dyn Provider> = Arc::new(SqliteProvider::open(database).await?);
+    let result: Result<(), Box<dyn Error>> = async {
+        let recovery = provider.initialize().await?;
+        provider.health_check().await?;
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let app = remote_provider_router(Arc::clone(&provider), token, recovery, shutdown_rx)?;
+        let listener = tokio::net::TcpListener::bind(listen).await?;
+        let bound_address = listener.local_addr()?;
+        eprintln!("Patchouli remote provider listening on {bound_address}");
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let signal = shutdown_signal().await;
+                let _ = shutdown_tx.send(true);
+                if let Err(error) = signal {
+                    eprintln!("failed to listen for shutdown signal: {error}");
+                }
+            })
+            .await?;
+        Ok(())
+    }
+    .await;
+    let shutdown = provider.shutdown().await;
+    match (result, shutdown) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Err(error), Err(shutdown_error)) => {
+            Err(format!("{error}; provider shutdown also failed: {shutdown_error}").into())
+        }
+    }
+}
+
+fn create_private_dir(path: &Path) -> Result<(), std::io::Error> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => return validate_private_permissions(path),
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("{} exists and is not a directory", path.display()),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(path)?;
+    validate_private_permissions(path)
+}
+
+fn write_if_missing(path: &Path, contents: &[u8]) -> Result<(), std::io::Error> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    match options.open(path) {
+        Ok(mut file) => file.write_all(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            validate_private_permissions(path)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn validate_private_permissions(path: &Path) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path)?.permissions().mode();
+    if mode & 0o077 == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "{} is accessible by other users (mode {:03o}); expected no group/other permissions",
+                path.display(),
+                mode & 0o777
+            ),
+        ))
+    }
+}
+
+#[cfg(not(unix))]
+fn validate_private_permissions(_path: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }

@@ -217,6 +217,8 @@ mod tests {
 
     const BACKEND: &str = include_str!("../../../config/patchouli.default.json");
     const LOCAL: &str = include_str!("../../../config/providers.local.json");
+    const REMOTE: &str = include_str!("../../../config/providers.remote.example.json");
+    const SCHEMA: &str = include_str!("../../../config/providers.schema.json");
 
     #[test]
     fn local_provider_configuration_is_valid() {
@@ -224,6 +226,18 @@ mod tests {
         let config = ProviderConfig::from_json(LOCAL, &backend).unwrap();
         assert!(config.providers.contains_key("local"));
         assert_eq!(config.routing.default, "local");
+    }
+
+    #[test]
+    fn provider_examples_match_the_json_schema_and_runtime_validation() {
+        let backend = BackendConfig::from_json(BACKEND).unwrap();
+        let schema: Value = serde_json::from_str(SCHEMA).unwrap();
+        assert!(jsonschema::meta::is_valid(&schema));
+        for input in [LOCAL, REMOTE] {
+            let document: Value = serde_json::from_str(input).unwrap();
+            jsonschema::draft202012::validate(&schema, &document).unwrap();
+            ProviderConfig::from_json(input, &backend).unwrap();
+        }
     }
 
     #[test]

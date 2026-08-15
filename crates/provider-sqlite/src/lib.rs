@@ -5,6 +5,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+
 use async_trait::async_trait;
 use fs4::FileExt;
 use patchouli_provider::{
@@ -42,28 +45,37 @@ pub struct SqliteProvider {
 }
 
 impl SqliteProvider {
-    pub async fn open(path: impl AsRef<Path>) -> Result<Self, SqliteProviderError> {
-        let path = path.as_ref();
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+    pub fn validate_existing_storage(path: impl AsRef<Path>) -> Result<(), SqliteProviderError> {
+        let Some(path) = canonical_existing_storage_path(path.as_ref())? else {
+            return Ok(());
+        };
+        validate_existing_private_file(&path)?;
+        validate_existing_private_file(&lock_path(&path))?;
+        validate_private_sidecars(&path)?;
+        Ok(())
+    }
 
-        let lock_path = lock_path(path);
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)?;
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self, SqliteProviderError> {
+        let requested_path = path.as_ref();
+        let parent = storage_parent(requested_path);
+        reject_symbolic_link_components(parent)?;
+        if parent != Path::new(".") {
+            create_private_dir(parent)?;
+        }
+        let path = canonical_storage_path(requested_path)?;
+        Self::validate_existing_storage(&path)?;
+
+        let database_file = open_private_file(&path)?;
+        drop(database_file);
+
+        let lock_path = lock_path(&path);
+        let lock = open_private_file(&lock_path)?;
         FileExt::try_lock(&lock).map_err(|error| SqliteProviderError::Lock {
             path: lock_path,
             message: error.to_string(),
         })?;
 
-        let connection = Connection::open(path).await?;
+        let connection = Connection::open(&path).await?;
         connection
             .call(|connection| {
                 connection.busy_timeout(Duration::from_secs(5))?;
@@ -73,6 +85,7 @@ impl SqliteProvider {
                 Ok(())
             })
             .await?;
+        validate_private_sidecars(&path)?;
 
         let (changes, _) = watch::channel(0);
         Ok(Self {
@@ -94,6 +107,206 @@ impl SqliteProvider {
     fn signal_changes(&self) {
         self.changes.send_modify(|generation| *generation += 1);
     }
+}
+
+fn canonical_existing_storage_path(path: &Path) -> Result<Option<PathBuf>, std::io::Error> {
+    let parent = storage_parent(path);
+    match std::fs::metadata(parent) {
+        Ok(metadata) if metadata.is_dir() => canonical_storage_path(path).map(Some),
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            format!("{} is not a directory", parent.display()),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn canonical_storage_path(path: &Path) -> Result<PathBuf, std::io::Error> {
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} does not name a database file", path.display()),
+        )
+    })?;
+    let parent = storage_parent(path);
+    reject_symbolic_link_components(parent)?;
+    let parent = std::fs::canonicalize(parent)?;
+    validate_storage_owner(&parent)?;
+    Ok(parent.join(file_name))
+}
+
+fn storage_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn reject_symbolic_link_components(path: &Path) -> Result<(), std::io::Error> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    for component in absolute.ancestors().collect::<Vec<_>>().into_iter().rev() {
+        match std::fs::symlink_metadata(component) {
+            Ok(metadata)
+                if metadata.file_type().is_symlink()
+                    && !symbolic_link_owner_is_trusted(&metadata) =>
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "storage path component {} is an untrusted symbolic link",
+                        component.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn symbolic_link_owner_is_trusted(metadata: &std::fs::Metadata) -> bool {
+    let owner = metadata.uid();
+    // SAFETY: geteuid has no preconditions and does not retain pointers.
+    owner == 0 || owner == unsafe { libc::geteuid() }
+}
+
+#[cfg(not(unix))]
+fn symbolic_link_owner_is_trusted(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+fn create_private_dir(path: &Path) -> Result<(), std::io::Error> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => return Ok(()),
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("{} exists and is not a directory", path.display()),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(path)
+}
+
+fn open_private_file(path: &Path) -> Result<File, std::io::Error> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    let file = options.open(path)?;
+    validate_private_file_permissions(path, &file)?;
+    Ok(file)
+}
+
+fn validate_existing_private_file(path: &Path) -> Result<(), std::io::Error> {
+    #[cfg(not(unix))]
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{} must not be a symbolic link", path.display()),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    match options.open(path) {
+        Ok(file) => validate_private_file_permissions(path, &file),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn validate_storage_owner(path: &Path) -> Result<(), std::io::Error> {
+    let metadata = std::fs::metadata(path)?;
+    let mode = metadata.mode();
+    // SAFETY: geteuid has no preconditions and does not retain pointers.
+    let effective_user = unsafe { libc::geteuid() };
+    if metadata.uid() != effective_user {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{} is not owned by the current user", path.display()),
+        ));
+    }
+    if mode & 0o022 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "{} is writable by other users (mode {:03o})",
+                path.display(),
+                mode & 0o777
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_storage_owner(_path: &Path) -> Result<(), std::io::Error> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_private_sidecars(path: &Path) -> Result<(), std::io::Error> {
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = OsString::from(path.as_os_str());
+        sidecar.push(suffix);
+        let sidecar = PathBuf::from(sidecar);
+        validate_existing_private_file(&sidecar)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_private_sidecars(_path: &Path) -> Result<(), std::io::Error> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_private_file_permissions(path: &Path, file: &File) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    validate_mode(path, file.metadata()?.permissions().mode())
+}
+
+#[cfg(unix)]
+fn validate_mode(path: &Path, mode: u32) -> Result<(), std::io::Error> {
+    if mode & 0o077 == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "{} is accessible by other users (mode {:03o}); expected no group/other permissions",
+                path.display(),
+                mode & 0o777
+            ),
+        ))
+    }
+}
+
+#[cfg(not(unix))]
+fn validate_private_file_permissions(_path: &Path, _file: &File) -> Result<(), std::io::Error> {
+    Ok(())
 }
 
 #[async_trait]

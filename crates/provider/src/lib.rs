@@ -31,6 +31,10 @@ impl ProviderError {
         }
     }
 
+    pub fn context(self, context: impl std::fmt::Display) -> Self {
+        Self::with_reason(self.reason, format!("{context}: {}", self.message))
+    }
+
     pub fn reason(&self) -> ProviderErrorReason {
         self.reason
     }
@@ -41,6 +45,8 @@ impl ProviderError {
 pub enum ProviderErrorReason {
     Internal,
     DeadlineExceeded,
+    Unauthenticated,
+    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

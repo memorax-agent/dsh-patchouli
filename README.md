@@ -48,14 +48,19 @@ Official Agent Loop
 
 ## 可选本地存储
 
-安装 daemon/CLI，并准备默认 policy 与 provider 配置：
+推荐从 GitHub Release 安装预编译 daemon/CLI。macOS 和 Linux：
 
 ```bash
-cargo install --path crates/server
-mkdir -p "$HOME/.patchouli"
-cp config/patchouli.default.json "$HOME/.patchouli/config.json"
-cp config/providers.local.json "$HOME/.patchouli/providers.json"
+curl -fsSL https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.sh | sh
 ```
+
+Windows PowerShell：
+
+```powershell
+irm https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.ps1 | iex
+```
+
+安装脚本会校验 Release SHA-256，并运行 `patchouli-db init` 创建默认 policy、provider 配置和运行目录，但不会覆盖已有配置。源码安装与完整的平台、升级和卸载说明见[安装文档](docs/installation.md)。
 
 `dsh-patchouli/storage` 不在默认 bundle 中。需要本地存储的 MemoryPlugin 可以显式启用它：
 

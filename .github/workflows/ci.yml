@@ -49,13 +49,35 @@ jobs:
         run: pnpm check
 
       - name: Check Rust formatting
-        run: cargo fmt --check
+        run: cargo fmt --all -- --check
 
       - name: Lint Rust backend
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test Rust backend
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
+
+      - name: Check Unix installer syntax
+        if: runner.os != 'Windows'
+        run: bash -n scripts/install.sh
+
+      - name: Check Windows installer syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/install.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) { throw ($errors | Out-String) }
+
+      - name: Test Windows staged installation failure
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/test-install.ps1
 
   package-plugin:
     name: Package DSH plugin
@@ -110,36 +132,69 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            binary: target/release/patchouli
-            artifact: patchouli-linux-x86_64
-            asset: patchouli-linux-x86_64
-          - os: macos-latest
-            binary: target/release/patchouli
-            artifact: patchouli-macos
-            asset: patchouli-macos
+            target: x86_64-unknown-linux-musl
+            binary: target/x86_64-unknown-linux-musl/release/patchouli-db
+            artifact: patchouli-db-linux-x86_64
+            asset: patchouli-db-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            binary: target/aarch64-unknown-linux-musl/release/patchouli-db
+            artifact: patchouli-db-linux-aarch64
+            asset: patchouli-db-linux-aarch64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            binary: target/x86_64-apple-darwin/release/patchouli-db
+            artifact: patchouli-db-macos-x86_64
+            asset: patchouli-db-macos-x86_64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            binary: target/aarch64-apple-darwin/release/patchouli-db
+            artifact: patchouli-db-macos-aarch64
+            asset: patchouli-db-macos-aarch64
           - os: windows-latest
-            binary: target/release/patchouli.exe
-            artifact: patchouli-windows-x86_64
-            asset: patchouli-windows-x86_64.exe
+            target: x86_64-pc-windows-msvc
+            binary: target/x86_64-pc-windows-msvc/release/patchouli-db.exe
+            artifact: patchouli-db-windows-x86_64
+            asset: patchouli-db-windows-x86_64.exe
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/validate-release-tag.mjs
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+
+      - name: Build Linux daemon
+        if: runner.os == 'Linux'
+        env:
+          CC: musl-gcc
+        run: cargo build --locked --release --bin patchouli-db --target ${{ matrix.target }}
 
       - name: Build daemon
-        run: cargo build --release --bin patchouli
+        if: runner.os != 'Linux'
+        run: cargo build --locked --release --bin patchouli-db --target ${{ matrix.target }}
 
       - name: Name release asset
         run: node --eval "const fs=require('node:fs'); fs.mkdirSync('dist'); fs.copyFileSync(process.argv[1], process.argv[2])" "${{ matrix.binary }}" "dist/${{ matrix.asset }}"
+
+      - name: Write release checksum
+        run: node --eval "const fs=require('node:fs'); const crypto=require('node:crypto'); const file=process.argv[1]; const name=process.argv[2]; const hash=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); fs.writeFileSync(file+'.sha256', hash+'  '+name+'\n')" "dist/${{ matrix.asset }}" "${{ matrix.asset }}"
 
       - name: Upload daemon
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.asset }}
+          path: dist/*
           if-no-files-found: error
           retention-days: 14
 
@@ -154,12 +209,13 @@ jobs:
       - name: Download daemon artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: patchouli-*
+          pattern: patchouli-db-*
           path: artifacts
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh release create "$GITHUB_REF_NAME" artifacts/**/* --generate-notes
 
   deploy-daemon:
@@ -177,7 +233,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build daemon
-        run: cargo build --release --bin patchouli
+        run: cargo build --locked --release --bin patchouli-db
 
       - name: Deploy and verify daemon
         env:
@@ -185,4 +241,4 @@ jobs:
           PATCHOULI_ENDPOINT: ${{ vars.PATCHOULI_ENDPOINT }}
           PATCHOULI_CONFIG: ${{ vars.PATCHOULI_CONFIG }}
           PATCHOULI_PROVIDERS: ${{ vars.PATCHOULI_PROVIDERS }}
-        run: node scripts/deploy-daemon.mjs "${{ runner.os == 'Windows' && 'target/release/patchouli.exe' || 'target/release/patchouli' }}"
+        run: node scripts/deploy-daemon.mjs "${{ runner.os == 'Windows' && 'target/release/patchouli-db.exe' || 'target/release/patchouli-db' }}"

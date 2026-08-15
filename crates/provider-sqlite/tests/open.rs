@@ -23,6 +23,9 @@ async fn opens_a_database_and_reports_health() {
 
     let provider = SqliteProvider::open(&path).await.expect("open SQLite");
 
+    #[cfg(unix)]
+    assert_private_storage_permissions(&path);
+
     assert_eq!(provider.kind(), "sqlite");
     let recovery = provider.initialize().await.expect("initialize SQLite");
     assert_eq!(recovery.generation, 1);
@@ -31,6 +34,161 @@ async fn opens_a_database_and_reports_health() {
     provider.checkpoint().await.expect("checkpoint SQLite");
     provider.shutdown().await.expect("shut down SQLite");
     assert!(path.exists());
+}
+
+#[cfg(unix)]
+fn assert_private_storage_permissions(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory_mode = std::fs::metadata(path.parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(directory_mode, 0o700);
+    for file in [path.to_path_buf(), path.with_extension("db.lock")] {
+        let file_mode = std::fs::metadata(file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(file_mode, 0o600);
+    }
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_owned();
+        sidecar.push(suffix);
+        let sidecar = std::path::PathBuf::from(sidecar);
+        if sidecar.exists() {
+            let file_mode = std::fs::metadata(sidecar).unwrap().permissions().mode() & 0o777;
+            assert_eq!(file_mode, 0o600);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn preserves_existing_directory_permissions_and_keeps_database_private() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let storage = directory.path().join("storage");
+    std::fs::create_dir(&storage).expect("create storage directory");
+    std::fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o755))
+        .expect("make storage non-private");
+
+    let path = storage.join("patchouli.db");
+    let provider = SqliteProvider::open(&path)
+        .await
+        .expect("open private database in existing directory");
+    provider.initialize().await.expect("initialize SQLite");
+    assert_eq!(
+        std::fs::metadata(&storage).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    for file in [path.clone(), path.with_extension("db.lock")] {
+        assert_eq!(
+            std::fs::metadata(file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    provider.shutdown().await.expect("shutdown SQLite");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rejects_an_existing_database_visible_to_other_users() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("patchouli.db");
+    std::fs::write(&path, []).expect("create database file");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+        .expect("make database non-private");
+
+    let error = match SqliteProvider::open(&path).await {
+        Ok(_) => panic!("non-private database must be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("accessible by other users"));
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rejects_a_symbolic_link_database_path() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let target = directory.path().join("target.db");
+    std::fs::write(&target, []).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let database = directory.path().join("patchouli.db");
+    symlink(&target, &database).unwrap();
+
+    assert!(SqliteProvider::open(database).await.is_err());
+    assert_eq!(std::fs::metadata(target).unwrap().len(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pins_a_current_user_symbolic_link_storage_parent() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let first = directory.path().join("first");
+    let second = directory.path().join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::set_permissions(&first, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(&second, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let alias = directory.path().join("storage");
+    symlink(&first, &alias).unwrap();
+
+    let provider = SqliteProvider::open(alias.join("patchouli.db"))
+        .await
+        .unwrap();
+    std::fs::remove_file(&alias).unwrap();
+    symlink(&second, &alias).unwrap();
+    provider.initialize().await.unwrap();
+    provider.shutdown().await.unwrap();
+
+    assert!(first.join("patchouli.db").exists());
+    assert!(!second.join("patchouli.db").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rejects_non_private_wal_before_sqlite_consumes_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let database = directory.path().join("patchouli.db");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    connection
+        .execute_batch("CREATE TABLE sample (value TEXT); INSERT INTO sample VALUES ('secret');")
+        .unwrap();
+    std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let wal = directory.path().join("patchouli.db-wal");
+    let shm = directory.path().join("patchouli.db-shm");
+    assert!(wal.exists());
+    std::fs::set_permissions(&wal, std::fs::Permissions::from_mode(0o644)).unwrap();
+    if shm.exists() {
+        std::fs::set_permissions(&shm, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let database_len = std::fs::metadata(&database).unwrap().len();
+    let wal_len = std::fs::metadata(&wal).unwrap().len();
+
+    let error = match SqliteProvider::open(&database).await {
+        Ok(_) => panic!("non-private WAL must be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("accessible by other users"));
+    assert_eq!(std::fs::metadata(&database).unwrap().len(), database_len);
+    assert_eq!(std::fs::metadata(&wal).unwrap().len(), wal_len);
+    assert!(!directory.path().join("patchouli.db.lock").exists());
+    drop(connection);
 }
 
 #[tokio::test]

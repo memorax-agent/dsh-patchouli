@@ -12,7 +12,7 @@ if (!isAbsolute(deployRoot) || deployRoot === resolve(homedir()) || deployRoot =
   throw new Error(`unsafe deployment root: ${deployRoot}`)
 }
 
-const binaryName = process.platform === 'win32' ? 'patchouli.exe' : 'patchouli'
+const binaryName = process.platform === 'win32' ? 'patchouli-db.exe' : 'patchouli-db'
 const installDir = join(deployRoot, 'bin')
 const target = join(installDir, binaryName)
 const backup = join(installDir, `${binaryName}.previous`)

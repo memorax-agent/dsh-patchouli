@@ -23,15 +23,14 @@ Install the Rust CLI:
 
 ```bash
 cargo install --path crates/server
+patchouli-db init --root "$HOME/.patchouli"
 ```
 
-Prepare the default backend policy and local provider topology:
-
-```bash
-mkdir -p "$HOME/.patchouli"
-cp config/patchouli.default.json "$HOME/.patchouli/config.json"
-cp config/providers.local.json "$HOME/.patchouli/providers.json"
-```
+The daemon opens the SQLite file at `~/.patchouli/data/patchouli.db` and loads
+backend policy from `~/.patchouli/config.json` in the default local layout.
+DeepSeek Harness/Cordis startup integration is maintained by the frontend
+collaborator. `init` creates the default policy, local provider configuration,
+data directory, and runtime directory without replacing existing files.
 
 Default endpoints are:
 
@@ -41,13 +40,13 @@ Default endpoints are:
 macOS/Linux lifecycle:
 
 ```bash
-patchouli serve \
+patchouli-db serve \
   --endpoint "$HOME/.patchouli/run/patchouli.sock" \
   --providers "$HOME/.patchouli/providers.json" \
   --config "$HOME/.patchouli/config.json"
-patchouli status --endpoint "$HOME/.patchouli/run/patchouli.sock"
-patchouli checkpoint --endpoint "$HOME/.patchouli/run/patchouli.sock"
-patchouli stop --endpoint "$HOME/.patchouli/run/patchouli.sock"
+patchouli-db status --endpoint "$HOME/.patchouli/run/patchouli.sock"
+patchouli-db checkpoint --endpoint "$HOME/.patchouli/run/patchouli.sock"
+patchouli-db stop --endpoint "$HOME/.patchouli/run/patchouli.sock"
 ```
 
 PowerShell lifecycle:
@@ -56,10 +55,10 @@ PowerShell lifecycle:
 $endpoint = '\\.\pipe\patchouli'
 $config = Join-Path $HOME '.patchouli\config.json'
 $providers = Join-Path $HOME '.patchouli\providers.json'
-patchouli serve --endpoint $endpoint --providers $providers --config $config
-patchouli status --endpoint $endpoint
-patchouli checkpoint --endpoint $endpoint
-patchouli stop --endpoint $endpoint
+patchouli-db serve --endpoint $endpoint --providers $providers --config $config
+patchouli-db status --endpoint $endpoint
+patchouli-db checkpoint --endpoint $endpoint
+patchouli-db stop --endpoint $endpoint
 ```
 
 `serve` remains in the foreground for launchd, systemd, Windows Service
@@ -72,6 +71,14 @@ retrieval, retained change streams, durable cross-RPC work units, keyed
 idempotency, and persisted causal/session frontiers. Provider capability
 mismatches prevent startup instead of failing the first request.
 
+Ctrl-C, Unix SIGTERM, and Windows console shutdown events all use the same
+graceful connection drain and provider shutdown path.
+
+Immediate and batch-publication policies may enable keyed idempotency. The
+SQLite adapter stores the request and original accepted result atomically with
+the entity commit or staged candidate. Retention comes from backend
+configuration and is reported by handshake.
+
 Only one daemon may own a local SQLite database at a time. A successful startup
 increments a durable generation and reports whether the previous generation
 stopped uncleanly. `checkpoint` flushes WAL without stopping; `stop` drains
@@ -82,8 +89,8 @@ termination.
 Validate configuration without starting the daemon:
 
 ```bash
-patchouli config check config/patchouli.default.json
-patchouli config check config/patchouli.default.json --providers config/providers.local.json
+patchouli-db config check config/patchouli.default.json
+patchouli-db config check config/patchouli.default.json --providers config/providers.local.json
 ```
 
 ## Test the DSH frontend
@@ -123,13 +130,17 @@ The repository is public. Pull Request code runs only on GitHub-hosted
 infrastructure. The registered self-hosted runner is reserved for trusted
 `main` delivery jobs and explicit manual runs.
 
-The matrix job checks Node and Rust and builds Linux, macOS, and Windows daemon
-binaries. `v*` tags publish those binaries to a GitHub Release. Trusted `main`
-and manual runs also package the protocol and DSH plugin as artifacts, and can
-install the daemon under `PATCHOULI_DEPLOY_ROOT`, restart it, and verify
-`patchouli status`; a failed health check restores the previous binary.
-Repository variables may override deploy root, endpoint, backend policy, and
-provider configuration. The workflow never installs or modifies a DSH profile.
+The matrix job checks Node and Rust and builds Linux x86_64/aarch64, macOS
+x86_64/aarch64, and Windows x86_64 daemon binaries. Trusted `main` and manual
+runs also package the protocol and DSH plugin as artifacts. `v*` tags publish
+the daemon binaries and SHA-256 checksums to a GitHub Release. Trusted `main`
+and manual runs can install the daemon under `PATCHOULI_DEPLOY_ROOT` (default
+`~/.patchouli`), restart it, and verify `patchouli-db status`; a failed health
+check restores and restarts the previous binary. Repository variables may
+override deploy root, endpoint, backend policy, and provider configuration
+paths. Without `PATCHOULI_PROVIDERS`, deployment creates one persistent
+local-only provider configuration under the deploy root. The workflow never
+installs or modifies a DSH profile.
 
 ## Generated files
 

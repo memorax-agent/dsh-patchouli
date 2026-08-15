@@ -36,7 +36,7 @@ const defaultEndpoint = process.platform === 'win32'
 
 export const Config: z<Config> = z.object({
   endpoint: z.string().default(defaultEndpoint),
-  command: z.string().default('patchouli'),
+  command: z.string().default('patchouli-db'),
   providerConfigPath: z.string().default(join(homedir(), '.patchouli', 'providers.json')),
   backendConfigPath: z.string().default(join(homedir(), '.patchouli', 'config.json')),
   autoStart: z.boolean().default(true),

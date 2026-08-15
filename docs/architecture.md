@@ -103,7 +103,7 @@ unsubscribe during their own lifecycle.
 
 The daemon remains independent of plugin lifecycle: unloading the storage
 plugin closes its IPC connection but does not administratively stop the daemon.
-Shutdown goes through the `patchouli stop` CLI.
+Shutdown goes through the `patchouli-db stop` CLI.
 
 ### Storage Backend
 
@@ -154,6 +154,10 @@ replication.
 
 The IPC framing is shared across platforms: Unix domain sockets on macOS/Linux,
 Windows named pipes, and UTF-8 NDJSON on every platform.
+
+For a routed provider, control status reports the maximum recovery generation
+and marks recovery after an unclean shutdown when any configured provider
+reports one. Lifecycle errors always identify the provider that failed.
 
 ## Model interface
 

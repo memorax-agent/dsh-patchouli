@@ -16,7 +16,14 @@ async fn remote_provider_round_trips_provider_operations() {
             .unwrap(),
     );
     let recovery = storage.initialize().await.unwrap();
-    let app = remote_provider_router(Arc::clone(&storage), "secret".to_owned(), recovery).unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let app = remote_provider_router(
+        Arc::clone(&storage),
+        "secret".to_owned(),
+        recovery,
+        shutdown_rx,
+    )
+    .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -100,10 +107,37 @@ async fn remote_provider_round_trips_provider_operations() {
             Ok(_) => panic!("wrong token must be rejected"),
             Err(error) => error,
         };
+    assert_eq!(error.reason(), ProviderErrorReason::Unauthenticated);
     assert!(error.to_string().contains("unauthenticated"));
+
+    let wait = tokio::spawn(async move { remote.wait_for_changes(&key.scope_json, 2).await });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    shutdown_tx.send(true).unwrap();
+    let error = tokio::time::timeout(std::time::Duration::from_secs(1), wait)
+        .await
+        .expect("shutdown must release remote wait")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.reason(), ProviderErrorReason::Unavailable);
 
     server.abort();
     storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn classifies_connection_failures_as_unavailable() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+
+    let error =
+        match RemoteProvider::connect(&format!("http://{address}"), "secret".to_owned()).await {
+            Ok(_) => panic!("closed endpoint must be unavailable"),
+            Err(error) => error,
+        };
+    assert_eq!(error.reason(), ProviderErrorReason::Unavailable);
+    assert!(error.to_string().contains("fetch provider info"));
+    assert!(error.to_string().contains(&address.to_string()));
 }
 
 #[test]
