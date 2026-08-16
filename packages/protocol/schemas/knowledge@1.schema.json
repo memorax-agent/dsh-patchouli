@@ -10,7 +10,8 @@
     "metadata": { "$ref": "#/$defs/metadata" },
     "artifact": {
       "type": "array",
-      "items": { "$ref": "#/$defs/artifact" },
+      "items": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/artifact_ref" },
+      "uniqueItems": true,
       "maxItems": 32
     },
     "profile": { "$ref": "#/$defs/profile" }
@@ -58,46 +59,6 @@
         },
         "extensions": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/extensions" }
       }
-    },
-    "source_artifact": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["ref", "role", "media_type", "digest", "metadata"],
-      "properties": {
-        "ref": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" },
-        "role": { "type": "string", "enum": ["source", "attachment"] },
-        "media_type": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
-        "digest": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" },
-        "metadata": { "type": "object" }
-      }
-    },
-    "embedding_artifact": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["ref", "role", "media_type", "digest", "metadata"],
-      "properties": {
-        "ref": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" },
-        "role": { "const": "embedding" },
-        "media_type": { "const": "application/vnd.patchouli.embedding" },
-        "digest": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" },
-        "metadata": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["model", "dimensions", "metric", "source_version"],
-          "properties": {
-            "model": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" },
-            "dimensions": { "type": "integer", "minimum": 1 },
-            "metric": { "type": "string", "enum": ["cosine", "dot_product", "euclidean"] },
-            "source_version": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" }
-          }
-        }
-      }
-    },
-    "artifact": {
-      "oneOf": [
-        { "$ref": "#/$defs/source_artifact" },
-        { "$ref": "#/$defs/embedding_artifact" }
-      ]
     },
     "temporal": {
       "oneOf": [

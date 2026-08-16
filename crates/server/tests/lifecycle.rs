@@ -4,9 +4,11 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use patchouli_backend::{
-    BackendConfig, BackendEngine, CreateEntityData, RpcParams, SubscribeChangesData,
-    UnsubscribeChangesData,
+    ArtifactDownloadChunkData, ArtifactUploadBeginData, ArtifactUploadChunkData,
+    ArtifactUploadCommitData, ArtifactValue, BackendConfig, BackendEngine, CreateEntityData,
+    EntityVersion, RpcParams, SubscribeChangesData, UnsubscribeChangesData,
 };
 use patchouli_provider::{
     EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot, Provider, ProviderCapabilities,
@@ -23,6 +25,10 @@ const EXAMPLE: &str = include_str!(concat!(
 const KNOWLEDGE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../packages/protocol/schemas/examples/knowledge@1.json"
+));
+const MANAGED_ARTIFACT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/protocol/schemas/examples/artifact-managed@1.json"
 ));
 
 #[derive(Default)]
@@ -109,6 +115,7 @@ impl Provider for HealthyProvider {
 #[tokio::test]
 async fn daemon_accepts_status_and_shutdown_over_local_ipc() {
     let (_directory, endpoint) = test_endpoint();
+    let artifact_directory = tempfile::tempdir().expect("temporary artifact directory");
     let provider_state = Arc::new(ProviderState::default());
     let provider = Arc::new(HealthyProvider(Arc::clone(&provider_state)));
     let engine = Arc::new(
@@ -122,6 +129,7 @@ async fn daemon_accepts_status_and_shutdown_over_local_ipc() {
     let server = LocalServer::bind(
         ServerOptions {
             endpoint: endpoint.clone(),
+            artifact_root: artifact_directory.path().join("artifacts"),
             node_id: "node-test".to_owned(),
             cluster_id: "cluster-test".to_owned(),
         },
@@ -201,6 +209,7 @@ async fn daemon_accepts_status_and_shutdown_over_local_ipc() {
 #[tokio::test]
 async fn daemon_streams_committed_changes_and_unsubscribes_over_ipc() {
     let (_endpoint_directory, endpoint) = test_endpoint();
+    let artifact_directory = tempfile::tempdir().expect("temporary artifact directory");
     let database_directory = tempfile::tempdir().expect("temporary database directory");
     let database = database_directory.path().join("patchouli.db");
     let provider = Arc::new(SqliteProvider::open(&database).await.expect("open SQLite"));
@@ -215,6 +224,7 @@ async fn daemon_streams_committed_changes_and_unsubscribes_over_ipc() {
     let server = LocalServer::bind(
         ServerOptions {
             endpoint: endpoint.clone(),
+            artifact_root: artifact_directory.path().join("artifacts"),
             node_id: "node-stream".to_owned(),
             cluster_id: "cluster-stream".to_owned(),
         },
@@ -275,6 +285,150 @@ async fn daemon_streams_committed_changes_and_unsubscribes_over_ipc() {
         .expect("unsubscribe");
     assert!(removed.data.removed);
     writer.shutdown().await.expect("request shutdown");
+    task.await.expect("server task").expect("server shutdown");
+}
+
+#[tokio::test]
+async fn daemon_uploads_and_downloads_scoped_managed_artifacts() {
+    let (_endpoint_directory, endpoint) = test_endpoint();
+    let storage_directory = tempfile::tempdir().expect("temporary storage directory");
+    let database = storage_directory.path().join("patchouli.db");
+    let artifact_root = storage_directory.path().join("artifacts");
+    let provider = Arc::new(SqliteProvider::open(&database).await.expect("open SQLite"));
+    let engine = Arc::new(
+        BackendEngine::start(
+            BackendConfig::from_json(EXAMPLE).expect("valid config"),
+            provider,
+        )
+        .await
+        .expect("start engine"),
+    );
+    let server = LocalServer::bind(
+        ServerOptions {
+            endpoint: endpoint.clone(),
+            artifact_root,
+            node_id: "node-artifact".to_owned(),
+            cluster_id: "cluster-test".to_owned(),
+        },
+        engine,
+    )
+    .await
+    .expect("bind daemon");
+    let task = tokio::spawn(server.run());
+    let (mut client, handshake) = LocalClient::connect_with_capabilities(
+        &endpoint,
+        "artifact-client",
+        "1.0.0",
+        vec!["artifacts".to_owned()],
+    )
+    .await
+    .expect("connect client");
+    assert_eq!(handshake.capabilities, ["artifacts"]);
+
+    let meta = std::collections::BTreeMap::from([
+        ("workspace_id".to_owned(), serde_json::json!("workspace-1")),
+        ("user_id".to_owned(), serde_json::json!("user-7")),
+        ("channel_id".to_owned(), serde_json::json!("channel-7")),
+    ]);
+    let fixture: ArtifactValue = serde_json::from_str(MANAGED_ARTIFACT).expect("artifact fixture");
+    let content = b"managed artifact content crosses several chunks";
+    let begin = client
+        .begin_artifact_upload(&RpcParams {
+            meta: meta.clone(),
+            data: ArtifactUploadBeginData {
+                id: Some("artifact-uploaded".to_owned()),
+                media_type: "application/octet-stream".to_owned(),
+                name: Some("content.bin".to_owned()),
+                expected_byte_length: Some(content.len() as u64),
+                expected_digest: None,
+                metadata: fixture.metadata,
+            },
+        })
+        .await
+        .expect("begin upload");
+    let first = &content[..13];
+    let first_chunk = client
+        .upload_artifact_chunk(&RpcParams {
+            meta: meta.clone(),
+            data: ArtifactUploadChunkData {
+                upload_id: begin.data.upload_id.clone(),
+                offset: 0,
+                bytes_base64: BASE64.encode(first),
+            },
+        })
+        .await
+        .expect("upload first chunk");
+    client
+        .upload_artifact_chunk(&RpcParams {
+            meta: meta.clone(),
+            data: ArtifactUploadChunkData {
+                upload_id: begin.data.upload_id.clone(),
+                offset: first_chunk.data.next_offset,
+                bytes_base64: BASE64.encode(&content[first.len()..]),
+            },
+        })
+        .await
+        .expect("upload second chunk");
+    let committed = client
+        .commit_artifact_upload(&RpcParams {
+            meta: meta.clone(),
+            data: ArtifactUploadCommitData {
+                upload_id: begin.data.upload_id,
+            },
+        })
+        .await
+        .expect("commit upload");
+    let EntityVersion::Active { value, .. } = committed.data.entity else {
+        panic!("committed artifact must be active");
+    };
+    let artifact: ArtifactValue = serde_json::from_value(value).expect("managed artifact value");
+    assert_eq!(artifact.byte_length, Some(content.len() as u64));
+    assert!(artifact.digest.unwrap().starts_with("sha256:"));
+
+    let mut downloaded = Vec::new();
+    let mut offset = 0;
+    loop {
+        let chunk = client
+            .download_artifact_chunk(&RpcParams {
+                meta: meta.clone(),
+                data: ArtifactDownloadChunkData {
+                    id: "artifact-uploaded".to_owned(),
+                    version: None,
+                    offset,
+                    max_bytes: 7,
+                },
+            })
+            .await
+            .expect("download artifact chunk");
+        downloaded.extend(
+            BASE64
+                .decode(chunk.data.bytes_base64)
+                .expect("decode artifact chunk"),
+        );
+        offset = chunk.data.next_offset;
+        if chunk.data.eof {
+            break;
+        }
+    }
+    assert_eq!(downloaded, content);
+
+    let mut wrong_scope = meta;
+    wrong_scope.insert("user_id".to_owned(), serde_json::json!("user-8"));
+    let error = client
+        .download_artifact_chunk(&RpcParams {
+            meta: wrong_scope,
+            data: ArtifactDownloadChunkData {
+                id: "artifact-uploaded".to_owned(),
+                version: None,
+                offset: 0,
+                max_bytes: 7,
+            },
+        })
+        .await
+        .expect_err("artifact must remain scoped");
+    assert!(matches!(error, IpcError::Rpc { code: -32003, .. }));
+
+    client.shutdown().await.expect("request shutdown");
     task.await.expect("server task").expect("server shutdown");
 }
 

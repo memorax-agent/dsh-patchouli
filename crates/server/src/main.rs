@@ -39,6 +39,9 @@ enum Command {
     Serve {
         #[arg(long)]
         endpoint: String,
+        /// Backend-managed content-addressed artifact directory.
+        #[arg(long)]
+        artifacts: PathBuf,
         /// Physical provider and scope-routing configuration.
         #[arg(long)]
         providers: PathBuf,
@@ -99,6 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Command::Init { root } => initialize_home(&root)?,
         Command::Serve {
             endpoint,
+            artifacts,
             providers,
             config,
             node_id,
@@ -111,6 +115,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let server = match LocalServer::bind(
                 ServerOptions {
                     endpoint: endpoint.clone(),
+                    artifact_root: artifacts,
                     node_id,
                     cluster_id,
                 },
@@ -181,6 +186,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 fn initialize_home(root: &Path) -> Result<(), Box<dyn Error>> {
     create_private_dir(root)?;
     create_private_dir(&root.join("data"))?;
+    create_private_dir(&root.join("data").join("artifacts"))?;
     create_private_dir(&root.join("run"))?;
     write_if_missing(
         &root.join("config.json"),

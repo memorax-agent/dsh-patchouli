@@ -32,6 +32,19 @@
         "id": { "$ref": "#/$defs/non_empty_string" }
       }
     },
+    "artifact_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id", "role"],
+      "properties": {
+        "type": { "const": "artifact" },
+        "id": { "$ref": "#/$defs/non_empty_string" },
+        "role": {
+          "type": "string",
+          "enum": ["source", "attachment", "embedding"]
+        }
+      }
+    },
     "scope": {
       "type": "object",
       "additionalProperties": false,

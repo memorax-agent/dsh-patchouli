@@ -41,6 +41,100 @@
     "scope_by": ["workspace_id", "user_id"]
   },
   "entity_types": {
+    "artifact": {
+      "value_schema": {
+        "$ref": "urn:patchouli:schema:artifact:1"
+      },
+      "rules": [
+        {
+          "name": "transaction_batch",
+          "when": {
+            "all_present": ["transaction_id"]
+          },
+          "behavior": {
+            "consistency": {
+              "snapshot": {
+                "mode": "shared",
+                "key_by": ["transaction_id"]
+              },
+              "acquire": {
+                "allow_sources": ["authority"],
+                "requirements": [
+                  {
+                    "kind": "linearizable",
+                    "key_by": []
+                  }
+                ]
+              },
+              "sessions": [],
+              "commit": {
+                "ordering": {
+                  "kind": "serialize",
+                  "key_by": []
+                }
+              }
+            },
+            "idempotency": {
+              "mode": "disabled"
+            },
+            "conflict": {
+              "default_strategy": "mvcc",
+              "strategy_from": "conflict_strategy",
+              "base_versions": "base_versions",
+              "merge": [],
+              "otherwise": "mvcc"
+            },
+            "publication": {
+              "mode": "batch",
+              "key_by": ["transaction_id"],
+              "close_when": {
+                "kind": "marker",
+                "field": "transaction_state",
+                "equals": "commit"
+              },
+              "staging_ttl_ms": 3600000,
+              "on_expire": "discard"
+            }
+          }
+        }
+      ],
+      "fallback": {
+        "consistency": {
+          "snapshot": {
+            "mode": "request"
+          },
+          "acquire": {
+            "allow_sources": ["authority"],
+            "requirements": [
+              {
+                "kind": "linearizable",
+                "key_by": []
+              }
+            ]
+          },
+          "sessions": [],
+          "commit": {
+            "ordering": {
+              "kind": "serialize",
+              "key_by": []
+            }
+          }
+        },
+        "idempotency": {
+          "mode": "disabled"
+        },
+        "conflict": {
+          "default_strategy": "mvcc",
+          "strategy_from": "conflict_strategy",
+          "base_versions": "base_versions",
+          "merge": [],
+          "otherwise": "mvcc"
+        },
+        "publication": {
+          "mode": "immediate"
+        }
+      }
+    },
     "knowledge": {
       "value_schema": {
         "$ref": "urn:patchouli:schema:knowledge:1"

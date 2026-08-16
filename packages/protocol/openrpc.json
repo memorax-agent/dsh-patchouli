@@ -140,6 +140,102 @@
       ]
     },
     {
+      "name": "patchouli.artifact.upload.begin@1",
+      "summary": "Begin a backend-managed Artifact upload",
+      "description": "Creates an ephemeral upload capability. The Artifact entity is not created or published until commit.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/ArtifactUploadBeginData" }
+      ],
+      "result": {
+        "name": "upload",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ArtifactUploadBeginResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/InvalidRequest" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.artifact.upload.chunk@1",
+      "summary": "Append one ordered chunk to an Artifact upload",
+      "description": "Chunks are Base64 encoded and must start at the exact next offset returned by the previous call.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/ArtifactUploadChunkData" }
+      ],
+      "result": {
+        "name": "chunk",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ArtifactUploadChunkResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/InvalidRequest" },
+        { "$ref": "#/components/errors/NotFound" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.artifact.upload.commit@1",
+      "summary": "Commit an upload and create its managed Artifact entity",
+      "description": "Verifies byte length and SHA-256, atomically publishes the content-addressed object, then creates the Artifact through the configured generic entity controller.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/ArtifactUploadCommitData" }
+      ],
+      "result": {
+        "name": "mutation",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/MutationResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/InvalidRequest" },
+        { "$ref": "#/components/errors/NotFound" },
+        { "$ref": "#/components/errors/VersionConflict" },
+        { "$ref": "#/components/errors/WorkUnitExpired" },
+        { "$ref": "#/components/errors/IdempotencyConflict" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
+      "name": "patchouli.artifact.download.chunk@1",
+      "summary": "Read one chunk of a backend-managed Artifact",
+      "description": "Resolves the Artifact entity inside the configured request scope before reading its managed placement. Indexed Artifacts remain with their source provider.",
+      "paramStructure": "by-name",
+      "params": [
+        { "$ref": "#/components/contentDescriptors/Meta" },
+        { "$ref": "#/components/contentDescriptors/ArtifactDownloadChunkData" }
+      ],
+      "result": {
+        "name": "chunk",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ArtifactDownloadChunkResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/Unauthenticated" },
+        { "$ref": "#/components/errors/Forbidden" },
+        { "$ref": "#/components/errors/InvalidRequest" },
+        { "$ref": "#/components/errors/NotFound" },
+        { "$ref": "#/components/errors/VersionConflict" },
+        { "$ref": "#/components/errors/UnsupportedCapability" },
+        { "$ref": "#/components/errors/DeadlineExceeded" },
+        { "$ref": "#/components/errors/Overloaded" }
+      ]
+    },
+    {
       "name": "patchouli.entity.read@1",
       "summary": "Read the current versions of one entity",
       "description": "The result is read from one database snapshot. A missing identity returns NOT_FOUND; a retained tombstone returns state deleted.",
@@ -300,6 +396,26 @@
         "required": true,
         "schema": { "$ref": "#/components/schemas/CreateEntityData" }
       },
+      "ArtifactUploadBeginData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ArtifactUploadBeginData" }
+      },
+      "ArtifactUploadChunkData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ArtifactUploadChunkData" }
+      },
+      "ArtifactUploadCommitData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ArtifactUploadCommitData" }
+      },
+      "ArtifactDownloadChunkData": {
+        "name": "data",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/ArtifactDownloadChunkData" }
+      },
       "ReadEntityData": {
         "name": "data",
         "required": true,
@@ -396,12 +512,14 @@
             "additionalProperties": false,
             "required": [
               "max_request_bytes",
+              "max_artifact_chunk_bytes",
               "max_result_items",
               "idempotency_retention_seconds",
               "change_retention_seconds"
             ],
             "properties": {
               "max_request_bytes": { "type": "integer", "minimum": 1 },
+              "max_artifact_chunk_bytes": { "type": "integer", "minimum": 1 },
               "max_result_items": { "type": "integer", "minimum": 1 },
               "idempotency_retention_seconds": { "type": "integer", "minimum": 1 },
               "change_retention_seconds": { "type": "integer", "minimum": 1 }
@@ -474,6 +592,134 @@
         "properties": {
           "type": { "$ref": "#/components/schemas/NonEmptyString" },
           "id": { "$ref": "#/components/schemas/NonEmptyString" }
+        }
+      },
+      "ArtifactUploadBeginData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "media_type",
+          "name",
+          "expected_byte_length",
+          "expected_digest",
+          "metadata"
+        ],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/NonEmptyString" },
+          "media_type": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+          "name": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/NonEmptyString" },
+              { "type": "null" }
+            ]
+          },
+          "expected_byte_length": {
+            "oneOf": [
+              { "type": "integer", "minimum": 0 },
+              { "type": "null" }
+            ]
+          },
+          "expected_digest": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/NonEmptyString" },
+              { "type": "null" }
+            ]
+          },
+          "metadata": { "type": "object" }
+        }
+      },
+      "ArtifactUploadBeginResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["upload_id", "max_chunk_bytes"],
+            "properties": {
+              "upload_id": { "$ref": "#/components/schemas/OpaqueToken" },
+              "max_chunk_bytes": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      },
+      "ArtifactUploadChunkData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["upload_id", "offset", "bytes_base64"],
+        "properties": {
+          "upload_id": { "$ref": "#/components/schemas/OpaqueToken" },
+          "offset": { "type": "integer", "minimum": 0 },
+          "bytes_base64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "ArtifactUploadChunkResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["next_offset"],
+            "properties": {
+              "next_offset": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      },
+      "ArtifactUploadCommitData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["upload_id"],
+        "properties": {
+          "upload_id": { "$ref": "#/components/schemas/OpaqueToken" }
+        }
+      },
+      "ArtifactDownloadChunkData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "offset", "max_bytes"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/NonEmptyString" },
+          "version": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/OpaqueToken" },
+              { "type": "null" }
+            ]
+          },
+          "offset": { "type": "integer", "minimum": 0 },
+          "max_bytes": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ArtifactDownloadChunkResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta", "data"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["entity", "offset", "next_offset", "eof", "bytes_base64"],
+            "properties": {
+              "entity": { "$ref": "#/components/schemas/EntityVersion" },
+              "offset": { "type": "integer", "minimum": 0 },
+              "next_offset": { "type": "integer", "minimum": 0 },
+              "eof": { "type": "boolean" },
+              "bytes_base64": {
+                "type": "string",
+                "contentEncoding": "base64"
+              }
+            }
+          }
         }
       },
       "CreateEntityData": {

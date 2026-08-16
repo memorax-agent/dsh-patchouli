@@ -1,3 +1,4 @@
+mod artifact;
 mod config;
 mod conflict;
 mod controller;
@@ -11,14 +12,14 @@ mod wire;
 pub use engine::{BackendEngine, EngineError};
 pub use error::{BackendError, BackendErrorReason, EntityVersionConflict};
 pub use fact::{
-    AbstractionLevel, Actionability, ArtifactReference, EmbeddingArtifactMetadata,
-    EmbeddingMediaType, EmbeddingMetric, EpistemicStatus, FACT_COMMON_SCHEMA_URI, FactLifecycle,
-    FactMetadata, FactMetadataCore, FactOrigin, FactScope, FactTime, KNOWLEDGE_ENTITY_TYPE,
-    KNOWLEDGE_RELATION_ENTITY_TYPE, KNOWLEDGE_RELATION_SCHEMA_URI, KNOWLEDGE_SCHEMA_URI,
-    KnowledgeContent, KnowledgeEntityType, KnowledgeProfile, KnowledgeRef,
-    KnowledgeRelationSchemaVersion, KnowledgeRelationType, KnowledgeRelationValue,
-    KnowledgeSchemaVersion, KnowledgeValue, LifecycleStatus, Ownership, Persistence, Provenance,
-    ProvenanceKind, RetrievalMode, TemporalGrounding,
+    ARTIFACT_ENTITY_TYPE, ARTIFACT_SCHEMA_URI, AbstractionLevel, Actionability, ArtifactEntityType,
+    ArtifactPlacement, ArtifactReference, ArtifactRole, ArtifactSchemaVersion, ArtifactValue,
+    EpistemicStatus, FACT_COMMON_SCHEMA_URI, FactLifecycle, FactMetadata, FactMetadataCore,
+    FactOrigin, FactScope, FactTime, KNOWLEDGE_ENTITY_TYPE, KNOWLEDGE_RELATION_ENTITY_TYPE,
+    KNOWLEDGE_RELATION_SCHEMA_URI, KNOWLEDGE_SCHEMA_URI, KnowledgeContent, KnowledgeEntityType,
+    KnowledgeProfile, KnowledgeRef, KnowledgeRelationSchemaVersion, KnowledgeRelationType,
+    KnowledgeRelationValue, KnowledgeSchemaVersion, KnowledgeValue, LifecycleStatus, Ownership,
+    Persistence, Provenance, ProvenanceKind, RetrievalMode, TemporalGrounding,
 };
 pub use model::{
     ChangeCursor, ChangeFilter, ChangeKind, ChangeRecord, CreateEntityData, CreateEntityParams,
@@ -48,6 +49,10 @@ pub mod methods {
     pub const CONTROL_STATUS: &str = "patchouli.control.status@1";
     pub const CONTROL_CHECKPOINT: &str = "patchouli.control.checkpoint@1";
     pub const CONTROL_SHUTDOWN: &str = "patchouli.control.shutdown@1";
+    pub const ARTIFACT_UPLOAD_BEGIN: &str = "patchouli.artifact.upload.begin@1";
+    pub const ARTIFACT_UPLOAD_CHUNK: &str = "patchouli.artifact.upload.chunk@1";
+    pub const ARTIFACT_UPLOAD_COMMIT: &str = "patchouli.artifact.upload.commit@1";
+    pub const ARTIFACT_DOWNLOAD_CHUNK: &str = "patchouli.artifact.download.chunk@1";
     pub const ENTITY_CREATE: &str = "patchouli.entity.create@1";
     pub const ENTITY_READ: &str = "patchouli.entity.read@1";
     pub const ENTITY_RETRIEVE: &str = "patchouli.entity.retrieve@1";
@@ -57,6 +62,13 @@ pub mod methods {
     pub const CHANGES_UNSUBSCRIBE: &str = "patchouli.changes.unsubscribe@1";
     pub const CHANGES_EVENT: &str = "patchouli.changes.event@1";
 }
+pub use artifact::{
+    ArtifactDownloadChunkData, ArtifactDownloadChunkParams, ArtifactDownloadChunkResult,
+    ArtifactDownloadChunkResultData, ArtifactUploadBeginData, ArtifactUploadBeginParams,
+    ArtifactUploadBeginResult, ArtifactUploadBeginResultData, ArtifactUploadChunkData,
+    ArtifactUploadChunkParams, ArtifactUploadChunkResult, ArtifactUploadChunkResultData,
+    ArtifactUploadCommitData, ArtifactUploadCommitParams,
+};
 pub use config::{
     AcquirePolicy, AcquireRequirement, BackendConfig, BatchCloseCondition, BatchExpiryPolicy,
     Behavior, CommitConsistencyPolicy, CommitOrderingPolicy, ConfigError, ConflictFallback,

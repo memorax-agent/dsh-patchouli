@@ -43,9 +43,9 @@ The default configuration registers the built-in fact schemas by stable URN:
 }
 ```
 
-The backend resolves the built-in Knowledge and KnowledgeRelation schemas from the
-installed package without network access. Inline deployment schemas remain
-valid for other entity types.
+The backend resolves the built-in Artifact, Knowledge, and KnowledgeRelation
+schemas from the installed package without network access. Inline deployment
+schemas remain valid for other entity types.
 
 ## Validation
 

@@ -1,44 +1,33 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
+import type { JsonObject, JsonValue } from '@memorax-agent/patchouli-protocol'
 
-export type MemoryMetadata = Readonly<Record<string, unknown>>
+export type MemoryMetadata = JsonObject
+export type MemoryData = JsonValue
 
-export interface MemoryMessage {
-  readonly role: 'user' | 'assistant'
-  readonly content: string
+export interface MemoryCallMeta {
+  readonly source: Readonly<{
+    readonly type: string
+    readonly id: string
+  }>
+  readonly scope: string
+  readonly requestId?: string
+  readonly attributes?: JsonObject
 }
 
 export interface MemoryUpdateRequest {
-  readonly scope: string
-  readonly messages: readonly MemoryMessage[]
-  readonly metadata?: MemoryMetadata
-}
-
-export interface MemoryUpdateReceipt {
-  readonly status: 'accepted' | 'applied'
-  readonly receipt?: string
+  readonly meta: MemoryCallMeta
+  /** Source-owned, lossless JSON facts. Interpretation belongs to the memory plugin. */
+  readonly data: MemoryData
 }
 
 export interface MemoryRetrieveRequest {
-  readonly scope: string
-  readonly query: string
-  readonly limit?: number
-  readonly metadata?: MemoryMetadata
-}
-
-export interface MemoryHit {
-  readonly id?: string
-  readonly content: string
-  readonly score?: number
-  readonly metadata?: MemoryMetadata
-}
-
-export interface MemoryRetrieveResult {
-  readonly items: readonly MemoryHit[]
+  readonly meta: MemoryCallMeta
+  /** Source-owned, lossless JSON facts used to decide what to retrieve. */
+  readonly data: MemoryData
 }
 
 export interface MemorySubscribeRequest {
-  readonly scope: string
-  readonly metadata?: MemoryMetadata
+  readonly meta: MemoryCallMeta
 }
 
 /** A provider-local change. Cursors are opaque and may only be compared for equality. */
@@ -115,17 +104,29 @@ export interface MemoryPluginContext {
   readonly signal?: AbortSignal
 }
 
+export type MemoryOperation = 'update' | 'retrieve' | 'subscribe'
+
+export interface MemoryRouteCall {
+  readonly operation: MemoryOperation
+  readonly meta: MemoryCallMeta
+}
+
+export interface MemoryPluginRegistrationOptions {
+  /** A synchronous, side-effect-free predicate. Omit it to receive every call. */
+  readonly filter?: (call: MemoryRouteCall) => boolean
+}
+
 /** A concrete memory implementation registered with the common frontend. */
 export interface MemoryPlugin {
   readonly id: string
   update(
     request: MemoryUpdateRequest,
     context: MemoryPluginContext,
-  ): Promise<MemoryUpdateReceipt>
+  ): Promise<MemoryData>
   retrieve(
     request: MemoryRetrieveRequest,
     context: MemoryPluginContext,
-  ): Promise<MemoryRetrieveResult>
+  ): Promise<MemoryData>
   subscribe?(
     request: MemoryPluginSubscribeRequest,
     handler: MemoryPluginChangeHandler,
@@ -145,6 +146,11 @@ export type MemoryPluginOutcome<T> =
       readonly error: string
     }
 
+interface RegisteredMemoryPlugin {
+  readonly plugin: MemoryPlugin
+  readonly filter?: MemoryPluginRegistrationOptions['filter']
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     patchouliMemory: MemoryService
@@ -153,13 +159,16 @@ declare module '@deepseek-ai/cordis' {
 
 /** Cordis service that registers, routes to, and aggregates memory plugins. */
 export class MemoryService extends Service {
-  private readonly plugins = new Map<string, MemoryPlugin>()
+  private readonly plugins = new Map<string, RegisteredMemoryPlugin>()
 
   constructor(ctx: Context) {
     super(ctx, 'patchouliMemory')
   }
 
-  register(plugin: MemoryPlugin): () => void {
+  register(
+    plugin: MemoryPlugin,
+    options: MemoryPluginRegistrationOptions = {},
+  ): () => void {
     if (plugin.id.trim() === '') {
       throw new Error('memory plugin id must be a non-empty string')
     }
@@ -167,10 +176,11 @@ export class MemoryService extends Service {
       throw new Error(`memory plugin "${plugin.id}" is already registered`)
     }
 
+    const registration = { plugin, filter: options.filter }
     const dispose = this.ctx.effect(() => {
-      this.plugins.set(plugin.id, plugin)
+      this.plugins.set(plugin.id, registration)
       return () => {
-        if (this.plugins.get(plugin.id) === plugin) {
+        if (this.plugins.get(plugin.id) === registration) {
           this.plugins.delete(plugin.id)
         }
       }
@@ -182,15 +192,23 @@ export class MemoryService extends Service {
   update(
     request: MemoryUpdateRequest,
     signal?: AbortSignal,
-  ): Promise<readonly MemoryPluginOutcome<MemoryUpdateReceipt>[]> {
-    return this.dispatch(plugin => plugin.update(request, { signal }), signal)
+  ): Promise<readonly MemoryPluginOutcome<MemoryData>[]> {
+    return this.dispatch(
+      { operation: 'update', meta: request.meta },
+      plugin => plugin.update(request, { signal }),
+      signal,
+    )
   }
 
   retrieve(
     request: MemoryRetrieveRequest,
     signal?: AbortSignal,
-  ): Promise<readonly MemoryPluginOutcome<MemoryRetrieveResult>[]> {
-    return this.dispatch(plugin => plugin.retrieve(request, { signal }), signal)
+  ): Promise<readonly MemoryPluginOutcome<MemoryData>[]> {
+    return this.dispatch(
+      { operation: 'retrieve', meta: request.meta },
+      plugin => plugin.retrieve(request, { signal }),
+      signal,
+    )
   }
 
   async subscribe(
@@ -199,10 +217,20 @@ export class MemoryService extends Service {
     options: MemorySubscriptionOptions,
   ): Promise<MemorySubscription> {
     options.signal?.throwIfAborted()
-    const plugins = [...this.plugins.values()].filter(
-      (plugin): plugin is MemoryPlugin & Required<Pick<MemoryPlugin, 'subscribe'>> =>
-        plugin.subscribe !== undefined,
-    )
+    const call: MemoryRouteCall = { operation: 'subscribe', meta: request.meta }
+    const plugins: Array<MemoryPlugin & Required<Pick<MemoryPlugin, 'subscribe'>>> = []
+    for (const { plugin, filter } of this.plugins.values()) {
+      if (plugin.subscribe === undefined) continue
+      const subscribingPlugin = plugin as MemoryPlugin & Required<Pick<MemoryPlugin, 'subscribe'>>
+      try {
+        if (filter?.(call) ?? true) plugins.push(subscribingPlugin)
+      } catch (error: unknown) {
+        notifySubscriptionError(options.onError, {
+          pluginId: plugin.id,
+          error: classifySubscriptionError(error),
+        })
+      }
+    }
     const pluginIds = Object.freeze(plugins.map(plugin => plugin.id))
     const lifetime = new AbortController()
     const active = new Map<string, ManagedPluginSubscription>()
@@ -261,13 +289,17 @@ export class MemoryService extends Service {
   }
 
   private async dispatch<T>(
+    call: MemoryRouteCall,
     invoke: (plugin: MemoryPlugin) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<readonly MemoryPluginOutcome<T>[]> {
     signal?.throwIfAborted()
-    const plugins = [...this.plugins.values()]
-    const outcomes = await Promise.all(plugins.map(async (plugin): Promise<MemoryPluginOutcome<T>> => {
+    const registrations = [...this.plugins.values()]
+    const outcomes = await Promise.all(registrations.map(async (
+      { plugin, filter },
+    ): Promise<MemoryPluginOutcome<T> | undefined> => {
       try {
+        if (!(filter?.(call) ?? true)) return undefined
         return {
           pluginId: plugin.id,
           ok: true,
@@ -282,7 +314,7 @@ export class MemoryService extends Service {
       }
     }))
     signal?.throwIfAborted()
-    return outcomes
+    return outcomes.filter((outcome): outcome is MemoryPluginOutcome<T> => outcome !== undefined)
   }
 
   private async runSubscriptionWorker(
@@ -387,8 +419,7 @@ export class MemoryService extends Service {
     let attemptError: unknown | typeof noSubscriptionError = noSubscriptionError
     try {
       const starting = plugin.subscribe({
-        scope: request.scope,
-        metadata: request.metadata,
+        meta: request.meta,
         afterCursor: cursor.value,
       }, onChange, { signal })
       let subscription: MemoryPluginSubscription

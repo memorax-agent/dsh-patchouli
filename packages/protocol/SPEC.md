@@ -1,6 +1,6 @@
 # Patchouli Storage Protocol v1
 
-Status: draft 6. Normative method and data schemas are in `openrpc.json`.
+Status: draft 7. Normative method and data schemas are in `openrpc.json`.
 
 The words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are normative.
 
@@ -41,7 +41,8 @@ shape; their `data` request object is empty.
 
 The wire-level entity reference is `(type, id)`.
 
-- `type` is an opaque, non-empty string. Values such as `knowledge` and `knowledge_relation`
+- `type` is an opaque, non-empty string. Values such as `artifact`, `knowledge`, and
+  `knowledge_relation`
   do not create different protocol methods.
 - `id` is an opaque, non-empty string. When create omits it, the server MUST
   generate it and return it in the accepted entity reference.
@@ -203,7 +204,52 @@ and persists configured session frontiers across daemon restarts. Causal/session
 behavior is restricted to immediate publication in version 1; unsupported
 provider sources or frontier operations prevent daemon startup.
 
-## 7. Entity retrieval
+## 7. Artifact transfer
+
+The `artifacts` capability enables chunked transfer of bytes owned by the
+Patchouli backend. It does not change generic entity identity or Knowledge
+references.
+
+- `patchouli.artifact.upload.begin@1` validates upload metadata, allocates an
+  opaque upload ID, and reports `max_chunk_bytes`.
+- `patchouli.artifact.upload.chunk@1` accepts non-empty Base64 chunks in strict
+  offset order. The server returns the next accepted byte offset.
+- `patchouli.artifact.upload.commit@1` verifies the optional expected byte
+  length and SHA-256 digest, publishes the bytes into managed storage, and
+  creates the `artifact` entity through the configured backend controller.
+- `patchouli.artifact.download.chunk@1` reads an active Artifact entity within
+  the scope derived from request `meta`, then returns bytes from the selected
+  version starting at the requested offset.
+
+The server MUST NOT expose its filesystem paths. A managed placement key is an
+opaque storage identifier to clients; the shipped local store uses a SHA-256
+content address internally. Equal content MAY share one stored object. Deleting
+or updating an Artifact entity MUST NOT immediately delete shared bytes.
+
+Upload chunks MUST contain at most the negotiated limit. The commit request's
+`meta` selects the Artifact scope and backend policy; begin and chunk metadata
+do not make incomplete bytes visible. Upload commit returns the ordinary
+mutation result, including its entity version and configured response metadata.
+An upload that has not committed is not an entity and is not visible to reads
+or subscriptions.
+
+Download MUST resolve the Artifact entity before reading bytes, so possession
+of a managed key cannot bypass configured scope. When no version is requested,
+the entity MUST have exactly one active head. A requested version MUST be an
+active version in the scoped read result. Indexed placements and managed
+placements owned by another node return `UNSUPPORTED_CAPABILITY`; automatic
+node routing and blob replication are outside version 1.
+
+A client downloading without a requested version MUST pin the version returned
+by the first chunk on every subsequent chunk request. If that version ceases to
+be an active head before completion, the download fails instead of combining
+bytes from different Artifact versions.
+
+The shipped daemon discards incomplete uploads at restart. A content object may
+remain unreferenced if byte publication succeeds but entity creation never
+succeeds; safe garbage collection is outside version 1.
+
+## 8. Entity retrieval
 
 `patchouli.entity.retrieve@1` searches active published entities inside the
 scope selected from request `meta`. Its business data is `query`, optional
@@ -213,7 +259,7 @@ deployments choose which types (for example `knowledge`) a consumer requests.
 The initial SQLite provider performs case-insensitive lexical matching over the
 stored JSON value. Retrieval never exposes staged work-unit candidates.
 
-## 8. Change subscriptions
+## 9. Change subscriptions
 
 Change delivery is committed, ordered, resumable, and at least once.
 
@@ -249,7 +295,7 @@ Change delivery is committed, ordered, resumable, and at least once.
 become one, `deleted` for an ordinary tombstone transition, and `updated` for an
 ordinary active transition.
 
-## 9. Errors
+## 10. Errors
 
 JSON-RPC standard errors remain available. Patchouli domain errors use:
 
@@ -274,16 +320,16 @@ JSON-RPC standard errors remain available. Patchouli domain errors use:
 conflicting entity reference and its current versions for grouped publication.
 Error message text is diagnostic and MUST NOT drive client logic.
 
-## 10. Complete wire examples
+## 11. Complete wire examples
 
 Handshake:
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"patchouli.protocol.handshake@1","params":{"client":{"name":"dsh-patchouli","version":"0.1.0","instance_id":"client-7"},"protocol_versions":[1],"capabilities":["subscriptions"]}}
+{"jsonrpc":"2.0","id":1,"method":"patchouli.protocol.handshake@1","params":{"client":{"name":"dsh-patchouli","version":"0.1.0","instance_id":"client-7"},"protocol_versions":[1],"capabilities":["artifacts","subscriptions"]}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"protocol_version":1,"server":{"version":"0.1.0","cluster_id":"cluster-a","node_id":"node-1"},"capabilities":["subscriptions"],"limits":{"max_request_bytes":1048576,"max_result_items":100,"idempotency_retention_seconds":86400,"change_retention_seconds":604800}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocol_version":1,"server":{"version":"0.1.0","cluster_id":"cluster-a","node_id":"node-1"},"capabilities":["artifacts","subscriptions"],"limits":{"max_request_bytes":1048576,"max_artifact_chunk_bytes":524288,"max_result_items":100,"idempotency_retention_seconds":86400,"change_retention_seconds":604800}}}
 ```
 
 Create:

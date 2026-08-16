@@ -21,6 +21,7 @@ const endpoint = process.env.PATCHOULI_ENDPOINT || (process.platform === 'win32'
   : join(deployRoot, 'run', 'patchouli.sock'))
 const config = resolve(process.env.PATCHOULI_CONFIG || 'config/patchouli.default.json')
 const providers = resolve(process.env.PATCHOULI_PROVIDERS || join(deployRoot, 'providers.json'))
+const artifacts = resolve(process.env.PATCHOULI_ARTIFACTS || join(deployRoot, 'data', 'artifacts'))
 
 for (const path of [installDir, join(deployRoot, 'run'), join(deployRoot, 'data')]) {
   mkdirSync(path, { recursive: true, mode: 0o700 })
@@ -64,6 +65,7 @@ function start(command) {
   const child = spawn(command, [
     'serve',
     '--endpoint', endpoint,
+    '--artifacts', artifacts,
     '--providers', providers,
     '--config', config,
   ], {

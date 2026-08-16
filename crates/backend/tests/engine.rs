@@ -232,6 +232,7 @@ async fn engine_starts_with_validated_config_and_routes_to_provider() {
 
     assert_eq!(engine.provider_kind(), "test");
     assert_eq!(engine.recovery().generation, 1);
+    assert!(engine.config().entity_types.contains_key("artifact"));
     assert!(engine.config().entity_types.contains_key("knowledge"));
     assert!(
         engine

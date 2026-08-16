@@ -9,8 +9,8 @@ pnpm check
 cargo test --workspace
 ```
 
-`pnpm check` validates and tests the protocol package plus all four TypeScript
-frontends. The Rust backend is checked independently with Cargo. CI runs both
+`pnpm check` validates and tests every TypeScript workspace. The Rust backend
+is checked independently with Cargo. CI runs both
 stacks on Ubuntu, macOS, and Windows.
 
 The entries in `pnpm-workspace.yaml` are explicit exceptions to pnpm's
@@ -30,7 +30,8 @@ The daemon opens the SQLite file at `~/.patchouli/data/patchouli.db` and loads
 backend policy from `~/.patchouli/config.json` in the default local layout.
 DeepSeek Harness/Cordis startup integration is maintained by the frontend
 collaborator. `init` creates the default policy, local provider configuration,
-data directory, and runtime directory without replacing existing files.
+SQLite data directory, managed Artifact store, and runtime directory without
+replacing existing files.
 
 Default endpoints are:
 
@@ -42,6 +43,7 @@ macOS/Linux lifecycle:
 ```bash
 patchouli-db serve \
   --endpoint "$HOME/.patchouli/run/patchouli.sock" \
+  --artifacts "$HOME/.patchouli/data/artifacts" \
   --providers "$HOME/.patchouli/providers.json" \
   --config "$HOME/.patchouli/config.json"
 patchouli-db status --endpoint "$HOME/.patchouli/run/patchouli.sock"
@@ -55,7 +57,8 @@ PowerShell lifecycle:
 $endpoint = '\\.\pipe\patchouli'
 $config = Join-Path $HOME '.patchouli\config.json'
 $providers = Join-Path $HOME '.patchouli\providers.json'
-patchouli-db serve --endpoint $endpoint --providers $providers --config $config
+$artifacts = Join-Path $HOME '.patchouli\data\artifacts'
+patchouli-db serve --endpoint $endpoint --artifacts $artifacts --providers $providers --config $config
 patchouli-db status --endpoint $endpoint
 patchouli-db checkpoint --endpoint $endpoint
 patchouli-db stop --endpoint $endpoint
@@ -93,6 +96,17 @@ patchouli-db config check config/patchouli.default.json
 patchouli-db config check config/patchouli.default.json --providers config/providers.local.json
 ```
 
+Run the real third-party plugin loop against a temporary SQLite database:
+
+```bash
+pnpm test:e2e
+```
+
+This command builds `patchouli-db`, starts a temporary daemon, mounts the common
+Memory Service, storage client, and private CRUD test plugin, then verifies
+managed Artifact upload/download plus create, read, retrieve, update, and delete
+through the public services. The test plugin is not part of the default bundle.
+
 ## Test the DSH frontend
 
 Build an installable package and add the checkout to a local profile:
@@ -106,8 +120,15 @@ dsh --profile web --dump-config
 The default bundle contains:
 
 - `patchouli` → `dsh-patchouli`, registering `ctx.patchouliMemory`;
-- `patchouli-agent-loop` → `dsh-patchouli/agent-loop`, registering Hooks and
-  Tools;
+- `patchouli-agent-loop` → `@memorax-agent/dsh-patchouli-agent-loop`,
+  registering individually configurable Agent/Session/Tool Hooks and the two
+  optional model Tools;
+- `patchouli-session-indexer` →
+  `@memorax-agent/dsh-patchouli-session-indexer`, currently declaring
+  `patchouliMemory + sessionQuery` only;
+- `patchouli-workspace-indexer` →
+  `@memorax-agent/dsh-patchouli-workspace-indexer`, currently declaring
+  `patchouliMemory + workspaceRegistry + fs` only;
 - `patchouli-memory-cursors` → `dsh-patchouli/cursor-store`, registering
   `ctx.patchouliMemoryCursors` when `storageDomain` is available.
 
@@ -129,7 +150,12 @@ const cursorStore = ctx.patchouliMemoryCursors.bind({
 })
 
 const subscription = await ctx.patchouliMemory.subscribe(
-  { scope },
+  {
+    meta: {
+      source: { type: 'consumer', id: 'example-consumer' },
+      scope,
+    },
+  },
   change => applyChangeIdempotently(change),
   { cursorStore, signal, onError: reportSubscriptionError },
 )

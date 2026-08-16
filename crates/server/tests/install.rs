@@ -195,6 +195,8 @@ async fn sigterm_uses_the_clean_daemon_shutdown_path() {
     let mut child = Command::new(binary)
         .args(["serve", "--endpoint"])
         .arg(&endpoint)
+        .arg("--artifacts")
+        .arg(root.join("data/artifacts"))
         .arg("--providers")
         .arg(root.join("providers.json"))
         .arg("--config")

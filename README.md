@@ -1,15 +1,15 @@
 # dsh-patchouli
 
 Patchouli 同时提供与 Harness 无关的知识存储后端，以及面向
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的通用记忆前端。具体记忆插件通过统一的 `update` / `retrieve` / `subscribe` 接口接入；官方 Agent Loop Consumer 决定何时调用前两个接口，响应式 Consumer 可以持久化自己的订阅进度，本地存储型插件还可以按需连接 Patchouli daemon。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的通用记忆前端。具体记忆插件通过 DSH 进程内的 `update` / `retrieve` / `subscribe` 接口接入；官方 Agent Loop 适配器决定何时调用前两个接口，Session 与 Workspace Indexer 各自拥有独立插件边界，响应式 Consumer 可以持久化自己的订阅进度，本地存储型插件还可以按需连接 Patchouli daemon。
 
-> 当前状态：Rust 后端已经实现类型化知识、事务、冲突解决、通用检索、cursor 变更订阅、SQLite/远程 provider 路由和 daemon 生命周期；DSH 侧已经实现通用 Memory Service、主动 Tool、自动 retrieve、可选的 turn-end 自动 update、高层响应式订阅和 Web cursor 持久化，以及 TypeScript storage client 的 entity retrieve 和低层响应式订阅。尚未提供具体 MemoryPlugin。
+> 当前状态：Rust 后端已经实现类型化知识、事务、冲突解决、通用检索、cursor 变更订阅、SQLite/远程 provider 路由和 daemon 生命周期；DSH 侧已经实现通用 Memory Service、Agent Loop 的逐点可配置 Hooks 与主动 Tool、高层响应式订阅和 Web cursor 持久化，以及 TypeScript storage client 的 entity retrieve 和低层响应式订阅。Session 与 Workspace Indexer 已建立独立包，业务逻辑尚未实现；已有一个仅用于闭环验证的 CRUD 直通 MemoryPlugin，但尚未提供生产用途的具体 MemoryPlugin。
 
 ## 架构边界
 
 ```text
 Official Agent Loop
-  → dsh-patchouli/agent-loop
+  → @memorax-agent/dsh-patchouli-agent-loop
   → ctx.patchouliMemory
   → registered MemoryPlugin
        ├─ MemoraX / another remote API
@@ -23,34 +23,58 @@ Reactive Consumer
   → ctx.patchouliMemory.subscribe
   → ctx.patchouliMemoryCursors
   → DSH storageDomain
+
+DSH sessionQuery                 DSH workspaceRegistry + fs
+  → session-indexer                → workspace-indexer
+  → ctx.patchouliMemory            → ctx.patchouliMemory
 ```
 
-仓库围绕六个边界组织：
+仓库围绕八个边界组织：
 
-1. **Common Memory Service**：根入口 `dsh-patchouli` 通过 `ctx.patchouliMemory` 暴露 `update` / `retrieve` / `subscribe`，并负责插件注册、路由和来源标记。
+1. **Common Memory Service**：根入口 `dsh-patchouli` 通过 `ctx.patchouliMemory` 暴露 `update` / `retrieve` / `subscribe`，并按插件注册时提供的过滤器完成路由和来源聚合；未提供过滤器的插件默认接收所有调用。
 2. **Memory Plugin**：实现具体记忆语义，例如 MemoraX 或本地知识插件。高层 `update` 表示提交信息供插件吸收，不等同于实体 CRUD update。
-3. **Agent Loop Consumer**：`dsh-patchouli/agent-loop` 通过 Hooks 和 Tools 定义调用时机及标准 metadata。
-4. **Cursor Store**：`dsh-patchouli/cursor-store` 将 consumer、subscription、scope 和 plugin 四元组绑定到 DSH `storageDomain`。
-5. **Optional Storage Client**：`dsh-patchouli/storage` 连接 daemon，通过 `ctx.patchouli` 暴露低层控制、CRUD 和 change stream；它不是 MemoryPlugin，也不会被默认加载。
-6. **Storage Backend**：Harness-neutral 的 Rust daemon、协议、事务引擎和 provider 层。
+3. **Agent Loop Adapter**：`@memorax-agent/dsh-patchouli-agent-loop` 通过 Hooks 和 Tools 定义调用时机，并构造包含可信来源身份、scope 和 JSON 属性的标准 `meta`。
+4. **Session Indexer**：`@memorax-agent/dsh-patchouli-session-indexer` 预留从 DSH `sessionQuery` 向 Memory Service 提交会话知识的独立边界；当前不执行扫描。
+5. **Workspace Indexer**：`@memorax-agent/dsh-patchouli-workspace-indexer` 预留通过 DSH `workspaceRegistry` 和 `fs` 索引工作区的独立边界；当前不执行爬取或监听。
+6. **Cursor Store**：`dsh-patchouli/cursor-store` 将 consumer、subscription、scope 和 plugin 四元组绑定到 DSH `storageDomain`。
+7. **Optional Storage Client**：`dsh-patchouli/storage` 连接 daemon，通过 `ctx.patchouli` 暴露低层控制、CRUD 和 change stream；它不是 MemoryPlugin，也不会被默认加载。
+8. **Storage Backend**：Harness-neutral 的 Rust daemon、协议、事务引擎和 provider 层。
 
 详细职责见 [架构文档](docs/architecture.md)，知识字段与关系模型见 [事实模型](docs/knowledge-model.md)，后端配置见 [配置文档](docs/backend-configuration.md)。
 
+Common Memory Service 仅供同一 DSH 进程中的插件调用，不暴露外部 bridge 或跨进程服务。其他 Harness 或外部应用需要各自实现适配器。DSH 内调用方不指定内部插件；每次调用的 `meta.source` 标识调用方类型和实例，`meta.scope` 标识语义作用域，`meta.requestId` 和 `meta.attributes` 承载可选的 JSON 安全上下文。第三方 MemoryPlugin 可在注册时提供基于 `operation + meta` 的同步过滤器；不匹配的插件从本次结果中省略，过滤器异常则作为该插件的路由失败返回或上报。
+
+`update` 与 `retrieve` 的输入、成功返回值均为插件自有的 JSON `data`；核心 Service 保留“存 / 取 / 订阅”三个高层入口，但不解释每个插件的数据结构。私有包 `@memorax-agent/dsh-patchouli-crud-test-plugin` 使用这条边界，将测试请求原样转发给 `ctx.patchouli` 的 SQLite CRUD，并将 daemon 响应原样返回。该包不进入默认 bundle，也不是生产记忆实现。
+
 ## Agent Loop Consumer
 
-默认 bundle 加载根 Memory Service 和官方 Agent Loop Consumer。未注册具体 MemoryPlugin 时，自动召回不会注入内容，主动 Tool 会返回没有可用插件。
+默认 bundle 加载根 Memory Service、官方 Agent Loop 适配器以及两个 Indexer 包。未注册具体 MemoryPlugin 时，自动召回不会注入内容，主动 Tool 会返回没有可用插件。两个 Indexer 当前只固定包边界和服务依赖，不执行索引。
 
 ```yaml
 - id: patchouli-agent-loop
   config:
-    autoRetrieve: true
-    autoUpdate: false
+    retrieve:
+      sessionStart: false
+      preStep: true
+      turnStopping: false
+      toolPostExecute: false
+    store:
+      agentCreated: false
+      agentDisposed: false
+      requestError: false
+      agentError: false
+      turnEnd: true
+      toolResult: false
+    modelTools:
+      retrieve: true
+      update: true
 ```
 
-- `autoRetrieve` 默认开启，在 `agent/pre-step` 对直接用户输入执行一次 retrieve。
-- `autoUpdate` 默认关闭；开启后，在 `completed` 或 `max-tokens` 的 `turn/end` 已经提交到 Session Log 后执行 update。
-- 自动 update 只采集直接用户消息和 assistant 可见文本，不回灌 recall、reasoning、tool call 或 tool result。
-- `memory_update` / `memory_retrieve` Tool 始终提供主动调用路径。
+- 默认在每个 `agent/pre-step` 取数据，并在每个已提交的 `turn/end` 存数据；其他 Agent 与 Tool 点位显式开启。
+- 可取点位为 `agent/session-start`、`agent/pre-step`、`agent/turn-stopping` 和 `tools/post-execute`；可存点位为 `agent/created`、`agent/disposed`、`agent/request-error`、`agent/error`、`session/turn-end` 和 `tools/result`。
+- Adapter 将点位能够观察到的 Session、Agent、Hook、Tool 原始 JSON 数据交给 MemoryPlugin，不生成查询提示词，不抽取、总结或决定如何记忆。
+- `memory_update` / `memory_retrieve` Tool 可分别关闭；默认都提供模型主动调用路径。
+- `agent/session-start` 是官方非等待通知，因此召回是 best-effort 异步注入；其余可取点位遵循官方 Hook 的等待语义。后台存储按 Session 串行，`session/flush` 会等待已接纳的存储任务。
 
 ## 响应式订阅
 
@@ -65,7 +89,12 @@ const cursorStore = ctx.patchouliMemoryCursors.bind({
 })
 
 const subscription = await ctx.patchouliMemory.subscribe(
-  { scope, metadata: { source: 'knowledge-index' } },
+  {
+    meta: {
+      source: { type: 'consumer', id: 'knowledge-index' },
+      scope,
+    },
+  },
   async ({ pluginId, cursor, memoryId, metadata }) => {
     await applyChangeIdempotently({ pluginId, cursor, memoryId, metadata })
   },
@@ -135,7 +164,7 @@ dsh plugin --profile web add .
 dsh --profile web --dump-config
 ```
 
-Web 配置中应出现 `patchouli`、`patchouli-agent-loop` 和 `patchouli-memory-cursors`。完整 daemon、三平台和 CI 操作见 [开发文档](docs/development.md)。
+Web 配置中应出现 `patchouli`、`patchouli-agent-loop`、`patchouli-session-indexer`、`patchouli-workspace-indexer` 和 `patchouli-memory-cursors`。完整 daemon、三平台和 CI 操作见 [开发文档](docs/development.md)。
 
 ## 仓库结构
 
@@ -148,9 +177,15 @@ Web 配置中应出现 `patchouli`、`patchouli-agent-loop` 和 `patchouli-memor
 │   ├── provider-router/      # scope 路由
 │   ├── provider-sqlite/      # SQLite adapter
 │   └── server/               # daemon、IPC 和 CLI
-├── packages/protocol/        # Harness-neutral JSON-RPC 类型与 schema
-├── src/                      # common、storage 和 agent-loop 前端
+├── packages/
+│   ├── agent-loop/           # 官方 Agent Loop 适配器
+│   ├── crud-test-plugin/     # 测试用第三方 CRUD 直通插件
+│   ├── protocol/             # Harness-neutral JSON-RPC 类型与 schema
+│   ├── session-indexer/      # Session Indexer 插件边界
+│   └── workspace-indexer/    # Workspace Indexer 插件边界
+├── src/                      # common、storage 和 cursor DSH 前端
 ├── test/                     # 前端最小契约测试
+├── integration/              # daemon + SQLite 真实闭环测试
 ├── config/                   # backend policy 与 provider 配置
 ├── docs/                     # 架构、模型和开发文档
 └── cordis.patch.yml          # 默认 DSH bundle

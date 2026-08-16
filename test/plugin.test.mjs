@@ -59,13 +59,18 @@ test('routes update and retrieve to registered plugins and aggregates outcomes',
 
   const controller = new AbortController()
   const updateRequest = {
-    scope: 'repo:memorax-agent/dsh-patchouli',
-    messages: [{ role: 'user', content: 'remember this' }],
+    meta: {
+      source: { type: 'test', id: 'plugin-test' },
+      scope: 'repo:memorax-agent/dsh-patchouli',
+    },
+    data: { messages: [{ role: 'user', content: 'remember this' }] },
   }
   const retrieveRequest = {
-    scope: 'repo:memorax-agent/dsh-patchouli',
-    query: 'what should be remembered?',
-    limit: 5,
+    meta: {
+      source: { type: 'test', id: 'plugin-test' },
+      scope: 'repo:memorax-agent/dsh-patchouli',
+    },
+    data: { query: 'what should be remembered?', limit: 5 },
   }
 
   assert.deepEqual(await memory.update(updateRequest, controller.signal), [
@@ -100,6 +105,176 @@ test('routes update and retrieve to registered plugins and aggregates outcomes',
   ])
 })
 
+test('routes calls through registration filters without exposing plugin selection to callers', async (t) => {
+  const { fiber, memory } = await mountPatchouli()
+  t.after(() => fiber.dispose())
+
+  const routes = []
+  const invocations = []
+  const plugin = id => ({
+    id,
+    async update(request) {
+      invocations.push([id, 'update', request])
+      return { status: 'applied' }
+    },
+    async retrieve(request) {
+      invocations.push([id, 'retrieve', request])
+      return { items: [{ content: id }] }
+    },
+  })
+  const disposeSelected = memory.register(plugin('selected'), {
+    filter(call) {
+      routes.push(['selected', call])
+      return call.operation === 'retrieve' && call.meta.source.type === 'agent-loop'
+    },
+  })
+  const disposeSkipped = memory.register(plugin('skipped'), {
+    filter(call) {
+      routes.push(['skipped', call])
+      return false
+    },
+  })
+  const disposeBroken = memory.register(plugin('broken'), {
+    filter(call) {
+      routes.push(['broken', call])
+      throw new Error('invalid route filter')
+    },
+  })
+  t.after(() => {
+    disposeBroken()
+    disposeSkipped()
+    disposeSelected()
+  })
+
+  const meta = {
+    source: { type: 'agent-loop', id: 'test-consumer' },
+    scope: 'repo:memorax-agent/dsh-patchouli',
+    attributes: { trigger: 'pre-step' },
+  }
+  const retrieveRequest = { meta, data: { query: 'routing' } }
+  assert.deepEqual(await memory.retrieve(retrieveRequest), [
+    {
+      pluginId: 'selected',
+      ok: true,
+      value: { items: [{ content: 'selected' }] },
+    },
+    {
+      pluginId: 'broken',
+      ok: false,
+      error: 'invalid route filter',
+    },
+  ])
+  assert.deepEqual(invocations, [['selected', 'retrieve', retrieveRequest]])
+
+  const updateRequest = {
+    meta,
+    data: { messages: [{ role: 'user', content: 'do not route this operation' }] },
+  }
+  assert.deepEqual(await memory.update(updateRequest), [{
+    pluginId: 'broken',
+    ok: false,
+    error: 'invalid route filter',
+  }])
+  assert.deepEqual(invocations, [['selected', 'retrieve', retrieveRequest]])
+  assert.deepEqual(routes, [
+    ['selected', { operation: 'retrieve', meta }],
+    ['skipped', { operation: 'retrieve', meta }],
+    ['broken', { operation: 'retrieve', meta }],
+    ['selected', { operation: 'update', meta }],
+    ['skipped', { operation: 'update', meta }],
+    ['broken', { operation: 'update', meta }],
+  ])
+})
+
+test('filters subscriptions and reports filter failures to the consumer', async (t) => {
+  const { fiber, memory } = await mountPatchouli()
+  t.after(() => fiber.dispose())
+
+  const selectedStarted = Promise.withResolvers()
+  const selectedClosed = Promise.withResolvers()
+  const basePlugin = id => ({
+    id,
+    async update() {
+      return { status: 'applied' }
+    },
+    async retrieve() {
+      return { items: [] }
+    },
+  })
+  const disposeSelected = memory.register({
+    ...basePlugin('selected'),
+    async subscribe() {
+      selectedStarted.resolve()
+      return {
+        cursor: 'selected-boundary',
+        closed: selectedClosed.promise,
+        async unsubscribe() {
+          selectedClosed.resolve()
+        },
+      }
+    },
+  }, {
+    filter: call => call.operation === 'subscribe',
+  })
+  const disposeSkipped = memory.register({
+    ...basePlugin('skipped'),
+    async subscribe() {
+      throw new Error('filtered plugin must not start')
+    },
+  }, {
+    filter: () => false,
+  })
+  const disposeBroken = memory.register({
+    ...basePlugin('broken'),
+    async subscribe() {
+      throw new Error('broken filter plugin must not start')
+    },
+  }, {
+    filter() {
+      throw new Error('subscription filter failed')
+    },
+  })
+  t.after(() => {
+    disposeBroken()
+    disposeSkipped()
+    disposeSelected()
+  })
+
+  const failures = []
+  const subscription = await memory.subscribe(
+    {
+      meta: {
+        source: { type: 'consumer', id: 'reactive-index' },
+        scope: 'test',
+      },
+    },
+    async () => {},
+    {
+      cursorStore: {
+        async load() {},
+        async save() {},
+        async delete() {},
+      },
+      onError(failure) {
+        failures.push(failure)
+      },
+    },
+  )
+
+  await selectedStarted.promise
+  assert.deepEqual(subscription.pluginIds, ['selected'])
+  assert.deepEqual(failures.map(({ pluginId, error }) => ({
+    pluginId,
+    message: error.message,
+  })), [{
+    pluginId: 'broken',
+    message: 'subscription filter failed',
+  }])
+
+  await subscription.unsubscribe()
+  await subscription.closed
+})
+
 test('removes a memory plugin with its registering Cordis fiber', async (t) => {
   const { ctx, fiber, memory } = await mountPatchouli()
   t.after(() => fiber.dispose())
@@ -120,7 +295,10 @@ test('removes a memory plugin with its registering Cordis fiber', async (t) => {
     },
   })
 
-  const request = { scope: 'test', query: 'memory' }
+  const request = {
+    meta: { source: { type: 'test', id: 'plugin-test' }, scope: 'test' },
+    data: { query: 'memory' },
+  }
   assert.equal((await memory.retrieve(request)).length, 1)
 
   await pluginFiber.dispose()
@@ -177,7 +355,12 @@ test('persists the subscription boundary and processes unique changes in order',
   }
   const changes = []
   const subscription = await memory.subscribe(
-    { scope: '/workspace/patchouli', metadata: { consumer: 'test' } },
+    {
+      meta: {
+        source: { type: 'consumer', id: 'test' },
+        scope: '/workspace/patchouli',
+      },
+    },
     async (change) => {
       changes.push(['start', change])
       if (change.cursor === 'cursor-1') {
@@ -196,8 +379,10 @@ test('persists the subscription boundary and processes unique changes in order',
 
   assert.deepEqual(subscription.pluginIds, ['streaming'])
   assert.deepEqual(subscribeRequest, {
-    scope: '/workspace/patchouli',
-    metadata: { consumer: 'test' },
+    meta: {
+      source: { type: 'consumer', id: 'test' },
+      scope: '/workspace/patchouli',
+    },
     afterCursor: 'cursor-before-subscribe',
   })
   assert.deepEqual(operations, [
@@ -296,7 +481,7 @@ test('retries only classified retryable subscription failures', async (t) => {
   const requests = []
   const failures = []
   const subscription = await memory.subscribe(
-    { scope: 'test' },
+    { meta: { source: { type: 'test', id: 'plugin-test' }, scope: 'test' } },
     async () => {},
     {
       cursorStore: {
@@ -423,7 +608,7 @@ test('observes fast disconnects and resets retry only after a durable change', a
   t.after(dispose)
 
   const subscription = await memory.subscribe(
-    { scope: 'test' },
+    { meta: { source: { type: 'test', id: 'plugin-test' }, scope: 'test' } },
     async () => {},
     {
       cursorStore: {
@@ -483,7 +668,7 @@ test('disposes and drains a subscription with its consuming Cordis fiber', async
     inject: ['patchouliMemory'],
     async apply(pluginCtx) {
       subscription = await pluginCtx.patchouliMemory.subscribe(
-        { scope: 'test' },
+        { meta: { source: { type: 'test', id: 'plugin-test' }, scope: 'test' } },
         async () => {},
         {
           cursorStore: {

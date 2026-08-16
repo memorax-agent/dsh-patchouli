@@ -30,6 +30,8 @@ export interface Config {
   providerConfigPath: string
   /** Backend policy configuration used by an auto-started daemon. */
   backendConfigPath: string
+  /** Backend-managed content-addressed artifact directory. */
+  artifactRootPath: string
   /** Start a detached daemon when no existing daemon can be reached. */
   autoStart: boolean
   /** Maximum time to wait for a newly started daemon. */
@@ -45,6 +47,7 @@ export const Config: z<Config> = z.object({
   command: z.string().default('patchouli-db'),
   providerConfigPath: z.string().default(join(homedir(), '.patchouli', 'providers.json')),
   backendConfigPath: z.string().default(join(homedir(), '.patchouli', 'config.json')),
+  artifactRootPath: z.string().default(join(homedir(), '.patchouli', 'data', 'artifacts')),
   autoStart: z.boolean().default(true),
   startupTimeoutMs: z.natural().min(1).default(5_000),
 })

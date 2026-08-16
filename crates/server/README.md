@@ -16,7 +16,7 @@ Local transports:
 ```bash
 cargo install --path crates/server
 patchouli-db init --root "$HOME/.patchouli"
-patchouli-db serve --endpoint <endpoint> --providers <provider-config> --config <policy-path>
+patchouli-db serve --endpoint <endpoint> --artifacts <artifact-root> --providers <provider-config> --config <policy-path>
 patchouli-db provide --listen 127.0.0.1:8080 --database <path> --token-env PATCHOULI_PROVIDER_TOKEN
 patchouli-db status --endpoint <endpoint>
 patchouli-db checkpoint --endpoint <endpoint>
@@ -28,6 +28,11 @@ Release installation and supported architectures are documented in
 [`docs/installation.md`](../../docs/installation.md). `init` creates the data
 and run directories plus validated default policy/provider files, and never
 overwrites an existing file.
+
+The daemon also owns a scoped, content-addressed Artifact store. Chunked upload
+commit creates the managed `artifact` entity through `BackendEngine`; chunked
+download resolves that entity before reading bytes, so a content key cannot
+bypass configured scope. Indexed Artifacts remain external to this store.
 
 The server library accepts the provider contract rather than a SQLite
 connection. The shipped CLI always names its local SQLite provider `local`, may

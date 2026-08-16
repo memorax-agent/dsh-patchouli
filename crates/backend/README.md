@@ -21,8 +21,9 @@ retrieval are executable. Configuration version 1 deliberately exposes only
 marker close plus discard-on-expiry rather than advertising unfinished modes.
 
 Entity kinds remain opaque to the CRUD protocol. The backend additionally
-publishes the first harness-neutral fact vocabulary: typed `knowledge` and
-`knowledge_relation` Rust values backed by versioned JSON Schemas. They use the
+publishes the first harness-neutral fact vocabulary: typed `artifact`,
+`knowledge`, and `knowledge_relation` Rust values backed by versioned JSON
+Schemas. They use the
 same methods and storage interface as any future configured kind; see
 [`docs/knowledge-model.md`](../../docs/knowledge-model.md).
 

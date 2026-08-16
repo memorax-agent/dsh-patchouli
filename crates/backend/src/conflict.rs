@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use automerge::{ActorId, AutoCommit, Change};
 use autosurgeon::{
-    Hydrate, HydrateError, Reconcile, Reconciler, Text, hydrate, hydrate_prop, reconcile,
-    reconcile::{MapReconciler, NoKey},
+    Hydrate, HydrateError, Prop, ReadDoc, Reconcile, Reconciler, hydrate, hydrate_prop, reconcile,
+    reconcile::{LoadKey, MapReconciler, NoKey, StaleHeads, TextReconciler},
 };
 use serde_json::{Map, Number, Value};
 use thiserror::Error;
@@ -141,7 +141,7 @@ impl CrdtDocument {
     }
 
     pub fn heads(&self) -> Result<Vec<String>, ConflictError> {
-        let mut document = self.load()?;
+        let document = self.load()?;
         Ok(document
             .get_heads()
             .into_iter()
@@ -419,7 +419,7 @@ enum CrdtJson {
     Null,
     Bool(bool),
     Number(Number),
-    Text(Text),
+    Text(CrdtText),
     Array(Vec<Self>),
     Object(BTreeMap<String, Self>),
 }
@@ -430,7 +430,7 @@ impl CrdtJson {
             Value::Null => Self::Null,
             Value::Bool(value) => Self::Bool(*value),
             Value::Number(value) => Self::Number(value.clone()),
-            Value::String(value) => Self::Text(Text::with_value(value)),
+            Value::String(value) => Self::Text(CrdtText::new(value)),
             Value::Array(values) => Self::Array(values.iter().map(Self::from_json).collect()),
             Value::Object(values) => Self::Object(
                 values
@@ -471,7 +471,7 @@ impl CrdtJson {
             Self::Null => Value::Null,
             Self::Bool(value) => Value::Bool(value),
             Self::Number(value) => Value::Number(value),
-            Self::Text(value) => Value::String(value.as_str().to_owned()),
+            Self::Text(value) => Value::String(value.value),
             Self::Array(values) => Value::Array(values.into_iter().map(Self::into_json).collect()),
             Self::Object(values) => Value::Object(
                 values
@@ -526,7 +526,7 @@ impl Hydrate for CrdtJson {
     }
 
     fn hydrate_string(value: &str) -> Result<Self, HydrateError> {
-        Ok(Self::Text(Text::with_value(value)))
+        Ok(Self::Text(CrdtText::new(value)))
     }
 
     fn hydrate_map<D: autosurgeon::ReadDoc>(
@@ -547,10 +547,84 @@ impl Hydrate for CrdtJson {
         document: &D,
         object: &automerge::ObjId,
     ) -> Result<Self, HydrateError> {
-        Text::hydrate_text(document, object).map(Self::Text)
+        CrdtText::hydrate_text(document, object).map(Self::Text)
     }
 
     fn hydrate_none() -> Result<Self, HydrateError> {
         Ok(Self::Null)
+    }
+}
+
+#[derive(Clone)]
+struct CrdtText {
+    value: String,
+    object: Option<automerge::ObjId>,
+    from_heads: Vec<automerge::ChangeHash>,
+}
+
+impl CrdtText {
+    fn new(value: &str) -> Self {
+        Self {
+            value: value.to_owned(),
+            object: None,
+            from_heads: Vec::new(),
+        }
+    }
+
+    fn update(&mut self, value: &str) {
+        self.value = value.to_owned();
+    }
+}
+
+impl Reconcile for CrdtText {
+    type Key<'a> = automerge::ObjId;
+
+    fn hydrate_key<'a, D: ReadDoc>(
+        document: &D,
+        object: &automerge::ObjId,
+        prop: Prop<'_>,
+    ) -> Result<LoadKey<Self::Key<'a>>, autosurgeon::ReconcileError> {
+        let Some((value, object)) = document.get(object, &prop)? else {
+            return Ok(LoadKey::KeyNotFound);
+        };
+        if matches!(value, automerge::Value::Object(automerge::ObjType::Text)) {
+            return Ok(LoadKey::Found(object));
+        }
+        Ok(LoadKey::KeyNotFound)
+    }
+
+    fn key(&self) -> LoadKey<Self::Key<'_>> {
+        match &self.object {
+            Some(object) => LoadKey::Found(object.clone()),
+            None => LoadKey::KeyNotFound,
+        }
+    }
+
+    fn reconcile<R: Reconciler>(&self, mut reconciler: R) -> Result<(), R::Error> {
+        let mut text = reconciler.text()?;
+        if self.object.is_none() {
+            return text.splice(0, 0, &self.value);
+        }
+        if text.heads() != self.from_heads {
+            return Err(StaleHeads {
+                expected: self.from_heads.clone(),
+                found: text.heads().to_vec(),
+            }
+            .into());
+        }
+        text.update(&self.value)
+    }
+}
+
+impl Hydrate for CrdtText {
+    fn hydrate_text<D: ReadDoc>(
+        document: &D,
+        object: &automerge::ObjId,
+    ) -> Result<Self, HydrateError> {
+        Ok(Self {
+            value: document.text(object)?,
+            object: Some(object.clone()),
+            from_heads: document.get_heads(),
+        })
     }
 }

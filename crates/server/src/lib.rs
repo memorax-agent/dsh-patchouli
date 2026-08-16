@@ -1,9 +1,11 @@
+mod artifact_store;
 #[cfg(feature = "sqlite")]
 mod provider_config;
 mod transport;
 
 use std::{
     collections::{BTreeMap, VecDeque},
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -13,10 +15,15 @@ use std::{
 
 use futures_util::StreamExt;
 use patchouli_backend::{
-    BackendEngine, BackendError, BackendErrorReason, BackendService, ChangesEventData,
-    ChangesEventParams, ClientIdentity, ControlCheckpointResult, ControlCheckpointResultData,
-    ControlShutdownResult, ControlShutdownResultData, ControlStatusResult, ControlStatusResultData,
-    CreateEntityParams, DeleteEntityParams, EmptyData, EngineError, HandshakeParams,
+    ARTIFACT_ENTITY_TYPE, ArtifactDownloadChunkParams, ArtifactDownloadChunkResult,
+    ArtifactDownloadChunkResultData, ArtifactPlacement, ArtifactUploadBeginParams,
+    ArtifactUploadBeginResult, ArtifactUploadBeginResultData, ArtifactUploadChunkParams,
+    ArtifactUploadChunkResult, ArtifactUploadChunkResultData, ArtifactUploadCommitParams,
+    ArtifactValue, BackendEngine, BackendError, BackendErrorReason, BackendService,
+    ChangesEventData, ChangesEventParams, ClientIdentity, ControlCheckpointResult,
+    ControlCheckpointResultData, ControlShutdownResult, ControlShutdownResultData,
+    ControlStatusResult, ControlStatusResultData, CreateEntityData, CreateEntityParams,
+    DeleteEntityParams, EmptyData, EngineError, EntityRef, EntityVersion, HandshakeParams,
     HandshakeResult, Meta, PROTOCOL_VERSION, ProtocolEntityConflict, ProtocolErrorData,
     ProtocolErrorReason, ReadEntityParams, RequestDeadline, RetrieveEntitiesParams, RpcParams,
     RpcResult, ServerIdentity, ServerLimits, SubscribeChangesParams, SubscribeChangesResult,
@@ -34,17 +41,20 @@ use tokio::{
     task::{JoinError, JoinHandle, JoinSet},
 };
 
+use artifact_store::{ArtifactStore, ArtifactStoreError, MAX_ARTIFACT_CHUNK_BYTES};
+
 #[cfg(feature = "sqlite")]
 pub use provider_config::{
     ProviderConfig, ProviderConfigError, ProviderDefinition, ProviderRouting, load_provider,
 };
 
-const SERVER_CAPABILITIES: &[&str] = &["subscriptions"];
+const SERVER_CAPABILITIES: &[&str] = &["artifacts", "subscriptions"];
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ServerOptions {
     pub endpoint: String,
+    pub artifact_root: PathBuf,
     pub node_id: String,
     pub cluster_id: String,
 }
@@ -63,6 +73,8 @@ pub enum IpcError {
     ResponseIdMismatch,
     #[error("backend engine lifecycle failed: {0}")]
     Engine(#[from] EngineError),
+    #[error("artifact store failed: {0}")]
+    ArtifactStore(#[from] ArtifactStoreError),
     #[error("{operation}; backend shutdown also failed: {shutdown}")]
     ShutdownAfterError {
         operation: Box<IpcError>,
@@ -77,6 +89,7 @@ pub struct LocalServer {
     active_connections: Arc<AtomicU64>,
     shutdown_tx: watch::Sender<bool>,
     engine: Arc<BackendEngine>,
+    artifact_store: Arc<ArtifactStore>,
 }
 
 impl LocalServer {
@@ -85,6 +98,8 @@ impl LocalServer {
         engine: Arc<BackendEngine>,
     ) -> Result<Self, IpcError> {
         let listener = transport::Listener::bind(&options.endpoint).await?;
+        let artifact_store =
+            Arc::new(ArtifactStore::open(&options.artifact_root, options.node_id.clone()).await?);
         let (shutdown_tx, _) = watch::channel(false);
         Ok(Self {
             listener,
@@ -93,6 +108,7 @@ impl LocalServer {
             active_connections: Arc::new(AtomicU64::new(0)),
             shutdown_tx,
             engine,
+            artifact_store,
         })
     }
 
@@ -112,6 +128,7 @@ impl LocalServer {
                                 Arc::clone(&self.active_connections),
                                 self.shutdown_tx.clone(),
                                 Arc::clone(&self.engine),
+                                Arc::clone(&self.artifact_store),
                             );
                             connections.spawn(connection.serve(stream));
                         }
@@ -191,6 +208,7 @@ struct ConnectionState {
     active_connections: Arc<AtomicU64>,
     shutdown_tx: watch::Sender<bool>,
     engine: Arc<BackendEngine>,
+    artifact_store: Arc<ArtifactStore>,
 }
 
 impl ConnectionState {
@@ -200,6 +218,7 @@ impl ConnectionState {
         active_connections: Arc<AtomicU64>,
         shutdown_tx: watch::Sender<bool>,
         engine: Arc<BackendEngine>,
+        artifact_store: Arc<ArtifactStore>,
     ) -> Self {
         Self {
             options,
@@ -207,6 +226,7 @@ impl ConnectionState {
             active_connections,
             shutdown_tx,
             engine,
+            artifact_store,
         }
     }
 
@@ -437,6 +457,7 @@ impl ConnectionState {
                 capabilities,
                 limits: ServerLimits {
                     max_request_bytes: MAX_REQUEST_BYTES as u64,
+                    max_artifact_chunk_bytes: MAX_ARTIFACT_CHUNK_BYTES as u64,
                     max_result_items: 100,
                     idempotency_retention_seconds: self.engine.idempotency_retention_seconds(),
                     change_retention_seconds: self.engine.change_retention_seconds(),
@@ -519,6 +540,131 @@ impl ConnectionState {
                 };
                 (rpc_success(id, result), true)
             }
+            methods::ARTIFACT_UPLOAD_BEGIN => {
+                let params = match serde_json::from_value::<ArtifactUploadBeginParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                if let Err(error) =
+                    RequestDeadline::from_meta(&params.meta).and_then(RequestDeadline::check_now)
+                {
+                    return (rpc_backend_error(id, error), false);
+                }
+                match self.artifact_store.begin(params.data).await {
+                    Ok(upload_id) => {
+                        let result: ArtifactUploadBeginResult = RpcResult {
+                            meta: Meta::new(),
+                            data: ArtifactUploadBeginResultData {
+                                upload_id,
+                                max_chunk_bytes: MAX_ARTIFACT_CHUNK_BYTES as u64,
+                            },
+                        };
+                        (rpc_success(id, result), false)
+                    }
+                    Err(error) => (rpc_artifact_error(id, error), false),
+                }
+            }
+            methods::ARTIFACT_UPLOAD_CHUNK => {
+                let params = match serde_json::from_value::<ArtifactUploadChunkParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                if let Err(error) =
+                    RequestDeadline::from_meta(&params.meta).and_then(RequestDeadline::check_now)
+                {
+                    return (rpc_backend_error(id, error), false);
+                }
+                match self
+                    .artifact_store
+                    .append(
+                        &params.data.upload_id,
+                        params.data.offset,
+                        &params.data.bytes_base64,
+                    )
+                    .await
+                {
+                    Ok(next_offset) => {
+                        let result: ArtifactUploadChunkResult = RpcResult {
+                            meta: Meta::new(),
+                            data: ArtifactUploadChunkResultData { next_offset },
+                        };
+                        (rpc_success(id, result), false)
+                    }
+                    Err(error) => (rpc_artifact_error(id, error), false),
+                }
+            }
+            methods::ARTIFACT_UPLOAD_COMMIT => {
+                let params = match serde_json::from_value::<ArtifactUploadCommitParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                let deadline = match RequestDeadline::from_meta(&params.meta) {
+                    Ok(deadline) => deadline,
+                    Err(error) => return (rpc_backend_error(id, error), false),
+                };
+                if let Err(error) = deadline.check_now() {
+                    return (rpc_backend_error(id, error), false);
+                }
+                let (upload, stored) =
+                    match self.artifact_store.commit(&params.data.upload_id).await {
+                        Ok(committed) => committed,
+                        Err(error) => return (rpc_artifact_error(id, error), false),
+                    };
+                if let Err(error) = deadline.check_now() {
+                    return (rpc_backend_error(id, error), false);
+                }
+                let value = ArtifactValue {
+                    media_type: upload.media_type,
+                    name: upload.name,
+                    byte_length: Some(stored.byte_length),
+                    digest: Some(stored.digest),
+                    placement: ArtifactPlacement::Managed {
+                        provider: stored.provider,
+                        key: stored.key,
+                    },
+                    metadata: upload.metadata,
+                };
+                let value = match serde_json::to_value(value) {
+                    Ok(value) => value,
+                    Err(error) => return (rpc_error(id, -32603, &error.to_string()), false),
+                };
+                match self
+                    .engine
+                    .create(RpcParams {
+                        meta: params.meta,
+                        data: CreateEntityData {
+                            entity_type: ARTIFACT_ENTITY_TYPE.to_owned(),
+                            id: upload.id,
+                            value,
+                        },
+                    })
+                    .await
+                {
+                    Ok(result) => {
+                        self.artifact_store.finish(&params.data.upload_id).await;
+                        (rpc_success(id, result), false)
+                    }
+                    Err(error) => (rpc_backend_error(id, error), false),
+                }
+            }
+            methods::ARTIFACT_DOWNLOAD_CHUNK => {
+                let params = match serde_json::from_value::<ArtifactDownloadChunkParams>(params) {
+                    Ok(params) => params,
+                    Err(error) => return (rpc_error(id, -32602, &error.to_string()), false),
+                };
+                match self.download_artifact_chunk(params).await {
+                    Ok(result) => (rpc_success(id, result), false),
+                    Err(ArtifactDownloadError::Backend(error)) => {
+                        (rpc_backend_error(id, error), false)
+                    }
+                    Err(ArtifactDownloadError::Store(error)) => {
+                        (rpc_artifact_error(id, error), false)
+                    }
+                    Err(ArtifactDownloadError::Internal(error)) => {
+                        (rpc_error(id, -32603, &error), false)
+                    }
+                }
+            }
             methods::ENTITY_CREATE => {
                 let params = match serde_json::from_value::<CreateEntityParams>(params) {
                     Ok(params) => params,
@@ -571,6 +717,126 @@ impl ConnectionState {
             }
             _ => (rpc_error(id, -32601, "method not found"), false),
         }
+    }
+
+    async fn download_artifact_chunk(
+        &self,
+        params: ArtifactDownloadChunkParams,
+    ) -> Result<ArtifactDownloadChunkResult, ArtifactDownloadError> {
+        let deadline = RequestDeadline::from_meta(&params.meta)?;
+        deadline.check_now()?;
+        let read = self
+            .engine
+            .read(RpcParams {
+                meta: params.meta,
+                data: patchouli_backend::ReadEntityData {
+                    entity_ref: EntityRef {
+                        entity_type: ARTIFACT_ENTITY_TYPE.to_owned(),
+                        id: params.data.id,
+                    },
+                },
+            })
+            .await?;
+        deadline.check_now()?;
+        let versions =
+            read.data
+                .variants
+                .iter()
+                .map(|variant| match variant {
+                    EntityVersion::Active { version, .. }
+                    | EntityVersion::Deleted { version, .. } => version.clone(),
+                })
+                .collect::<Vec<_>>();
+        let entity = match &params.data.version {
+            Some(version) => read
+                .data
+                .variants
+                .into_iter()
+                .find(|variant| match variant {
+                    EntityVersion::Active {
+                        version: candidate, ..
+                    } => candidate == version,
+                    EntityVersion::Deleted { .. } => false,
+                }),
+            None if read.data.variants.len() == 1 => read
+                .data
+                .variants
+                .into_iter()
+                .find(|variant| matches!(variant, EntityVersion::Active { .. })),
+            None => return Err(BackendError::version_conflict(versions).into()),
+        }
+        .ok_or_else(|| {
+            BackendError::new(
+                BackendErrorReason::NotFound,
+                "artifact version was not found",
+            )
+        })?;
+        let value = match &entity {
+            EntityVersion::Active { value, .. } => {
+                serde_json::from_value::<ArtifactValue>(value.clone())
+                    .map_err(|error| ArtifactDownloadError::Internal(error.to_string()))?
+            }
+            EntityVersion::Deleted { .. } => unreachable!("deleted variants are filtered above"),
+        };
+        let ArtifactPlacement::Managed { provider, key } = &value.placement else {
+            return Err(BackendError::new(
+                BackendErrorReason::UnsupportedCapability,
+                "indexed artifacts are read through their source provider",
+            )
+            .into());
+        };
+        if provider != self.artifact_store.provider() {
+            return Err(BackendError::new(
+                BackendErrorReason::UnsupportedCapability,
+                format!("artifact is managed by provider {provider:?}"),
+            )
+            .into());
+        }
+        let chunk = self
+            .artifact_store
+            .read(provider, key, params.data.offset, params.data.max_bytes)
+            .await?;
+        if value.byte_length != Some(chunk.byte_length)
+            || value.digest.as_deref()
+                != key
+                    .strip_prefix("sha256/")
+                    .map(|digest| format!("sha256:{digest}"))
+                    .as_deref()
+        {
+            return Err(ArtifactDownloadError::Internal(
+                "managed artifact descriptor does not match stored content".to_owned(),
+            ));
+        }
+        deadline.check_now()?;
+        Ok(RpcResult {
+            meta: read.meta,
+            data: ArtifactDownloadChunkResultData {
+                entity,
+                offset: params.data.offset,
+                next_offset: chunk.next_offset,
+                eof: chunk.eof,
+                bytes_base64: chunk.bytes_base64,
+            },
+        })
+    }
+}
+
+#[derive(Debug)]
+enum ArtifactDownloadError {
+    Backend(BackendError),
+    Store(ArtifactStoreError),
+    Internal(String),
+}
+
+impl From<BackendError> for ArtifactDownloadError {
+    fn from(error: BackendError) -> Self {
+        Self::Backend(error)
+    }
+}
+
+impl From<ArtifactStoreError> for ArtifactDownloadError {
+    fn from(error: ArtifactStoreError) -> Self {
+        Self::Store(error)
     }
 }
 
@@ -658,6 +924,34 @@ impl LocalClient {
             },
         )
         .await
+    }
+
+    pub async fn begin_artifact_upload(
+        &mut self,
+        params: &ArtifactUploadBeginParams,
+    ) -> Result<ArtifactUploadBeginResult, IpcError> {
+        self.call(methods::ARTIFACT_UPLOAD_BEGIN, params).await
+    }
+
+    pub async fn upload_artifact_chunk(
+        &mut self,
+        params: &ArtifactUploadChunkParams,
+    ) -> Result<ArtifactUploadChunkResult, IpcError> {
+        self.call(methods::ARTIFACT_UPLOAD_CHUNK, params).await
+    }
+
+    pub async fn commit_artifact_upload(
+        &mut self,
+        params: &ArtifactUploadCommitParams,
+    ) -> Result<patchouli_backend::MutationResult, IpcError> {
+        self.call(methods::ARTIFACT_UPLOAD_COMMIT, params).await
+    }
+
+    pub async fn download_artifact_chunk(
+        &mut self,
+        params: &ArtifactDownloadChunkParams,
+    ) -> Result<ArtifactDownloadChunkResult, IpcError> {
+        self.call(methods::ARTIFACT_DOWNLOAD_CHUNK, params).await
     }
 
     pub async fn create(
@@ -860,6 +1154,14 @@ fn rpc_backend_error(id: Value, error: BackendError) -> Value {
         current_versions,
         conflicts,
     )
+}
+
+fn rpc_artifact_error(id: Value, error: ArtifactStoreError) -> Value {
+    match error {
+        ArtifactStoreError::Invalid(message) => rpc_error(id, -32602, &message),
+        ArtifactStoreError::NotFound => rpc_error(id, -32003, "artifact content was not found"),
+        ArtifactStoreError::Io(error) => rpc_error(id, -32603, &error.to_string()),
+    }
 }
 
 fn rpc_protocol_error(

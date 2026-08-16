@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, watch};
 use tokio_rusqlite::rusqlite::OptionalExtension;
 use tokio_rusqlite::{Connection, rusqlite};
 
-const STORAGE_SCHEMA_VERSION: i64 = 10;
+const STORAGE_SCHEMA_VERSION: i64 = 11;
 
 #[derive(Debug, Error)]
 pub enum SqliteProviderError {
@@ -640,6 +640,28 @@ impl Provider for SqliteProvider {
                             FOREIGN KEY (work_unit_json)
                                 REFERENCES patchouli_work_unit (identity_json) ON DELETE CASCADE
                         ) STRICT, WITHOUT ROWID;
+
+                        CREATE VIEW IF NOT EXISTS patchouli_artifact AS
+                        SELECT
+                            version.scope_json,
+                            version.entity_id AS artifact_id,
+                            version.version,
+                            json_extract(version.value_json, '$.media_type') AS media_type,
+                            json_extract(version.value_json, '$.name') AS name,
+                            json_extract(version.value_json, '$.byte_length') AS byte_length,
+                            json_extract(version.value_json, '$.digest') AS digest,
+                            json_extract(version.value_json, '$.placement.kind') AS placement_kind,
+                            json_extract(version.value_json, '$.placement') AS placement_json,
+                            json_extract(version.value_json, '$.metadata') AS metadata_json,
+                            version.recorded_at_unix_ms
+                        FROM patchouli_entity_version AS version
+                        INNER JOIN patchouli_entity_head AS head USING (
+                            scope_json,
+                            entity_type,
+                            entity_id,
+                            version
+                        )
+                        WHERE version.entity_type = 'artifact' AND version.state = 'active';
 
                         CREATE VIEW IF NOT EXISTS patchouli_knowledge AS
                         SELECT

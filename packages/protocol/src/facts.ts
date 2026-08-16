@@ -2,11 +2,13 @@ import type { EntityVersion } from './entity.js'
 import type { JsonObject, JsonValue } from './json.js'
 
 export const factEntityTypes = {
+  artifact: 'artifact',
   knowledge: 'knowledge',
   knowledgeRelation: 'knowledge_relation',
 } as const
 
 export const factSchemaUris = {
+  artifact: 'urn:patchouli:schema:artifact:1',
   common: 'urn:patchouli:schema:fact-common:1',
   knowledge: 'urn:patchouli:schema:knowledge:1',
   knowledgeRelation: 'urn:patchouli:schema:knowledge-relation:1',
@@ -24,6 +26,30 @@ export interface KnowledgeValue {
 export type KnowledgeContent =
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'structured'; readonly value: JsonValue }
+
+export interface ArtifactValue {
+  readonly media_type: string
+  readonly name: string | null
+  readonly byte_length: number | null
+  readonly digest: string | null
+  readonly placement: ArtifactPlacement
+  readonly metadata: FactMetadata<'patchouli.artifact@1'>
+}
+
+export type ArtifactPlacement = ManagedArtifactPlacement | IndexedArtifactPlacement
+
+export interface ManagedArtifactPlacement {
+  readonly kind: 'managed'
+  readonly provider: string
+  readonly key: string
+}
+
+export interface IndexedArtifactPlacement {
+  readonly kind: 'indexed'
+  readonly provider: string
+  readonly locator: string
+  readonly revision: string | null
+}
 
 export interface FactMetadata<TSchema extends string> {
   readonly core: FactMetadataCore<TSchema>
@@ -74,29 +100,10 @@ export interface Provenance {
   readonly recorded_at: string
 }
 
-export type ArtifactReference = SourceArtifactReference | EmbeddingArtifactReference
-
-export interface SourceArtifactReference {
-  readonly ref: string
-  readonly role: 'source' | 'attachment'
-  readonly media_type: string
-  readonly digest: string
-  readonly metadata: JsonObject
-}
-
-export interface EmbeddingArtifactReference {
-  readonly ref: string
-  readonly role: 'embedding'
-  readonly media_type: 'application/vnd.patchouli.embedding'
-  readonly digest: string
-  readonly metadata: EmbeddingArtifactMetadata
-}
-
-export interface EmbeddingArtifactMetadata {
-  readonly model: string
-  readonly dimensions: number
-  readonly metric: 'cosine' | 'dot_product' | 'euclidean'
-  readonly source_version: string
+export interface ArtifactReference {
+  readonly type: 'artifact'
+  readonly id: string
+  readonly role: 'source' | 'attachment' | 'embedding'
 }
 
 export interface KnowledgeProfile {
@@ -143,7 +150,8 @@ export type KnowledgeRelationType =
   | 'causes'
   | 'supersedes'
 
-export type FactValue = KnowledgeValue | KnowledgeRelationValue
+export type FactValue = ArtifactValue | KnowledgeValue | KnowledgeRelationValue
+export type ArtifactEntityVersion = EntityVersion<'artifact', ArtifactValue & JsonObject>
 export type KnowledgeEntityVersion = EntityVersion<'knowledge', KnowledgeValue & JsonObject>
 export type KnowledgeRelationEntityVersion = EntityVersion<
   'knowledge_relation',

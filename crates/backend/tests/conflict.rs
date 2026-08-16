@@ -109,6 +109,24 @@ fn crdt_documents_expose_durable_changes_and_frontier() {
 }
 
 #[test]
+fn crdt_documents_update_unicode_text() {
+    let base = CrdtDocument::from_json(&json!({
+        "text": "用户偏好简洁的代码审查意见"
+    }))
+    .unwrap();
+    let changed = base
+        .change(&json!({
+            "text": "用户偏好直接、简洁的代码审查意见"
+        }))
+        .unwrap();
+
+    assert_eq!(
+        changed.json().unwrap(),
+        json!({ "text": "用户偏好直接、简洁的代码审查意见" })
+    );
+}
+
+#[test]
 fn a_candidate_can_use_multiple_crdt_heads_as_its_base() {
     let base = CrdtDocument::from_json(&json!({ "left": 0, "right": 0 })).unwrap();
     let left = base.change(&json!({ "left": 1, "right": 0 })).unwrap();

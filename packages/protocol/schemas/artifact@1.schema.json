@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:patchouli:schema:artifact:1",
+  "title": "Patchouli Artifact value version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["media_type", "name", "byte_length", "digest", "placement", "metadata"],
+  "properties": {
+    "media_type": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "name": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/nullable_string" },
+    "byte_length": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "null" }
+      ]
+    },
+    "digest": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/nullable_string" },
+    "placement": { "$ref": "#/$defs/placement" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["core", "extensions"],
+      "properties": {
+        "core": {
+          "allOf": [
+            { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/metadata_core" },
+            {
+              "type": "object",
+              "required": ["schema"],
+              "properties": {
+                "schema": { "const": "patchouli.artifact@1" }
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        "extensions": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/extensions" }
+      }
+    }
+  },
+  "$defs": {
+    "managed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "provider", "key"],
+      "properties": {
+        "kind": { "const": "managed" },
+        "provider": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" },
+        "key": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" }
+      }
+    },
+    "indexed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "provider", "locator", "revision"],
+      "properties": {
+        "kind": { "const": "indexed" },
+        "provider": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" },
+        "locator": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" },
+        "revision": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/nullable_string" }
+      }
+    },
+    "placement": {
+      "oneOf": [
+        { "$ref": "#/$defs/managed" },
+        { "$ref": "#/$defs/indexed" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "placement": {
+            "properties": { "kind": { "const": "managed" } },
+            "required": ["kind"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "byte_length": { "type": "integer", "minimum": 0 },
+          "digest": { "$ref": "urn:patchouli:schema:fact-common:1#/$defs/non_empty_string" }
+        }
+      }
+    }
+  ]
+}

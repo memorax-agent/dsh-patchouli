@@ -1,14 +1,24 @@
 import { spawn } from 'node:child_process'
+import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { createConnection, type Socket } from 'node:net'
 
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
+  type ArtifactDownloadChunkParams,
+  type ArtifactDownloadChunkResult,
+  type ArtifactUploadBeginParams,
+  type ArtifactUploadBeginResult,
+  type ArtifactUploadChunkParams,
+  type ArtifactUploadChunkResult,
+  type ArtifactUploadCommitParams,
+  type ArtifactUploadCommitResult,
   type ChangesEventParams,
   type CreateEntityParams,
   type ControlCheckpointResult,
   type DeleteEntityParams,
   type JsonValue,
+  type Meta,
   type MutationResult,
   methods,
   protocolVersion,
@@ -82,6 +92,7 @@ export class PatchouliRpcError extends Error {
 }
 
 const subscriptionsCapability = 'subscriptions'
+const artifactsCapability = 'artifacts'
 
 export class PatchouliService extends Service {
   private socket?: Socket
@@ -110,6 +121,7 @@ export class PatchouliService extends Service {
         this.config.endpoint,
         this.config.providerConfigPath,
         this.config.backendConfigPath,
+        this.config.artifactRootPath,
       )
       await this.waitForDaemon()
     }
@@ -126,6 +138,94 @@ export class PatchouliService extends Service {
 
   async checkpoint(): Promise<ControlCheckpointResult> {
     return this.call<ControlCheckpointResult>(methods.controlCheckpoint, { meta: {}, data: {} })
+  }
+
+  async beginArtifactUpload(
+    params: ArtifactUploadBeginParams,
+  ): Promise<ArtifactUploadBeginResult> {
+    this.requireCapability(artifactsCapability)
+    return this.call<ArtifactUploadBeginResult>(methods.artifactUploadBegin, params)
+  }
+
+  async uploadArtifactChunk(
+    params: ArtifactUploadChunkParams,
+  ): Promise<ArtifactUploadChunkResult> {
+    this.requireCapability(artifactsCapability)
+    return this.call<ArtifactUploadChunkResult>(methods.artifactUploadChunk, params)
+  }
+
+  async commitArtifactUpload(
+    params: ArtifactUploadCommitParams,
+  ): Promise<ArtifactUploadCommitResult> {
+    this.requireCapability(artifactsCapability)
+    return this.call<ArtifactUploadCommitResult>(methods.artifactUploadCommit, params)
+  }
+
+  async downloadArtifactChunk(
+    params: ArtifactDownloadChunkParams,
+  ): Promise<ArtifactDownloadChunkResult> {
+    this.requireCapability(artifactsCapability)
+    return this.call<ArtifactDownloadChunkResult>(methods.artifactDownloadChunk, params)
+  }
+
+  async uploadArtifact(
+    params: ArtifactUploadBeginParams,
+    bytes: Uint8Array,
+  ): Promise<ArtifactUploadCommitResult> {
+    const begin = await this.beginArtifactUpload(params)
+    const chunkBytes = begin.data.max_chunk_bytes
+    let offset = 0
+    while (offset < bytes.byteLength) {
+      const chunk = bytes.subarray(offset, Math.min(offset + chunkBytes, bytes.byteLength))
+      const result = await this.uploadArtifactChunk({
+        meta: params.meta,
+        data: {
+          upload_id: begin.data.upload_id,
+          offset,
+          bytes_base64: Buffer.from(chunk).toString('base64'),
+        },
+      })
+      if (result.data.next_offset <= offset) {
+        throw new Error('Patchouli artifact upload did not advance')
+      }
+      offset = result.data.next_offset
+    }
+    return this.commitArtifactUpload({
+      meta: params.meta,
+      data: { upload_id: begin.data.upload_id },
+    })
+  }
+
+  async downloadArtifact(
+    meta: Meta,
+    id: string,
+    version: string | null = null,
+  ): Promise<Uint8Array> {
+    this.requireCapability(artifactsCapability)
+    const maxBytes = this.handshake?.limits.max_artifact_chunk_bytes
+    if (maxBytes === undefined) throw new Error('Patchouli artifact chunk limit is unavailable')
+    const chunks: Buffer[] = []
+    let offset = 0
+    let selectedVersion = version
+    while (true) {
+      const result = await this.downloadArtifactChunk({
+        meta,
+        data: { id, version: selectedVersion, offset, max_bytes: maxBytes },
+      })
+      const bytes = Buffer.from(result.data.bytes_base64, 'base64')
+      if (result.data.offset !== offset
+        || result.data.next_offset !== offset + bytes.byteLength) {
+        throw new Error('Patchouli artifact download returned an invalid offset')
+      }
+      selectedVersion ??= result.data.entity.version
+      if (result.data.entity.version !== selectedVersion) {
+        throw new Error('Patchouli artifact changed during download')
+      }
+      chunks.push(bytes)
+      offset = result.data.next_offset
+      if (result.data.eof) return Buffer.concat(chunks)
+      if (bytes.byteLength === 0) throw new Error('Patchouli artifact download did not advance')
+    }
   }
 
   async create<TType extends string = string, TValue extends JsonValue = JsonValue>(
@@ -162,9 +262,7 @@ export class PatchouliService extends Service {
     params: SubscribeChangesParams<TType>,
     handler: ChangeHandler<TType>,
   ): Promise<ChangeSubscriptionHandle> {
-    if (this.handshake && !this.handshake.capabilities.includes(subscriptionsCapability)) {
-      throw new Error('Patchouli daemon did not negotiate change subscriptions')
-    }
+    this.requireCapability(subscriptionsCapability)
     return this.call<ChangeSubscriptionHandle>(methods.changesSubscribe, params, (result) => {
       const subscriptionId = result.data.subscription_id
       let resolveClosed!: (result: ChangeSubscriptionClose) => void
@@ -258,12 +356,18 @@ export class PatchouliService extends Service {
           instance_id: randomUUID(),
         },
         protocol_versions: [protocolVersion],
-        capabilities: [subscriptionsCapability],
+        capabilities: [artifactsCapability, subscriptionsCapability],
       })
     } catch (error) {
       socket.destroy()
       this.socket = undefined
       throw error
+    }
+  }
+
+  private requireCapability(capability: string): void {
+    if (this.handshake && !this.handshake.capabilities.includes(capability)) {
+      throw new Error(`Patchouli daemon did not negotiate ${capability}`)
     }
   }
 
@@ -398,10 +502,12 @@ async function startDaemon(
   endpoint: string,
   providerConfigPath: string,
   backendConfigPath: string,
+  artifactRootPath: string,
 ): Promise<void> {
   const child = spawn(command, [
     'serve',
     '--endpoint', endpoint,
+    '--artifacts', artifactRootPath,
     '--providers', providerConfigPath,
     '--config', backendConfigPath,
   ], {

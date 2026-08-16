@@ -15,6 +15,10 @@ const RELATION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../packages/protocol/schemas/examples/knowledge-relation@1.json"
 ));
+const ARTIFACT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/protocol/schemas/examples/artifact-managed@1.json"
+));
 
 #[tokio::test]
 async fn opens_a_database_and_reports_health() {
@@ -310,7 +314,9 @@ async fn defines_generic_entries_and_typed_fact_views() {
     let schema_version: u32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read schema version");
-    assert_eq!(schema_version, 10);
+    assert_eq!(schema_version, 11);
+
+    insert_active_version(&connection, "artifact", "artifact-pdf", "v1", ARTIFACT);
 
     insert_active_version(
         &connection,
@@ -318,6 +324,24 @@ async fn defines_generic_entries_and_typed_fact_views() {
         "knowledge-derived",
         "v1",
         KNOWLEDGE,
+    );
+
+    let artifact: (String, String, u64, String) = connection
+        .query_row(
+            "SELECT artifact_id, placement_kind, byte_length, media_type
+             FROM patchouli_artifact",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("query typed artifact view");
+    assert_eq!(
+        artifact,
+        (
+            "artifact-pdf".to_owned(),
+            "managed".to_owned(),
+            483721,
+            "application/pdf".to_owned()
+        )
     );
     insert_active_version(
         &connection,

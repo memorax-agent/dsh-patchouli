@@ -1,7 +1,8 @@
 # Knowledge fact model
 
-Patchouli fact IR version 1 has exactly two public record values:
+Patchouli fact IR version 1 has three public record values:
 
+- `artifact`, validated by `urn:patchouli:schema:artifact:1`;
 - `knowledge`, validated by `urn:patchouli:schema:knowledge:1`;
 - `knowledge_relation`, validated by
   `urn:patchouli:schema:knowledge-relation:1`.
@@ -17,7 +18,7 @@ Entity identity and fact value are deliberately separate:
 ```text
 configured storage scope + EntityRef(type, id) + opaque EntityVersion
                                   |
-                                  +-- KnowledgeValue or KnowledgeRelationValue
+                                  +-- ArtifactValue, KnowledgeValue, or KnowledgeRelationValue
 ```
 
 The generic entity envelope is the only authority for an entity ID and storage
@@ -29,6 +30,49 @@ database key and is the authorization/storage boundary. `metadata.core.scope`
 describes the fact's semantic tenant/workspace/user/session context; it is
 untrusted input and cannot widen the configured storage scope.
 
+## Artifact
+
+Files, embeddings, and other non-JSON resources are first-class `artifact`
+entities. Knowledge never embeds their bytes or repeats their storage details.
+Every Artifact has media type, optional display name, optional byte length and
+digest, semantic metadata, and exactly one placement:
+
+```text
+managed  Patchouli owns the bytes at provider + key
+indexed  another provider owns the bytes at provider + locator + revision
+```
+
+Local paths and remote object identifiers use the same `indexed` shape. The
+provider interprets its opaque locator; generic CRUD and Knowledge consumers do
+not branch on local versus remote location. Locators and keys must not contain
+credentials.
+
+A managed Artifact requires both `byte_length` and `digest`, because the backend
+cannot claim ownership without a complete content identity. An indexed Artifact
+may leave either value null when the external provider exposes only a revision.
+Changing the indexed revision or promoting an indexed Artifact to managed
+storage creates a normal new entity version.
+
+Managed bytes enter the backend through the Artifact upload RPCs. Upload commit
+verifies their length and SHA-256 digest, stores equal content once, and creates
+the Artifact entity through the normal configured scope, transaction,
+consistency, conflict, and change-publication path. Downloads resolve that
+scoped entity before reading bytes; clients never receive a backend filesystem
+path. The placement provider is the owning daemon node ID, so another node can
+reject the request without reading the wrong local store.
+
+Indexed Artifacts do not use the managed upload/download RPCs. They are created
+with generic CRUD, and the provider named by their placement interprets the
+opaque locator. Deleting or superseding an Artifact entity does not immediately
+delete managed bytes because content-addressed objects may be shared. Incomplete
+uploads are discarded on daemon restart; orphan collection and cross-node byte
+replication are not implemented in version 1.
+
+Knowledge references an Artifact as `{ type: "artifact", id, role }`. The role
+is contextual to that Knowledge (`source`, `attachment`, or `embedding`), while
+media type, digest, placement, and provenance have one authority on the
+Artifact entity.
+
 ## Knowledge
 
 Every `KnowledgeValue` has four required fields:
@@ -36,7 +80,7 @@ Every `KnowledgeValue` has four required fields:
 ```text
 content   text or structured JSON
 metadata  fixed core plus namespaced extensions
-artifact  zero or more immutable references
+artifact  zero or more typed Artifact entity references
 profile   seven behavior dimensions
 ```
 
@@ -49,11 +93,10 @@ lifecycle, and provenance. All nullable core fields remain present as `null`,
 so omission is not confused with an unknown value. Extension keys contain at
 least one namespace separator, for example `local.session`.
 
-Artifacts have the roles `source`, `attachment`, or `embedding`. Every artifact
-is addressed by `ref` and protected by `digest`; locators must not contain
-credentials. Embeddings additionally record model, dimensions, metric, and the
-opaque entity `source_version`. An embedding derived from another knowledge
-version is stale and must not be attached as current materialization.
+Artifact references have the roles `source`, `attachment`, or `embedding`.
+Representation-specific metadata such as embedding model and dimensions belongs
+to the Artifact metadata extensions rather than being copied into each
+reference.
 
 The profile dimensions are:
 
@@ -102,7 +145,7 @@ preserve an earlier relation's type or endpoints.
 
 ## SQLite entries
 
-SQLite storage schema version 5 defines two authority tables:
+SQLite storage schema version 11 defines two authority tables:
 
 - `patchouli_entity_version`: immutable active values and tombstones keyed by
   canonical `scope_json + entity_type + entity_id + version`;
@@ -120,10 +163,11 @@ database baseline across RPC calls, while keeping staged versions out of the
 published heads and typed views until marker close.
 
 Active rows require valid JSON; tombstones require a null value. The value is
-stored once. `patchouli_knowledge` and `patchouli_knowledge_relation` are read-only
-views over active published heads. They expose typed columns such as knowledge
-content/profile and relation type plus complete `from`/`to` reference arrays
-without becoming a second semantic authority.
+stored once. `patchouli_artifact`, `patchouli_knowledge`, and
+`patchouli_knowledge_relation` are read-only views over active published heads.
+They expose typed columns such as Artifact placement, Knowledge content/profile,
+and relation type plus complete `from`/`to` reference arrays without becoming a
+second semantic authority.
 
 Earlier storage schemas are obsolete and rejected explicitly; no migration or
 compatibility path is maintained at this stage.

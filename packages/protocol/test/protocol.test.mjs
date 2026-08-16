@@ -16,6 +16,10 @@ test('publishes the versioned generic CRUD and reactive method names', () => {
     controlStatus: 'patchouli.control.status@1',
     controlCheckpoint: 'patchouli.control.checkpoint@1',
     controlShutdown: 'patchouli.control.shutdown@1',
+    artifactUploadBegin: 'patchouli.artifact.upload.begin@1',
+    artifactUploadChunk: 'patchouli.artifact.upload.chunk@1',
+    artifactUploadCommit: 'patchouli.artifact.upload.commit@1',
+    artifactDownloadChunk: 'patchouli.artifact.download.chunk@1',
     entityCreate: 'patchouli.entity.create@1',
     entityRead: 'patchouli.entity.read@1',
     entityRetrieve: 'patchouli.entity.retrieve@1',
@@ -29,10 +33,12 @@ test('publishes the versioned generic CRUD and reactive method names', () => {
 
 test('publishes the typed fact identities without adding RPC methods', () => {
   assert.deepEqual(factEntityTypes, {
+    artifact: 'artifact',
     knowledge: 'knowledge',
     knowledgeRelation: 'knowledge_relation',
   })
   assert.deepEqual(factSchemaUris, {
+    artifact: 'urn:patchouli:schema:artifact:1',
     common: 'urn:patchouli:schema:fact-common:1',
     knowledge: 'urn:patchouli:schema:knowledge:1',
     knowledgeRelation: 'urn:patchouli:schema:knowledge-relation:1',

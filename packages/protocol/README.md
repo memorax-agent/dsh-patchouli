@@ -18,6 +18,7 @@ identities against the OpenRPC document.
 Version 1 contains:
 
 - generic entity create, read, retrieve, update, and delete methods;
+- chunked upload and download for backend-managed Artifact bytes;
 - an open `meta` envelope plus strict CRUD business data;
 - configuration-selected preconditions, consistency, causal metadata, and an
   optional conflict-strategy request;
@@ -25,8 +26,8 @@ Version 1 contains:
 - cluster and node identity in the connection handshake.
 
 The generic OpenRPC methods do not specialize entity payloads. This package
-also publishes the optional, harness-neutral `KnowledgeValue` and
-`KnowledgeRelationValue` bindings plus their versioned JSON Schemas. Storage
+also publishes the optional, harness-neutral `ArtifactValue`, `KnowledgeValue`,
+and `KnowledgeRelationValue` bindings plus their versioned JSON Schemas. Storage
 tables, replication, conflict-resolution algorithms, and Harness bindings stay
 outside the wire contract.
 
@@ -37,6 +38,10 @@ patchouli.protocol.handshake@1
 patchouli.control.status@1
 patchouli.control.checkpoint@1
 patchouli.control.shutdown@1
+patchouli.artifact.upload.begin@1
+patchouli.artifact.upload.chunk@1
+patchouli.artifact.upload.commit@1
+patchouli.artifact.download.chunk@1
 patchouli.entity.create@1
 patchouli.entity.read@1
 patchouli.entity.retrieve@1
@@ -65,13 +70,21 @@ controller. Configuration determines whether the accepted version is published
 immediately or as part of a logical batch. Only published versions produce
 change notifications.
 
+Artifact upload is a three-step operation: begin, send ordered chunks, then
+commit. Commit publishes bytes to the backend-managed content-addressed store
+and creates the corresponding `artifact` entity through the same configured
+controller path as generic CRUD. Download first reads that entity in the
+caller's configured scope, then returns only bytes owned by the serving node.
+External `indexed` Artifacts remain generic entities and are read through their
+declared source provider.
+
 ## Generic entities
 
 An adapter supplies its own entity type and JSON payload vocabulary:
 
 ```ts
-type EntityType = 'knowledge' | 'knowledge_relation'
-type EntityValue = KnowledgeValue | KnowledgeRelationValue
+type EntityType = 'artifact' | 'knowledge' | 'knowledge_relation'
+type EntityValue = ArtifactValue | KnowledgeValue | KnowledgeRelationValue
 type Contract = PatchouliProtocol<EntityType, EntityValue>
 ```
 

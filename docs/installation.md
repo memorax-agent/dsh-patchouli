@@ -83,6 +83,7 @@ For a local checkout, replace the first command with
 ├── patchouli.schema.json    # editor/validation schema for config.json
 ├── providers.schema.json    # editor/validation schema for providers.json
 ├── data/                    # default SQLite database location
+│   └── artifacts/           # backend-managed content-addressed files
 └── run/                     # Unix socket location
 ```
 
@@ -94,6 +95,7 @@ Start the local backend in the foreground:
 ```bash
 patchouli-db serve \
   --endpoint "$HOME/.patchouli/run/patchouli.sock" \
+  --artifacts "$HOME/.patchouli/data/artifacts" \
   --providers "$HOME/.patchouli/providers.json" \
   --config "$HOME/.patchouli/config.json"
 ```

@@ -57,6 +57,9 @@ jobs:
       - name: Test Rust backend
         run: cargo test --locked --workspace
 
+      - name: Test third-party plugin database loop
+        run: pnpm test:e2e
+
       - name: Check Unix installer syntax
         if: runner.os != 'Windows'
         run: bash -n scripts/install.sh
@@ -107,9 +110,12 @@ jobs:
       - name: Create artifact directory
         run: node --eval "require('node:fs').mkdirSync('artifacts', { recursive: true })"
 
-      - name: Pack protocol and plugin
+      - name: Pack protocol and plugins
         run: |
           pnpm --filter @memorax-agent/patchouli-protocol pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter @memorax-agent/dsh-patchouli-agent-loop pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter @memorax-agent/dsh-patchouli-session-indexer pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter @memorax-agent/dsh-patchouli-workspace-indexer pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
           pnpm pack --pack-destination artifacts
 
       - name: Upload plugin packages

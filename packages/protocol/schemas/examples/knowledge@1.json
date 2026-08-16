@@ -48,16 +48,9 @@
   },
   "artifact": [
     {
-      "ref": "artifact:embedding-1",
-      "role": "embedding",
-      "media_type": "application/vnd.patchouli.embedding",
-      "digest": "sha256:0123456789abcdef",
-      "metadata": {
-        "model": "embedding-model-a",
-        "dimensions": 1536,
-        "metric": "cosine",
-        "source_version": "v3"
-      }
+      "type": "artifact",
+      "id": "embedding-1",
+      "role": "embedding"
     }
   ],
   "profile": {

@@ -85,6 +85,7 @@ pub struct ServerIdentity {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerLimits {
     pub max_request_bytes: u64,
+    pub max_artifact_chunk_bytes: u64,
     pub max_result_items: u64,
     pub idempotency_retention_seconds: u64,
     pub change_retention_seconds: u64,

@@ -6,12 +6,16 @@ use serde_json::Value;
 
 pub const KNOWLEDGE_ENTITY_TYPE: &str = "knowledge";
 pub const KNOWLEDGE_RELATION_ENTITY_TYPE: &str = "knowledge_relation";
+pub const ARTIFACT_ENTITY_TYPE: &str = "artifact";
 pub const FACT_COMMON_SCHEMA_URI: &str = "urn:patchouli:schema:fact-common:1";
+pub const ARTIFACT_SCHEMA_URI: &str = "urn:patchouli:schema:artifact:1";
 pub const KNOWLEDGE_SCHEMA_URI: &str = "urn:patchouli:schema:knowledge:1";
 pub const KNOWLEDGE_RELATION_SCHEMA_URI: &str = "urn:patchouli:schema:knowledge-relation:1";
 
 const FACT_COMMON_SCHEMA: &str =
     include_str!("../../../packages/protocol/schemas/fact-common@1.schema.json");
+const ARTIFACT_SCHEMA: &str =
+    include_str!("../../../packages/protocol/schemas/artifact@1.schema.json");
 const KNOWLEDGE_SCHEMA: &str =
     include_str!("../../../packages/protocol/schemas/knowledge@1.schema.json");
 const KNOWLEDGE_RELATION_SCHEMA: &str =
@@ -27,12 +31,38 @@ impl Retrieve for BuiltinFactSchemaRetriever {
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let source = match uri.as_str() {
             FACT_COMMON_SCHEMA_URI => FACT_COMMON_SCHEMA,
+            ARTIFACT_SCHEMA_URI => ARTIFACT_SCHEMA,
             KNOWLEDGE_SCHEMA_URI => KNOWLEDGE_SCHEMA,
             KNOWLEDGE_RELATION_SCHEMA_URI => KNOWLEDGE_RELATION_SCHEMA,
             _ => return Err(format!("unknown schema URI {uri}").into()),
         };
         serde_json::from_str(source).map_err(Into::into)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactValue {
+    pub media_type: String,
+    pub name: Option<String>,
+    pub byte_length: Option<u64>,
+    pub digest: Option<String>,
+    pub placement: ArtifactPlacement,
+    pub metadata: FactMetadata<ArtifactSchemaVersion>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ArtifactPlacement {
+    Managed {
+        provider: String,
+        key: String,
+    },
+    Indexed {
+        provider: String,
+        locator: String,
+        revision: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -72,6 +102,12 @@ pub struct FactMetadataCore<TSchema> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnowledgeSchemaVersion {
     #[serde(rename = "patchouli.knowledge@1")]
+    V1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArtifactSchemaVersion {
+    #[serde(rename = "patchouli.artifact@1")]
     V1,
 }
 
@@ -143,53 +179,27 @@ pub enum ProvenanceKind {
     Imported,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "role", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ArtifactReference {
-    Source {
-        #[serde(rename = "ref")]
-        artifact_ref: String,
-        media_type: String,
-        digest: String,
-        metadata: BTreeMap<String, Value>,
-    },
-    Attachment {
-        #[serde(rename = "ref")]
-        artifact_ref: String,
-        media_type: String,
-        digest: String,
-        metadata: BTreeMap<String, Value>,
-    },
-    Embedding {
-        #[serde(rename = "ref")]
-        artifact_ref: String,
-        media_type: EmbeddingMediaType,
-        digest: String,
-        metadata: EmbeddingArtifactMetadata,
-    },
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactReference {
+    #[serde(rename = "type")]
+    pub entity_type: ArtifactEntityType,
+    pub id: String,
+    pub role: ArtifactRole,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EmbeddingMediaType {
-    #[serde(rename = "application/vnd.patchouli.embedding")]
-    PatchouliEmbedding,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EmbeddingArtifactMetadata {
-    pub model: String,
-    pub dimensions: u32,
-    pub metric: EmbeddingMetric,
-    pub source_version: String,
+pub enum ArtifactEntityType {
+    #[serde(rename = "artifact")]
+    Artifact,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum EmbeddingMetric {
-    Cosine,
-    DotProduct,
-    Euclidean,
+pub enum ArtifactRole {
+    Source,
+    Attachment,
+    Embedding,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

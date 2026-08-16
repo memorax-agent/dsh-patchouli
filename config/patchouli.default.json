@@ -33,6 +33,48 @@
     "scope_by": ["workspace_id", "user_id"]
   },
   "entity_types": {
+    "artifact": {
+      "value_schema": {
+        "$ref": "urn:patchouli:schema:artifact:1"
+      },
+      "rules": [],
+      "fallback": {
+        "consistency": {
+          "snapshot": {
+            "mode": "request"
+          },
+          "acquire": {
+            "allow_sources": ["authority"],
+            "requirements": [
+              {
+                "kind": "linearizable",
+                "key_by": []
+              }
+            ]
+          },
+          "sessions": [],
+          "commit": {
+            "ordering": {
+              "kind": "serialize",
+              "key_by": []
+            }
+          }
+        },
+        "idempotency": {
+          "mode": "disabled"
+        },
+        "conflict": {
+          "default_strategy": "mvcc",
+          "strategy_from": "conflict_strategy",
+          "base_versions": "base_versions",
+          "merge": [],
+          "otherwise": "mvcc"
+        },
+        "publication": {
+          "mode": "immediate"
+        }
+      }
+    },
     "knowledge": {
       "value_schema": {
         "$ref": "urn:patchouli:schema:knowledge:1"

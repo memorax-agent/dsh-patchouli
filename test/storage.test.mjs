@@ -135,9 +135,10 @@ test('bridges storage requests and change notifications', async (t) => {
           ? {
               protocol_version: 1,
               server: { version: '0.1.0', cluster_id: 'test', node_id: 'test' },
-              capabilities: ['subscriptions'],
+              capabilities: ['artifacts', 'subscriptions'],
               limits: {
                 max_request_bytes: 1_048_576,
+                max_artifact_chunk_bytes: 524_288,
                 max_result_items: 1,
                 idempotency_retention_seconds: 1,
                 change_retention_seconds: 1,
@@ -181,7 +182,7 @@ test('bridges storage requests and change notifications', async (t) => {
   })
 
   assert.equal(ctx.patchouli.server?.server.node_id, 'test')
-  assert.deepEqual(handshakeCapabilities, ['subscriptions'])
+  assert.deepEqual(handshakeCapabilities, ['artifacts', 'subscriptions'])
   const status = await ctx.patchouli.status()
   assert.equal(status.data.ready, true)
   assert.equal(status.data.provider, 'sqlite')

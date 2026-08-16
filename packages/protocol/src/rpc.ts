@@ -7,6 +7,10 @@ export const methods = {
   controlStatus: 'patchouli.control.status@1',
   controlCheckpoint: 'patchouli.control.checkpoint@1',
   controlShutdown: 'patchouli.control.shutdown@1',
+  artifactUploadBegin: 'patchouli.artifact.upload.begin@1',
+  artifactUploadChunk: 'patchouli.artifact.upload.chunk@1',
+  artifactUploadCommit: 'patchouli.artifact.upload.commit@1',
+  artifactDownloadChunk: 'patchouli.artifact.download.chunk@1',
   entityCreate: 'patchouli.entity.create@1',
   entityRead: 'patchouli.entity.read@1',
   entityRetrieve: 'patchouli.entity.retrieve@1',
@@ -86,6 +90,7 @@ export interface HandshakeResult {
   readonly capabilities: readonly string[]
   readonly limits: {
     readonly max_request_bytes: number
+    readonly max_artifact_chunk_bytes: number
     readonly max_result_items: number
     readonly idempotency_retention_seconds: number
     readonly change_retention_seconds: number

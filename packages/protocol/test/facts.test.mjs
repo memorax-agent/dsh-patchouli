@@ -10,11 +10,23 @@ async function readJson(relativePath) {
   return JSON.parse(await readFile(new URL(relativePath, schemaRoot), 'utf8'))
 }
 
-test('knowledge and knowledge relation examples conform to their fact schemas', async () => {
-  const [commonSchema, knowledgeSchema, relationSchema, knowledge, relation] = await Promise.all([
+test('artifact, knowledge, and relation examples conform to their fact schemas', async () => {
+  const [
+    commonSchema,
+    artifactSchema,
+    knowledgeSchema,
+    relationSchema,
+    managedArtifact,
+    indexedArtifact,
+    knowledge,
+    relation,
+  ] = await Promise.all([
     readJson('fact-common@1.schema.json'),
+    readJson('artifact@1.schema.json'),
     readJson('knowledge@1.schema.json'),
     readJson('knowledge-relation@1.schema.json'),
+    readJson('examples/artifact-managed@1.json'),
+    readJson('examples/artifact-indexed@1.json'),
     readJson('examples/knowledge@1.json'),
     readJson('examples/knowledge-relation@1.json'),
   ])
@@ -24,9 +36,12 @@ test('knowledge and knowledge relation examples conform to their fact schemas', 
     validate: value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value),
   })
   ajv.addSchema(commonSchema)
+  const validateArtifact = ajv.compile(artifactSchema)
   const validateKnowledge = ajv.compile(knowledgeSchema)
   const validateRelation = ajv.compile(relationSchema)
 
+  assert.equal(validateArtifact(managedArtifact), true, JSON.stringify(validateArtifact.errors))
+  assert.equal(validateArtifact(indexedArtifact), true, JSON.stringify(validateArtifact.errors))
   assert.equal(validateKnowledge(knowledge), true, JSON.stringify(validateKnowledge.errors))
   assert.equal(validateRelation(relation), true, JSON.stringify(validateRelation.errors))
   assert.equal(relation.from.length, 2)
@@ -39,4 +54,13 @@ test('knowledge and knowledge relation examples conform to their fact schemas', 
   const emptyRelation = structuredClone(relation)
   emptyRelation.to = []
   assert.equal(validateRelation(emptyRelation), false)
+
+  const managedWithoutDigest = structuredClone(managedArtifact)
+  managedWithoutDigest.digest = null
+  assert.equal(validateArtifact(managedWithoutDigest), false)
+
+  const indexedWithoutDigest = structuredClone(indexedArtifact)
+  indexedWithoutDigest.digest = null
+  indexedWithoutDigest.byte_length = null
+  assert.equal(validateArtifact(indexedWithoutDigest), true, JSON.stringify(validateArtifact.errors))
 })
