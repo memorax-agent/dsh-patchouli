@@ -2,6 +2,9 @@
     - id: patchouli
       name: dsh-patchouli
 
+    - id: patchouli-storage
+      name: dsh-patchouli/storage
+
     - id: patchouli-agent-loop
       name: '@memorax-agent/dsh-patchouli-agent-loop'
 

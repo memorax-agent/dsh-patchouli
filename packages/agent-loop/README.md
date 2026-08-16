@@ -61,5 +61,6 @@ bytes:
 
 The Agent Loop adapter never reads that path. The separate Artifact Ingestor
 validates it against the Session workspace through `ctx.fs` and transfers its
-bytes when local Patchouli storage is enabled. Image content blocks already
-carry durable DSH attachment references and need no model-supplied resource.
+bytes through the default Patchouli storage service. Image content blocks
+already carry durable DSH attachment references and need no model-supplied
+resource.

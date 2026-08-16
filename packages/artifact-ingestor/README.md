@@ -6,8 +6,8 @@ entities.
 
 The plugin keeps bytes outside `ctx.patchouliMemory`: it resolves trusted DSH
 references through `ctx.attachments` or `ctx.fs`, checks workspace containment,
-then uploads verified bytes through `ctx.patchouli`. It requires the optional
-Patchouli storage client and remains pending when that service is absent.
+then uploads verified bytes through `ctx.patchouli`. It requires the Patchouli
+storage client, which the bundled DSH profile enables by default.
 
 ```yaml
 ingestSessionImages: true

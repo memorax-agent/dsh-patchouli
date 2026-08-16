@@ -46,34 +46,28 @@ git clone --branch main --single-branch https://github.com/memorax-agent/dsh-pat
 cd dsh-patchouli
 corepack enable
 pnpm install
-dsh plugin --profile web add .
+cargo install --locked --path crates/server
+patchouli-db init --root "$HOME/.patchouli"
+dsh plugin --profile web add \
+  . \
+  ./packages/agent-loop \
+  ./packages/artifact-ingestor \
+  ./packages/session-indexer \
+  ./packages/workspace-indexer
 dsh --profile web --dump-config
 ```
 
-The last command should list `patchouli` and its connector plugins. Patchouli is
-middleware: register at least one compatible memory or knowledge plugin to
-handle the routed `update`, `retrieve`, and `subscribe` calls. By default, the
-Agent Loop connector retrieves before each agent step, stores completed turns,
-and exposes memory update and retrieval tools to the model.
+Rust stable and a C toolchain are required to build the transactional database
+backend. The bundled DSH profile enables its storage client by default; it
+connects to the local daemon and starts it when needed. The last command should
+list `patchouli`, `patchouli-storage`, and the connector plugins. Register at
+least one compatible memory or knowledge plugin to handle routed `update`,
+`retrieve`, and `subscribe` calls. By default, the Agent Loop connector
+retrieves before each agent step, stores completed turns, and exposes memory
+update and retrieval tools to the model.
 
-The transactional database backend is optional. With Rust stable and a C
-toolchain installed, build it from the same checkout and initialize its local
-home:
-
-```bash
-cargo install --locked --path crates/server
-patchouli-db init --root "$HOME/.patchouli"
-```
-
-Then enable the storage client in the DSH profile; it connects to the local
-daemon and starts it when needed:
-
-```yaml
-- id: patchouli-storage
-  name: dsh-patchouli/storage
-  config:
-    autoStart: true
-```
+The workspace package paths are required only for a source `link:` install;
+published releases install these dependencies with the root package.
 
 See the [Getting started guide](https://memorax-agent.github.io/dsh-patchouli/getting-started)
 for configuration and platform-specific details.

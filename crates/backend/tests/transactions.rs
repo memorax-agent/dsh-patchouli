@@ -14,10 +14,6 @@ const DEFAULT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../config/patchouli.default.json"
 ));
-const WORK_UNITS: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../config/patchouli.example.json"
-));
 const CAUSAL_SESSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../config/patterns/causal_session.json"
@@ -373,7 +369,7 @@ async fn causal_and_session_frontiers_survive_restart() {
 async fn batch_acceptance_and_idempotency_commit_atomically() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("patchouli.db");
-    let mut config: Value = serde_json::from_str(WORK_UNITS).unwrap();
+    let mut config: Value = serde_json::from_str(DEFAULT).unwrap();
     config["meta_fields"]["request_id"] = json!({
         "pointer": "/request_id",
         "schema": { "type": "string", "minLength": 1 }
@@ -460,7 +456,7 @@ async fn batch_acceptance_and_idempotency_commit_atomically() {
 async fn expired_batch_discards_staged_idempotency_instead_of_replaying_success() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("patchouli.db");
-    let mut config: Value = serde_json::from_str(WORK_UNITS).unwrap();
+    let mut config: Value = serde_json::from_str(DEFAULT).unwrap();
     config["meta_fields"]["request_id"] = json!({
         "pointer": "/request_id",
         "schema": { "type": "string", "minLength": 1 }
@@ -735,7 +731,7 @@ async fn request_reject_strategy_reports_current_heads_for_a_stale_update() {
 async fn work_unit_survives_restart_and_publishes_all_entities_atomically() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("patchouli.db");
-    let first = start_engine_with(&path, WORK_UNITS).await;
+    let first = start_engine_with(&path, DEFAULT).await;
     let first_ref = EntityRef {
         entity_type: "knowledge".to_owned(),
         id: "staged-first".to_owned(),
@@ -785,7 +781,7 @@ async fn work_unit_survives_restart_and_publishes_all_entities_atomically() {
     );
     first.shutdown().await.unwrap();
 
-    let second = start_engine_with(&path, WORK_UNITS).await;
+    let second = start_engine_with(&path, DEFAULT).await;
     assert_eq!(
         second
             .read(RpcParams {
@@ -863,7 +859,7 @@ async fn work_unit_survives_restart_and_publishes_all_entities_atomically() {
 #[tokio::test]
 async fn work_unit_resolves_external_baseline_drift_with_configured_merge_and_mvcc() {
     let directory = tempfile::tempdir().unwrap();
-    let engine = start_engine_with(&directory.path().join("patchouli.db"), WORK_UNITS).await;
+    let engine = start_engine_with(&directory.path().join("patchouli.db"), DEFAULT).await;
     let entity_ref = EntityRef {
         entity_type: "knowledge".to_owned(),
         id: "publish-race".to_owned(),
@@ -953,7 +949,7 @@ async fn work_unit_resolves_external_baseline_drift_with_configured_merge_and_mv
 #[tokio::test]
 async fn work_unit_rejects_external_baseline_drift_when_requested() {
     let directory = tempfile::tempdir().unwrap();
-    let engine = start_engine_with(&directory.path().join("patchouli.db"), WORK_UNITS).await;
+    let engine = start_engine_with(&directory.path().join("patchouli.db"), DEFAULT).await;
     let entity_ref = EntityRef {
         entity_type: "knowledge".to_owned(),
         id: "publish-reject".to_owned(),
@@ -1032,7 +1028,7 @@ async fn work_unit_rejects_external_baseline_drift_when_requested() {
 #[tokio::test]
 async fn work_unit_reports_every_rejected_entity_conflict() {
     let directory = tempfile::tempdir().unwrap();
-    let engine = start_engine_with(&directory.path().join("patchouli.db"), WORK_UNITS).await;
+    let engine = start_engine_with(&directory.path().join("patchouli.db"), DEFAULT).await;
     let refs = ["reject-a", "reject-b"].map(|id| EntityRef {
         entity_type: "knowledge".to_owned(),
         id: id.to_owned(),
@@ -1118,7 +1114,7 @@ async fn work_unit_reports_every_rejected_entity_conflict() {
 #[tokio::test]
 async fn work_unit_resolves_stale_member_writes_before_atomic_publication() {
     let directory = tempfile::tempdir().unwrap();
-    let engine = start_engine_with(&directory.path().join("patchouli.db"), WORK_UNITS).await;
+    let engine = start_engine_with(&directory.path().join("patchouli.db"), DEFAULT).await;
     let entity_ref = EntityRef {
         entity_type: "knowledge".to_owned(),
         id: "member-conflict".to_owned(),
@@ -1179,7 +1175,7 @@ async fn work_unit_resolves_stale_member_writes_before_atomic_publication() {
 async fn work_unit_uses_one_global_baseline_for_entities_first_read_later() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("patchouli.db");
-    let engine = start_engine_with(&path, WORK_UNITS).await;
+    let engine = start_engine_with(&path, DEFAULT).await;
     let first_ref = EntityRef {
         entity_type: "knowledge".to_owned(),
         id: "baseline-first".to_owned(),
@@ -1219,7 +1215,7 @@ async fn work_unit_uses_one_global_baseline_for_entities_first_read_later() {
         .execute("DELETE FROM patchouli_change", [])
         .unwrap();
     drop(connection);
-    let engine = start_engine_with(&path, WORK_UNITS).await;
+    let engine = start_engine_with(&path, DEFAULT).await;
 
     engine
         .read(RpcParams {

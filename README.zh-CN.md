@@ -43,32 +43,26 @@ git clone --branch main --single-branch https://github.com/memorax-agent/dsh-pat
 cd dsh-patchouli
 corepack enable
 pnpm install
-dsh plugin --profile web add .
+cargo install --locked --path crates/server
+patchouli-db init --root "$HOME/.patchouli"
+dsh plugin --profile web add \
+  . \
+  ./packages/agent-loop \
+  ./packages/artifact-ingestor \
+  ./packages/session-indexer \
+  ./packages/workspace-indexer
 dsh --profile web --dump-config
 ```
 
-最后一个命令应列出 `patchouli` 及其连接器插件。Patchouli 是协调中台，
+构建事务化数据库后端需要 Rust stable 和 C 工具链。随附的 DSH Profile
+默认启用存储客户端，它会连接本地守护进程，并在需要时自动启动。最后一个
+命令应列出 `patchouli`、`patchouli-storage` 及各连接器插件。Patchouli
 需要至少注册一个兼容的记忆或知识插件，才能实际处理路由后的 `update`、
 `retrieve` 和 `subscribe` 调用。默认情况下，Agent Loop 连接器会在每个
 Agent Step 前检索信息、在 Turn 完成后写入信息，并向模型提供记忆存取工具。
 
-事务化数据库后端是可选组件。安装 Rust stable 和 C 工具链后，可从同一个
-Checkout 构建并初始化本地目录：
-
-```bash
-cargo install --locked --path crates/server
-patchouli-db init --root "$HOME/.patchouli"
-```
-
-然后在 DSH Profile 中启用存储客户端；它会连接本地守护进程，并在需要时
-自动启动：
-
-```yaml
-- id: patchouli-storage
-  name: dsh-patchouli/storage
-  config:
-    autoStart: true
-```
+这些 workspace 包路径只在源码 `link:` 安装时需要；正式发布包会随根包
+自动安装对应依赖。
 
 配置和各平台的详细说明参见
 [快速开始](https://memorax-agent.github.io/dsh-patchouli/getting-started)。

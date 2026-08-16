@@ -19,6 +19,14 @@
       "pointer": "/conflict_strategy",
       "schema": { "type": "string", "enum": ["merge", "mvcc", "reject"] }
     },
+    "transaction_id": {
+      "pointer": "/transaction_id",
+      "schema": { "type": "string", "minLength": 1 }
+    },
+    "transaction_state": {
+      "pointer": "/transaction_state",
+      "schema": { "type": "string" }
+    },
     "base_versions": {
       "pointer": "/base_versions",
       "schema": {
@@ -37,7 +45,59 @@
       "value_schema": {
         "$ref": "urn:patchouli:schema:artifact:1"
       },
-      "rules": [],
+      "rules": [
+        {
+          "name": "transaction_batch",
+          "when": {
+            "all_present": ["transaction_id"]
+          },
+          "behavior": {
+            "consistency": {
+              "snapshot": {
+                "mode": "shared",
+                "key_by": ["transaction_id"]
+              },
+              "acquire": {
+                "allow_sources": ["authority"],
+                "requirements": [
+                  {
+                    "kind": "linearizable",
+                    "key_by": []
+                  }
+                ]
+              },
+              "sessions": [],
+              "commit": {
+                "ordering": {
+                  "kind": "serialize",
+                  "key_by": []
+                }
+              }
+            },
+            "idempotency": {
+              "mode": "disabled"
+            },
+            "conflict": {
+              "default_strategy": "mvcc",
+              "strategy_from": "conflict_strategy",
+              "base_versions": "base_versions",
+              "merge": [],
+              "otherwise": "mvcc"
+            },
+            "publication": {
+              "mode": "batch",
+              "key_by": ["transaction_id"],
+              "close_when": {
+                "kind": "marker",
+                "field": "transaction_state",
+                "equals": "commit"
+              },
+              "staging_ttl_ms": 3600000,
+              "on_expire": "discard"
+            }
+          }
+        }
+      ],
       "fallback": {
         "consistency": {
           "snapshot": {
@@ -79,7 +139,65 @@
       "value_schema": {
         "$ref": "urn:patchouli:schema:knowledge:1"
       },
-      "rules": [],
+      "rules": [
+        {
+          "name": "transaction_batch",
+          "when": {
+            "all_present": ["transaction_id"]
+          },
+          "behavior": {
+            "consistency": {
+              "snapshot": {
+                "mode": "shared",
+                "key_by": ["transaction_id"]
+              },
+              "acquire": {
+                "allow_sources": ["authority"],
+                "requirements": [
+                  {
+                    "kind": "linearizable",
+                    "key_by": []
+                  }
+                ]
+              },
+              "sessions": [],
+              "commit": {
+                "ordering": {
+                  "kind": "serialize",
+                  "key_by": []
+                }
+              }
+            },
+            "idempotency": {
+              "mode": "disabled"
+            },
+            "conflict": {
+              "default_strategy": "merge",
+              "strategy_from": "conflict_strategy",
+              "base_versions": "base_versions",
+              "merge": [
+                {
+                  "path": "/content",
+                  "strategy": "automerge",
+                  "group_by": ["/kind"]
+                }
+              ],
+              "otherwise": "mvcc"
+            },
+            "publication": {
+              "mode": "batch",
+              "key_by": ["transaction_id"],
+              "close_when": {
+                "kind": "marker",
+                "field": "transaction_state",
+                "equals": "commit"
+              },
+              "staging_ttl_ms": 3600000,
+              "on_expire": "discard"
+            }
+          }
+        }
+      ],
       "fallback": {
         "consistency": {
           "snapshot": {
@@ -127,7 +245,59 @@
       "value_schema": {
         "$ref": "urn:patchouli:schema:knowledge-relation:1"
       },
-      "rules": [],
+      "rules": [
+        {
+          "name": "transaction_batch",
+          "when": {
+            "all_present": ["transaction_id"]
+          },
+          "behavior": {
+            "consistency": {
+              "snapshot": {
+                "mode": "shared",
+                "key_by": ["transaction_id"]
+              },
+              "acquire": {
+                "allow_sources": ["authority"],
+                "requirements": [
+                  {
+                    "kind": "linearizable",
+                    "key_by": []
+                  }
+                ]
+              },
+              "sessions": [],
+              "commit": {
+                "ordering": {
+                  "kind": "serialize",
+                  "key_by": []
+                }
+              }
+            },
+            "idempotency": {
+              "mode": "disabled"
+            },
+            "conflict": {
+              "default_strategy": "mvcc",
+              "strategy_from": "conflict_strategy",
+              "base_versions": "base_versions",
+              "merge": [],
+              "otherwise": "mvcc"
+            },
+            "publication": {
+              "mode": "batch",
+              "key_by": ["transaction_id"],
+              "close_when": {
+                "kind": "marker",
+                "field": "transaction_state",
+                "equals": "commit"
+              },
+              "staging_ttl_ms": 3600000,
+              "on_expire": "discard"
+            }
+          }
+        }
+      ],
       "fallback": {
         "consistency": {
           "snapshot": {

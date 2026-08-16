@@ -194,6 +194,10 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     resolve('packages/protocol/schemas/examples/knowledge@1.json'),
     'utf8',
   ))
+  const knowledgeRelation = JSON.parse(await readFile(
+    resolve('packages/protocol/schemas/examples/knowledge-relation@1.json'),
+    'utf8',
+  ))
   const artifactFixture = JSON.parse(await readFile(
     resolve('packages/protocol/schemas/examples/artifact-managed@1.json'),
     'utf8',
@@ -203,6 +207,45 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     user_id: 'user-1',
     channel_id: 'channel-1',
   }
+
+  const workKnowledgeRef = { type: 'knowledge', id: 'work-knowledge-1' }
+  const workRelationRef = { type: 'knowledge_relation', id: 'work-relation-1' }
+  const workKnowledge = structuredClone(knowledge)
+  workKnowledge.content.text = 'cross-RPC transaction fixture'
+  const relation = structuredClone(knowledgeRelation)
+  relation.from = [workKnowledgeRef]
+  relation.to = [{ type: 'knowledge', id: 'work-source-1' }]
+  await ctx.patchouli.runWorkUnit(
+    { ...databaseMeta, transaction_id: 'work-unit-e2e-1' },
+    { transaction_state: 'commit' },
+    [
+      meta => ctx.patchouli.create({
+        meta,
+        data: { ...workKnowledgeRef, value: workKnowledge },
+      }),
+      async (meta) => {
+        await assert.rejects(
+          ctx.patchouli.read({ meta: databaseMeta, data: { ref: workKnowledgeRef } }),
+          (error) => {
+            assert.ok(error instanceof storage.PatchouliRpcError)
+            assert.equal(error.reason, 'NOT_FOUND')
+            return true
+          },
+        )
+        return ctx.patchouli.create({
+          meta,
+          data: { ...workRelationRef, value: relation },
+        })
+      },
+    ],
+  )
+  const [publishedKnowledge, publishedRelation] = await Promise.all([
+    ctx.patchouli.read({ meta: databaseMeta, data: { ref: workKnowledgeRef } }),
+    ctx.patchouli.read({ meta: databaseMeta, data: { ref: workRelationRef } }),
+  ])
+  assert.equal(publishedKnowledge.data.state, 'active')
+  assert.equal(publishedRelation.data.state, 'active')
+
   const ref = { type: 'knowledge', id: 'crud-loop-1' }
 
   const artifactBytes = Uint8Array.from(
