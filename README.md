@@ -35,6 +35,49 @@ remains harness-neutral.
 - Managed image and workspace-file ingestion as typed Artifacts.
 - Durable subscriptions and a transactional Rust backend with SQLite and remote providers.
 
+## Install and use
+
+Requires Node.js `^22.19.0 || >=24`, pnpm 11, and a DeepSeek Harness runtime
+compatible with `0.1.0-rc.6`. Until the first packaged release, install the
+current source branch:
+
+```bash
+git clone --branch docs --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+cd dsh-patchouli
+corepack enable
+pnpm install
+dsh plugin --profile web add .
+dsh --profile web --dump-config
+```
+
+The last command should list `patchouli` and its connector plugins. Patchouli is
+middleware: register at least one compatible memory or knowledge plugin to
+handle the routed `update`, `retrieve`, and `subscribe` calls. By default, the
+Agent Loop connector retrieves before each agent step, stores completed turns,
+and exposes memory update and retrieval tools to the model.
+
+The transactional database backend is optional. With Rust stable and a C
+toolchain installed, build it from the same checkout and initialize its local
+home:
+
+```bash
+cargo install --locked --path crates/server
+patchouli-db init --root "$HOME/.patchouli"
+```
+
+Then enable the storage client in the DSH profile; it connects to the local
+daemon and starts it when needed:
+
+```yaml
+- id: patchouli-storage
+  name: dsh-patchouli/storage
+  config:
+    autoStart: true
+```
+
+See the [Getting started guide](https://memorax-agent.github.io/dsh-patchouli/getting-started)
+for configuration and platform-specific details.
+
 ## What does the plugin's name mean???
 
 The name refers directly to

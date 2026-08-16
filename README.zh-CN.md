@@ -33,6 +33,46 @@ DeepSeek Harness 是目前首个受支持的集成，数据库后端本身不依
 - 将图片和工作区文件摄取为类型化 Artifact。
 - 提供持久化订阅，以及支持 SQLite 和远程 Provider 的事务化 Rust 后端。
 
+## 安装与使用
+
+需要 Node.js `^22.19.0 || >=24`、pnpm 11，以及兼容 `0.1.0-rc.6` 的
+DeepSeek Harness。首个打包版本发布前，请从当前源码分支安装：
+
+```bash
+git clone --branch docs --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+cd dsh-patchouli
+corepack enable
+pnpm install
+dsh plugin --profile web add .
+dsh --profile web --dump-config
+```
+
+最后一个命令应列出 `patchouli` 及其连接器插件。Patchouli 是协调中台，
+需要至少注册一个兼容的记忆或知识插件，才能实际处理路由后的 `update`、
+`retrieve` 和 `subscribe` 调用。默认情况下，Agent Loop 连接器会在每个
+Agent Step 前检索信息、在 Turn 完成后写入信息，并向模型提供记忆存取工具。
+
+事务化数据库后端是可选组件。安装 Rust stable 和 C 工具链后，可从同一个
+Checkout 构建并初始化本地目录：
+
+```bash
+cargo install --locked --path crates/server
+patchouli-db init --root "$HOME/.patchouli"
+```
+
+然后在 DSH Profile 中启用存储客户端；它会连接本地守护进程，并在需要时
+自动启动：
+
+```yaml
+- id: patchouli-storage
+  name: dsh-patchouli/storage
+  config:
+    autoStart: true
+```
+
+配置和各平台的详细说明参见
+[快速开始](https://memorax-agent.github.io/dsh-patchouli/getting-started)。
+
 ## 这个插件的名字是什么意思？？？
 
 名称直接来自 [Patchouli Knowledge](https://en.touhouwiki.net/wiki/Patchouli_Knowledge)，同时致敬广为人知的 Minecraft 模组 [Patchouli](https://github.com/VazkiiMods/Patchouli)。
