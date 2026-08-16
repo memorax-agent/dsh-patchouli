@@ -1,5 +1,5 @@
 <div align="center">
-  <img width="132" alt="Patchouli" src="assets/patchouli-icon-color.png">
+  <img width="100%" alt="Patchouli" src="assets/patchouli-banner-zh.png">
 
   <h1>Patchouli</h1>
   <p>
