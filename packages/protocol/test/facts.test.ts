@@ -2,11 +2,11 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-import Ajv2020 from 'ajv/dist/2020.js'
+import { Ajv2020 } from 'ajv/dist/2020.js'
 
 const schemaRoot = new URL('../schemas/', import.meta.url)
 
-async function readJson(relativePath) {
+async function readJson(relativePath: string): Promise<any> {
   return JSON.parse(await readFile(new URL(relativePath, schemaRoot), 'utf8'))
 }
 
@@ -33,7 +33,7 @@ test('artifact, knowledge, and relation examples conform to their fact schemas',
   const ajv = new Ajv2020({ allErrors: true, strict: false })
   ajv.addFormat('date-time', {
     type: 'string',
-    validate: value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value),
+    validate: (value: string) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value),
   })
   ajv.addSchema(commonSchema)
   const validateArtifact = ajv.compile(artifactSchema)

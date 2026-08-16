@@ -27,9 +27,9 @@
   ],
   "scripts": {
     "build": "tsc -p packages/protocol/tsconfig.json && tsc -p tsconfig.json && pnpm --filter @memorax-agent/dsh-patchouli-agent-loop build && pnpm --filter @memorax-agent/dsh-patchouli-artifact-ingestor build && pnpm --filter @memorax-agent/dsh-patchouli-crud-test-plugin build && pnpm --filter @memorax-agent/dsh-patchouli-session-indexer build && pnpm --filter @memorax-agent/dsh-patchouli-workspace-indexer build",
-    "typecheck": "tsc -p packages/protocol/tsconfig.json && tsc -p tsconfig.json && pnpm --filter @memorax-agent/dsh-patchouli-agent-loop typecheck && pnpm --filter @memorax-agent/dsh-patchouli-artifact-ingestor typecheck && pnpm --filter @memorax-agent/dsh-patchouli-crud-test-plugin typecheck && pnpm --filter @memorax-agent/dsh-patchouli-session-indexer typecheck && pnpm --filter @memorax-agent/dsh-patchouli-workspace-indexer typecheck",
-    "test": "pnpm run build && node --test",
-    "test:e2e": "pnpm run build && cargo build --locked -p patchouli-server --bin patchouli-db && node --test integration/crud-plugin.mjs",
+    "typecheck": "tsc -p packages/protocol/tsconfig.json && tsc -p tsconfig.json && tsc -p tsconfig.tooling.json && pnpm --filter @memorax-agent/dsh-patchouli-agent-loop typecheck && pnpm --filter @memorax-agent/dsh-patchouli-artifact-ingestor typecheck && pnpm --filter @memorax-agent/dsh-patchouli-crud-test-plugin typecheck && pnpm --filter @memorax-agent/dsh-patchouli-session-indexer typecheck && pnpm --filter @memorax-agent/dsh-patchouli-workspace-indexer typecheck",
+    "test": "pnpm run build && node --test 'test/*.test.ts' 'packages/protocol/test/*.test.ts'",
+    "test:e2e": "pnpm run build && cargo build --locked -p patchouli-server --bin patchouli-db && node --test integration/crud-plugin.ts",
     "check": "pnpm run typecheck && pnpm run test",
     "prepare": "pnpm run build"
   },

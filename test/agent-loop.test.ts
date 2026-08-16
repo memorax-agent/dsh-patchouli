@@ -1,25 +1,54 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 
-import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
+import { Context, type Fiber } from '@deepseek-ai/cordis'
+import AgentRegistry, { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import {
   CallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
+  type ContentBlock,
+  type UserMessage,
 } from '@deepseek-ai/dsh-llm'
-import SessionStore from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
+import type { JsonObject, JsonValue } from '@memorax-agent/patchouli-protocol'
 import * as agentLoop from '../packages/agent-loop/lib/index.js'
 import * as patchouli from '../lib/index.js'
+import type {
+  MemoryRetrieveRequest,
+  MemoryUpdateRequest,
+} from '../lib/index.js'
 
 const SIGNAL = new AbortController().signal
 
-async function mountConsumer(t, config = {}) {
+interface TestAgent extends Agent {
+  readonly injected: UserMessage[]
+}
+
+function textAt(content: readonly ContentBlock[], index = 0): string {
+  const block = content[index]
+  assert.ok(block)
+  if (block.type !== 'text') assert.fail(`expected text content, received ${block.type}`)
+  return block.text
+}
+
+function objectData(value: JsonValue): JsonObject {
+  assert.ok(typeof value === 'object' && value !== null && !Array.isArray(value))
+  return value as JsonObject
+}
+
+function attributesOf(request: MemoryUpdateRequest | MemoryRetrieveRequest): JsonObject {
+  assert.ok(request.meta.attributes)
+  return request.meta.attributes
+}
+
+async function mountConsumer(t: TestContext, config: agentLoop.Config = {}) {
   const ctx = new Context()
-  const fibers = []
+  const fibers: Fiber[] = []
   fibers.push(await ctx.plugin(SessionStore))
   fibers.push(await ctx.plugin(AgentRegistry))
   fibers.push(await ctx.plugin(SystemPrompt))
@@ -33,30 +62,30 @@ async function mountConsumer(t, config = {}) {
   return { ctx, consumer }
 }
 
-function fakeAgent(cwd = '/workspace/patchouli', session) {
+function fakeAgent(cwd = '/workspace/patchouli', session?: Session): TestAgent {
   const resolvedSession = session ?? {
     header: {
-      id: 'session-1',
+      id: SessionId('session-1'),
       cwd,
     },
     events: [],
-  }
-  const injected = []
+  } as unknown as Session
+  const injected: UserMessage[] = []
   return {
     id: resolvedSession.header.id,
     options: {},
     status: 'running',
     session: resolvedSession,
-    inject(message) {
+    inject(message: UserMessage) {
       injected.push(message)
     },
     injected,
-  }
+  } as unknown as TestAgent
 }
 
 test('registers update/retrieve tools and derives their scope from the agent', async (t) => {
   const { ctx } = await mountConsumer(t)
-  const calls = []
+  const calls: unknown[] = []
   const dispose = ctx.patchouliMemory.register({
     id: 'fixture',
     async update(request, context) {
@@ -84,7 +113,7 @@ test('registers update/retrieve tools and derives their scope from the agent', a
     signal: SIGNAL,
   })
   assert.equal(retrieve.isError, false)
-  assert.match(retrieve.content[0].text, /remembered result/)
+  assert.match(textAt(retrieve.content), /remembered result/)
 
   const update = await ctx.tools.execute({
     callId: CallId('update-1'),
@@ -109,12 +138,12 @@ test('registers update/retrieve tools and derives their scope from the agent', a
     signal: SIGNAL,
   })
   assert.equal(resourceUpdate.isError, false)
-  assert.deepEqual(JSON.parse(retrieve.content[0].text), [{
+  assert.deepEqual(JSON.parse(textAt(retrieve.content)), [{
     pluginId: 'fixture',
     ok: true,
     value: { items: [{ content: 'remembered result' }] },
   }])
-  assert.deepEqual(JSON.parse(update.content[0].text), [{
+  assert.deepEqual(JSON.parse(textAt(update.content)), [{
     pluginId: 'fixture',
     ok: true,
     value: { status: 'applied', receipt: 'u1' },
@@ -169,7 +198,7 @@ test('registers update/retrieve tools and derives their scope from the agent', a
 
 test('retrieves from the complete pre-step observation and injects data without a prompt', async (t) => {
   const { ctx } = await mountConsumer(t)
-  const requests = []
+  const requests: unknown[] = []
   const dispose = ctx.patchouliMemory.register({
     id: 'fixture',
     async update() {
@@ -193,20 +222,21 @@ test('retrieves from the complete pre-step observation and injects data without 
     () => Promise.resolve({ kind: 'enter', messages: [user] }),
   )
 
-  assert.equal(decision.kind, 'enter')
+  if (decision.kind !== 'enter') assert.fail('pre-step decision did not enter')
   assert.equal(decision.messages.length, 2)
   const recall = decision.messages[1]
+  assert.ok(recall)
   assert.deepEqual(recall.source, {
     kind: 'plugin',
     plugin: 'dsh-patchouli-agent-loop',
     form: 'recall',
   })
-  assert.deepEqual(JSON.parse(recall.content[0].text), {
+  assert.deepEqual(JSON.parse(textAt(recall.content)), {
     point: 'agent/pre-step',
     pluginId: 'fixture',
     data: { items: [{ content: 'use the repository convention' }] },
   })
-  assert.equal(recall.content[0].text.includes('do not follow'), false)
+  assert.equal(textAt(recall.content).includes('do not follow'), false)
   assert.equal(requests.length, 1)
   assert.deepEqual(requests[0], [{
     meta: {
@@ -248,6 +278,7 @@ test('retrieves from the complete pre-step observation and injects data without 
     { messages: [continuation], turn: 1, step: 2, signal: SIGNAL },
     () => Promise.resolve({ kind: 'enter', messages: [continuation] }),
   )
+  if (continued.kind !== 'enter') assert.fail('continued pre-step decision did not enter')
   assert.equal(continued.messages.length, 2)
   await agentEvents(ctx, agent).waterfall(
     'agent/pre-step',
@@ -269,9 +300,9 @@ test('submits the complete committed turn without filtering its event data', asy
     retrieve: { preStep: false },
     store: { turnEnd: true },
   })
-  const calls = []
-  const firstUpdated = Promise.withResolvers()
-  const secondUpdated = Promise.withResolvers()
+  const calls: Array<[MemoryUpdateRequest, AbortSignal | undefined]> = []
+  const firstUpdated = Promise.withResolvers<void>()
+  const secondUpdated = Promise.withResolvers<void>()
   const dispose = ctx.patchouliMemory.register({
     id: 'fixture',
     async update(request, context) {
@@ -286,7 +317,7 @@ test('submits the complete committed turn without filtering its event data', asy
   })
   t.after(dispose)
 
-  const session = ctx.sessions.create('session-turn', {
+  const session = ctx.sessions.create(SessionId('session-turn'), {
     meta: { cwd: '/workspace/patchouli' },
   })
   const callId = CallId('call-1')
@@ -299,7 +330,7 @@ test('submits the complete committed turn without filtering its event data', asy
       {
         type: 'image',
         attachment: {
-          attachmentId: 'attachment-1',
+          attachmentId: AttachmentId('attachment-1'),
           mediaType: 'image/png',
           bytes: 12,
           width: 2,
@@ -352,7 +383,10 @@ test('submits the complete committed turn without filtering its event data', asy
   await firstUpdated.promise
 
   assert.equal(calls.length, 1)
-  const first = calls[0][0]
+  const firstCall = calls[0]
+  assert.ok(firstCall)
+  const first = firstCall[0]
+  const firstData = objectData(first.data)
   assert.deepEqual(first.meta, {
     source: { type: 'agent-loop', id: 'dsh-patchouli-agent-loop' },
     scope: '/workspace/patchouli',
@@ -364,8 +398,9 @@ test('submits the complete committed turn without filtering its event data', asy
       outcome: 'completed',
     },
   })
-  assert.deepEqual(first.data.event, first.data.events.at(-1))
-  assert.deepEqual(first.data.events.map(event => event.type), [
+  const firstEvents = firstData.events as Array<Record<string, any>>
+  assert.deepEqual(firstData.event, firstEvents.at(-1))
+  assert.deepEqual(firstEvents.map(event => event.type), [
     'turn/start',
     'step/start',
     'user/message',
@@ -378,8 +413,8 @@ test('submits the complete committed turn without filtering its event data', asy
     'step/end',
     'turn/end',
   ])
-  assert.equal(first.data.events[3].data.source.plugin, 'fixture-recall')
-  assert.deepEqual(first.data.events[2].data.content[1].attachment, {
+  assert.equal(firstEvents[3]?.data.source.plugin, 'fixture-recall')
+  assert.deepEqual(firstEvents[2]?.data.content[1].attachment, {
     attachmentId: 'attachment-1',
     mediaType: 'image/png',
     bytes: 12,
@@ -387,9 +422,9 @@ test('submits the complete committed turn without filtering its event data', asy
     height: 3,
     name: 'diagram.png',
   })
-  assert.equal(first.data.events[4].data.message.content[0].type, 'reasoning')
-  assert.equal(first.data.events[4].data.message.content[2].type, 'tool-call')
-  assert.equal(first.data.events[5].data.message.content[0].type, 'tool-result')
+  assert.equal(firstEvents[4]?.data.message.content[0].type, 'reasoning')
+  assert.equal(firstEvents[4]?.data.message.content[2].type, 'tool-call')
+  assert.equal(firstEvents[5]?.data.message.content[0].type, 'tool-result')
 
   session.append('turn/start', { turn: 2 })
   session.append('user/message', createUserMessage({
@@ -402,8 +437,12 @@ test('submits the complete committed turn without filtering its event data', asy
   })
   await secondUpdated.promise
   assert.equal(calls.length, 2)
-  assert.equal(calls[1][0].meta.attributes.outcome, 'aborted')
-  assert.deepEqual(calls[1][0].data.events.map(event => event.type), [
+  const secondCall = calls[1]
+  assert.ok(secondCall)
+  assert.equal(attributesOf(secondCall[0]).outcome, 'aborted')
+  const secondData = objectData(secondCall[0].data)
+  const secondEvents = secondData.events as Array<Record<string, any>>
+  assert.deepEqual(secondEvents.map(event => event.type), [
     'turn/start',
     'user/message',
     'turn/end',
@@ -415,13 +454,14 @@ test('aborts and drains an admitted turn update during consumer disposal', async
     retrieve: { preStep: false },
     store: { turnEnd: true },
   })
-  const started = Promise.withResolvers()
-  const release = Promise.withResolvers()
-  const calls = []
+  const started = Promise.withResolvers<AbortSignal>()
+  const release = Promise.withResolvers<void>()
+  const calls: MemoryUpdateRequest[] = []
   const dispose = ctx.patchouliMemory.register({
     id: 'fixture',
     async update(request, context) {
       calls.push(request)
+      if (context.signal === undefined) assert.fail('turn update signal is missing')
       started.resolve(context.signal)
       await release.promise
       return { status: 'applied' }
@@ -432,7 +472,7 @@ test('aborts and drains an admitted turn update during consumer disposal', async
   })
   t.after(dispose)
 
-  const session = ctx.sessions.create('session-dispose', {
+  const session = ctx.sessions.create(SessionId('session-dispose'), {
     meta: { cwd: '/workspace/patchouli' },
   })
   session.append('turn/start', { turn: 1 })
@@ -443,9 +483,9 @@ test('aborts and drains an admitted turn update during consumer disposal', async
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
 
   const signal = await started.promise
-  const aborted = new Promise(resolve => {
+  const aborted = new Promise<void>(resolve => {
     if (signal.aborted) resolve()
-    else signal.addEventListener('abort', resolve, { once: true })
+    else signal.addEventListener('abort', () => resolve(), { once: true })
   })
   const disposing = consumer.dispose()
   let disposed = false
@@ -488,9 +528,9 @@ test('routes every enabled agent and tool data point through the memory service'
       update: false,
     },
   })
-  const updates = []
-  const retrieves = []
-  const sessionStartSeen = Promise.withResolvers()
+  const updates: MemoryUpdateRequest[] = []
+  const retrieves: MemoryRetrieveRequest[] = []
+  const sessionStartSeen = Promise.withResolvers<void>()
   const disposeMemory = ctx.patchouliMemory.register({
     id: 'fixture',
     async update(request) {
@@ -499,8 +539,10 @@ test('routes every enabled agent and tool data point through the memory service'
     },
     async retrieve(request) {
       retrieves.push(request)
-      if (request.meta.attributes.point === 'agent/session-start') sessionStartSeen.resolve()
-      return { items: [{ point: request.meta.attributes.point }] }
+      const point = attributesOf(request).point
+      if (typeof point !== 'string') assert.fail('memory point is missing')
+      if (point === 'agent/session-start') sessionStartSeen.resolve()
+      return { items: [{ point }] }
     },
   })
   t.after(disposeMemory)
@@ -525,7 +567,7 @@ test('routes every enabled agent and tool data point through the memory service'
   }))
   t.after(disposeTool)
 
-  const session = ctx.sessions.create('session-hooks', {
+  const session = ctx.sessions.create(SessionId('session-hooks'), {
     meta: { cwd: '/workspace/hooks' },
   })
   session.append('turn/start', { turn: 4 })
@@ -565,8 +607,12 @@ test('routes every enabled agent and tool data point through the memory service'
   })
   assert.equal(result.isError, false)
   assert.deepEqual(result.value, { echo: 'observed' })
-  assert.equal(result.additionalContexts.length, 1)
-  assert.deepEqual(JSON.parse(result.additionalContexts[0].content[0].text), {
+  const additionalContexts = result.additionalContexts
+  assert.ok(additionalContexts)
+  assert.equal(additionalContexts.length, 1)
+  const additionalContext = additionalContexts[0]
+  assert.ok(additionalContext)
+  assert.deepEqual(JSON.parse(textAt(additionalContext.content)), {
     point: 'tools/post-execute',
     pluginId: 'fixture',
     data: { items: [{ point: 'tools/post-execute' }] },
@@ -575,12 +621,12 @@ test('routes every enabled agent and tool data point through the memory service'
   events.emit('agent/disposed', {})
   await ctx.sessions.flush(session)
 
-  assert.deepEqual(retrieves.map(request => request.meta.attributes.point), [
+  assert.deepEqual(retrieves.map(request => attributesOf(request).point), [
     'agent/session-start',
     'agent/turn-stopping',
     'tools/post-execute',
   ])
-  assert.deepEqual(updates.map(request => request.meta.attributes.point), [
+  assert.deepEqual(updates.map(request => attributesOf(request).point), [
     'agent/created',
     'agent/request-error',
     'agent/error',
@@ -588,20 +634,23 @@ test('routes every enabled agent and tool data point through the memory service'
     'agent/disposed',
   ])
 
-  assert.equal(retrieves[0].data.source, 'resume')
-  assert.deepEqual(updates[1].data.failure, failure)
-  assert.deepEqual(updates[2].data.error, {
+  const retrieveData = retrieves.map(request => objectData(request.data))
+  const updateData = updates.map(request => objectData(request.data))
+  assert.equal(retrieveData[0]?.source, 'resume')
+  assert.deepEqual(updateData[1]?.failure, failure)
+  const agentError = updateData[2]?.error as Record<string, JsonValue>
+  assert.deepEqual(agentError, {
     name: 'Error',
     message: 'fixture agent failure',
-    stack: updates[2].data.error.stack,
+    stack: agentError.stack,
   })
-  assert.deepEqual(retrieves[2].data.execution, {
+  assert.deepEqual(retrieveData[2]?.execution, {
     callId: 'fixture-observe-1',
     rootCallId: 'fixture-observe-1',
     name: 'fixture_observe',
     arguments: { value: 'observed' },
     nested: false,
   })
-  assert.deepEqual(retrieves[2].data.result.value, { echo: 'observed' })
-  assert.deepEqual(updates[3].data.result.value, { echo: 'observed' })
+  assert.deepEqual((retrieveData[2]?.result as JsonObject).value, { echo: 'observed' })
+  assert.deepEqual((updateData[3]?.result as JsonObject).value, { echo: 'observed' })
 })

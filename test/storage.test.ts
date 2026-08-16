@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { createServer } from 'node:net'
+import { createServer, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
 import { Context } from '@deepseek-ai/cordis'
+import type { ChangesEventParams } from '@memorax-agent/patchouli-protocol'
 
 import * as storage from '../lib/storage.js'
 
@@ -15,8 +16,8 @@ test('bridges storage requests and change notifications', async (t) => {
   const endpoint = process.platform === 'win32'
     ? String.raw`\\.\pipe\patchouli-storage-${process.pid}-${randomUUID()}`
     : join(directory, 'patchouli.sock')
-  let handshakeCapabilities
-  let serverSocket
+  let handshakeCapabilities: unknown
+  let serverSocket: Socket | undefined
   let nextSubscriptionId = 1
   let unsubscribeRequests = 0
   const server = createServer((socket) => {
@@ -161,14 +162,16 @@ test('bridges storage requests and change notifications', async (t) => {
     })
   })
 
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
     server.listen(endpoint, resolve)
   })
   const ctx = new Context()
   t.after(async () => {
     await ctx.fiber.dispose()
-    await new Promise(resolve => server.close(resolve))
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error === undefined ? resolve() : reject(error))
+    })
     await rm(directory, { recursive: true })
   })
 
@@ -177,6 +180,9 @@ test('bridges storage requests and change notifications', async (t) => {
   await ctx.plugin(storage, {
     endpoint,
     command: 'patchouli',
+    providerConfigPath: join(directory, 'providers.json'),
+    backendConfigPath: join(directory, 'config.json'),
+    artifactRootPath: join(directory, 'artifacts'),
     autoStart: false,
     startupTimeoutMs: 100,
   })
@@ -195,19 +201,27 @@ test('bridges storage requests and change notifications', async (t) => {
     data: { query: 'hello', types: ['event'], limit: 1 },
   })
   assert.equal(retrieval.data.hits.length, 1)
-  assert.equal(retrieval.data.hits[0].score, 1)
-  assert.equal(retrieval.data.hits[0].variants[0].ref.id, 'event-1')
+  const hit = retrieval.data.hits[0]
+  assert.ok(hit)
+  assert.equal(hit.score, 1)
+  const variant = hit.variants[0]
+  assert.ok(variant)
+  assert.equal(variant.ref.id, 'event-1')
 
-  const events = []
+  const events: ChangesEventParams[] = []
   const subscription = await ctx.patchouli.subscribe({
     meta: { workspace: 'test' },
     data: { filter: { types: ['event'] } },
-  }, event => events.push(event))
+  }, event => {
+    events.push(event)
+  })
   assert.equal(subscription.data.subscription_id, 'subscription-1')
   assert.equal(subscription.data.cursor, 'cursor-0')
   assert.equal(events.length, 1)
-  assert.equal(events[0].meta.transaction_id, 'transaction-1')
-  assert.equal(events[0].data.change.cursor, 'cursor-1')
+  const firstEvent = events[0]
+  assert.ok(firstEvent)
+  assert.equal(firstEvent.meta.transaction_id, 'transaction-1')
+  assert.equal(firstEvent.data.change.cursor, 'cursor-1')
 
   const unsubscribe = await ctx.patchouli.unsubscribe({
     meta: {},
@@ -246,6 +260,7 @@ test('bridges storage requests and change notifications', async (t) => {
     meta: { workspace: 'test' },
     data: {},
   }, () => {})
+  assert.ok(serverSocket)
   serverSocket.destroy()
   const disconnected = await disconnectedSubscription.closed
   assert.equal(disconnected.kind, 'connection-lost')

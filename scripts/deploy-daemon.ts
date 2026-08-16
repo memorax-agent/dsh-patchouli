@@ -61,7 +61,7 @@ if (!waitUntilReady(target, 10_000)) {
 
 console.log(`deployed ${basename(target)} to ${installDir}`)
 
-function start(command) {
+function start(command: string): void {
   const child = spawn(command, [
     'serve',
     '--endpoint', endpoint,
@@ -76,7 +76,7 @@ function start(command) {
   child.unref()
 }
 
-function waitUntilReady(command, timeoutMs) {
+function waitUntilReady(command: string, timeoutMs: number): boolean {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const result = spawnSync(command, ['status', '--endpoint', endpoint], { encoding: 'utf8' })
@@ -86,7 +86,7 @@ function waitUntilReady(command, timeoutMs) {
   return false
 }
 
-function run(command, args, message) {
+function run(command: string, args: string[], message: string): void {
   const result = spawnSync(command, args, { encoding: 'utf8', stdio: 'inherit' })
   if (result.status !== 0) throw new Error(message)
 }

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 
 const manifest = readFileSync(new URL('../Cargo.toml', import.meta.url), 'utf8')
 const workspace = manifest.match(/\[workspace\.package\]([\s\S]*?)(?=\n\[|$)/)
-const version = workspace?.[1].match(/^version\s*=\s*"([^"]+)"/m)?.[1]
+const version = workspace?.[1]?.match(/^version\s*=\s*"([^"]+)"/m)?.[1]
 
 if (!version) {
   throw new Error('workspace package version is missing')

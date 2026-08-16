@@ -1,20 +1,42 @@
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import { execFile, spawn } from 'node:child_process'
+import {
+  execFile,
+  spawn,
+  type ChildProcessByStdio,
+} from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import type { Readable } from 'node:stream'
 import { promisify } from 'node:util'
 import test from 'node:test'
 
 import { Context } from '@deepseek-ai/cordis'
+import type { ImageAttachmentRef, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type { FsInfo, FsTarget } from '@deepseek-ai/dsh-fs'
+import type { JsonObject, JsonValue } from '@memorax-agent/patchouli-protocol'
 
 import * as artifactIngestor from '../packages/artifact-ingestor/lib/index.js'
 import * as crudTestPlugin from '../packages/crud-test-plugin/lib/index.js'
 import * as patchouli from '../lib/index.js'
+import type { MemoryCallMeta, MemoryPluginOutcome } from '../lib/index.js'
 import * as storage from '../lib/storage.js'
+
+type DaemonProcess = ChildProcessByStdio<null, null, Readable>
+
+interface ArtifactIngestionValue extends JsonObject {
+  artifacts: Array<{
+    ref: { type: 'artifact'; id: string }
+    role: 'source' | 'attachment'
+  }>
+}
+
+interface CrudResponse {
+  data: Record<string, any>
+}
 
 const run = promisify(execFile)
 const binary = resolve(
@@ -23,7 +45,7 @@ const binary = resolve(
   process.platform === 'win32' ? 'patchouli-db.exe' : 'patchouli-db',
 )
 
-function callMeta(operation) {
+function callMeta(operation: string): MemoryCallMeta {
   return {
     source: { type: 'crud-test', id: 'database-loop' },
     scope: 'workspace-1',
@@ -31,25 +53,39 @@ function callMeta(operation) {
   }
 }
 
-function valueOf(outcomes) {
+function valueOf(outcomes: readonly MemoryPluginOutcome<JsonValue>[]): CrudResponse {
   assert.equal(outcomes.length, 1)
-  assert.equal(outcomes[0].pluginId, 'crud-test')
-  assert.equal(outcomes[0].ok, true, outcomes[0].error)
-  return outcomes[0].value
+  const outcome = outcomes[0]
+  assert.ok(outcome)
+  assert.equal(outcome.pluginId, 'crud-test')
+  if (!outcome.ok) assert.fail(outcome.error)
+  return outcome.value as unknown as CrudResponse
 }
 
-async function waitForDaemon(child, endpoint) {
+function successfulValue<T extends JsonValue>(
+  outcomes: readonly MemoryPluginOutcome<JsonValue>[],
+  pluginId: string,
+): T {
+  assert.equal(outcomes.length, 1)
+  const outcome = outcomes[0]
+  assert.ok(outcome)
+  assert.equal(outcome.pluginId, pluginId)
+  if (!outcome.ok) assert.fail(outcome.error)
+  return outcome.value as T
+}
+
+async function waitForDaemon(child: DaemonProcess, endpoint: string): Promise<void> {
   let stderr = ''
   child.stderr.setEncoding('utf8')
-  await new Promise((resolveReady, rejectReady) => {
+  await new Promise<void>((resolveReady, rejectReady) => {
     const timeout = setTimeout(() => {
       rejectReady(new Error(`Patchouli daemon did not start at ${endpoint}: ${stderr}`))
     }, 10_000)
-    const settle = (callback) => {
+    const settle = (callback: () => void): void => {
       clearTimeout(timeout)
       callback()
     }
-    child.stderr.on('data', (chunk) => {
+    child.stderr.on('data', (chunk: string) => {
       stderr += chunk
       if (stderr.includes(`Patchouli daemon listening on ${endpoint}`)) {
         settle(resolveReady)
@@ -69,8 +105,8 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     : join(root, 'run', 'patchouli.sock')
   const config = join(root, 'config.json')
   const providers = join(root, 'providers.json')
-  let daemon
-  let ctx
+  let daemon: DaemonProcess | undefined
+  let ctx: Context | undefined
 
   t.after(async () => {
     await ctx?.fiber.dispose()
@@ -105,36 +141,49 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   const workspaceRoot = join(root, 'workspace')
   const workspaceBytes = new TextEncoder().encode('workspace artifact through the DSH filesystem')
   const imageBytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])
-  ctx.provide('attachments', {
-    async readImage(ref) {
+  const attachments = {
+    async readImage(ref: ImageAttachmentRef): Promise<StoredImageAttachment> {
       assert.equal(ref.attachmentId, 'image-e2e-1')
       return { ref, data: imageBytes }
     },
-  })
-  ctx.provide('fs', {
-    async resolve(path, options = {}) {
-      const displayPath = isAbsolute(path) ? path : join(options.cwd, path)
-      return { targetKey: displayPath, displayPath }
+  } as unknown as Context['attachments']
+  ctx.provide('attachments', attachments)
+  const fs = {
+    async resolve(path: string, options: { cwd?: string } = {}): Promise<FsTarget> {
+      const displayPath = isAbsolute(path) ? path : join(options.cwd ?? process.cwd(), path)
+      return { targetKey: displayPath as FsTarget['targetKey'], displayPath }
     },
-    contains(parent, child) {
+    contains(parent: FsTarget, child: FsTarget): boolean {
       const relativePath = relative(parent.targetKey, child.targetKey)
       return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
     },
-    async stat(target) {
+    async stat(target: FsTarget): Promise<FsInfo> {
       return target.targetKey === join(workspaceRoot, 'docs', 'design.bin')
-        ? { type: 'file', size: workspaceBytes.byteLength, version: 'file-version-1' }
-        : { type: 'directory', version: 'directory-version-1' }
+        ? {
+            type: 'file',
+            size: workspaceBytes.byteLength,
+            version: 'file-version-1' as FsInfo['version'],
+          }
+        : { type: 'directory', version: 'directory-version-1' as FsInfo['version'] }
     },
-    async readBytes(target, _signal, maxBytes) {
+    async readBytes(
+      target: FsTarget,
+      _signal: AbortSignal | undefined,
+      maxBytes: number,
+    ): Promise<Uint8Array> {
       assert.equal(target.targetKey, join(workspaceRoot, 'docs', 'design.bin'))
       assert.ok(workspaceBytes.byteLength <= maxBytes)
       return workspaceBytes
     },
-  })
+  } as unknown as Context['fs']
+  ctx.provide('fs', fs)
   await ctx.plugin(patchouli)
   await ctx.plugin(storage, {
     endpoint,
     command: binary,
+    providerConfigPath: providers,
+    backendConfigPath: config,
+    artifactRootPath: join(root, 'data', 'artifacts'),
     autoStart: false,
     startupTimeoutMs: 1_000,
   })
@@ -173,6 +222,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   }, artifactBytes)
   assert.equal(uploadedArtifact.data.entity.ref.type, 'artifact')
   assert.equal(uploadedArtifact.data.entity.ref.id, 'artifact-e2e-1')
+  if (uploadedArtifact.data.entity.state !== 'active') assert.fail('uploaded artifact is deleted')
   assert.equal(uploadedArtifact.data.entity.value.placement.kind, 'managed')
   const downloadedArtifact = await ctx.patchouli.downloadArtifact(databaseMeta, 'artifact-e2e-1')
   assert.equal(downloadedArtifact.byteLength, artifactBytes.byteLength)
@@ -198,17 +248,20 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
       }],
     },
   })
-  assert.equal(ingestedFile.length, 1)
-  assert.equal(ingestedFile[0].ok, true, ingestedFile[0].error)
-  assert.equal(ingestedFile[0].pluginId, 'artifact-ingestor')
-  assert.equal(ingestedFile[0].value.artifacts[0].role, 'source')
+  const ingestedFileValue = successfulValue<ArtifactIngestionValue>(
+    ingestedFile,
+    'artifact-ingestor',
+  )
+  const fileArtifact = ingestedFileValue.artifacts[0]
+  assert.ok(fileArtifact)
+  assert.equal(fileArtifact.role, 'source')
 
   const ingestorDatabaseMeta = {
     workspace_id: workspaceRoot,
     user_id: 'agent-loop:dsh-patchouli-agent-loop',
     channel_id: 'session-file-e2e',
   }
-  const fileArtifactId = ingestedFile[0].value.artifacts[0].ref.id
+  const fileArtifactId = fileArtifact.ref.id
   const downloadedFile = await ctx.patchouli.downloadArtifact(ingestorDatabaseMeta, fileArtifactId)
   assert.equal(Buffer.compare(Buffer.from(downloadedFile), Buffer.from(workspaceBytes)), 0)
 
@@ -219,8 +272,10 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     },
   })
   assert.equal(rejectedFile.length, 1)
-  assert.equal(rejectedFile[0].ok, false)
-  assert.match(rejectedFile[0].error, /outside the session workspace/)
+  const rejectedOutcome = rejectedFile[0]
+  assert.ok(rejectedOutcome)
+  if (rejectedOutcome.ok) assert.fail('outside file was unexpectedly ingested')
+  assert.match(rejectedOutcome.error, /outside the session workspace/)
 
   const imageRef = {
     attachmentId: 'image-e2e-1',
@@ -245,9 +300,13 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
       }],
     },
   })
-  assert.equal(ingestedImage.length, 1)
-  assert.equal(ingestedImage[0].ok, true, ingestedImage[0].error)
-  const imageArtifactId = ingestedImage[0].value.artifacts[0].ref.id
+  const ingestedImageValue = successfulValue<ArtifactIngestionValue>(
+    ingestedImage,
+    'artifact-ingestor',
+  )
+  const imageArtifact = ingestedImageValue.artifacts[0]
+  assert.ok(imageArtifact)
+  const imageArtifactId = imageArtifact.ref.id
   const downloadedImage = await ctx.patchouli.downloadArtifact(ingestorDatabaseMeta, imageArtifactId)
   assert.equal(Buffer.compare(Buffer.from(downloadedImage), Buffer.from(imageBytes)), 0)
 

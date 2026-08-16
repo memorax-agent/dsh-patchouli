@@ -8,6 +8,14 @@ import {
   MemoryService,
   MemorySubscriptionError,
   name,
+  type MemoryChangeHandler,
+  type MemoryCursorStore,
+  type MemoryPlugin,
+  type MemoryPluginChangeHandler,
+  type MemoryPluginSubscribeRequest,
+  type MemoryRouteCall,
+  type MemorySubscription,
+  type MemorySubscriptionFailure,
 } from '../lib/index.js'
 
 async function mountPatchouli() {
@@ -29,7 +37,7 @@ test('routes update and retrieve to registered plugins and aggregates outcomes',
   const { fiber, memory } = await mountPatchouli()
   t.after(() => fiber.dispose())
 
-  const seen = []
+  const seen: unknown[] = []
   const disposeFirst = memory.register({
     id: 'first',
     async update(request, context) {
@@ -109,9 +117,9 @@ test('routes calls through registration filters without exposing plugin selectio
   const { fiber, memory } = await mountPatchouli()
   t.after(() => fiber.dispose())
 
-  const routes = []
-  const invocations = []
-  const plugin = id => ({
+  const routes: Array<[string, MemoryRouteCall]> = []
+  const invocations: unknown[] = []
+  const plugin = (id: string): MemoryPlugin => ({
     id,
     async update(request) {
       invocations.push([id, 'update', request])
@@ -190,9 +198,9 @@ test('filters subscriptions and reports filter failures to the consumer', async 
   const { fiber, memory } = await mountPatchouli()
   t.after(() => fiber.dispose())
 
-  const selectedStarted = Promise.withResolvers()
-  const selectedClosed = Promise.withResolvers()
-  const basePlugin = id => ({
+  const selectedStarted = Promise.withResolvers<void>()
+  const selectedClosed = Promise.withResolvers<void>()
+  const basePlugin = (id: string): MemoryPlugin => ({
     id,
     async update() {
       return { status: 'applied' }
@@ -240,7 +248,7 @@ test('filters subscriptions and reports filter failures to the consumer', async 
     disposeSelected()
   })
 
-  const failures = []
+  const failures: MemorySubscriptionFailure[] = []
   const subscription = await memory.subscribe(
     {
       meta: {
@@ -251,7 +259,7 @@ test('filters subscriptions and reports filter failures to the consumer', async 
     async () => {},
     {
       cursorStore: {
-        async load() {},
+        async load() { return undefined },
         async save() {},
         async delete() {},
       },
@@ -309,14 +317,14 @@ test('persists the subscription boundary and processes unique changes in order',
   const { fiber, memory } = await mountPatchouli()
   t.after(() => fiber.dispose())
 
-  const providerClosed = Promise.withResolvers()
-  const boundarySaved = Promise.withResolvers()
-  const firstStarted = Promise.withResolvers()
-  const releaseFirst = Promise.withResolvers()
-  const operations = []
-  let emit
-  let early
-  let subscribeRequest
+  const providerClosed = Promise.withResolvers<void>()
+  const boundarySaved = Promise.withResolvers<void>()
+  const firstStarted = Promise.withResolvers<void>()
+  const releaseFirst = Promise.withResolvers<void>()
+  const operations: Array<['load', string] | ['save', string, string]> = []
+  let emit: MemoryPluginChangeHandler | undefined
+  let early: void | Promise<void> = undefined
+  let subscribeRequest: MemoryPluginSubscribeRequest | undefined
   let unsubscribeCount = 0
   const dispose = memory.register({
     id: 'streaming',
@@ -342,18 +350,18 @@ test('persists the subscription boundary and processes unique changes in order',
   })
   t.after(dispose)
 
-  const cursorStore = {
-    async load(pluginId) {
+  const cursorStore: MemoryCursorStore = {
+    async load(pluginId: string) {
       operations.push(['load', pluginId])
       return 'cursor-before-subscribe'
     },
-    async save(pluginId, cursor) {
+    async save(pluginId: string, cursor: string) {
       operations.push(['save', pluginId, cursor])
       if (cursor === 'cursor-0') boundarySaved.resolve()
     },
     async delete() {},
   }
-  const changes = []
+  const changes: unknown[] = []
   const subscription = await memory.subscribe(
     {
       meta: {
@@ -374,6 +382,7 @@ test('persists the subscription boundary and processes unique changes in order',
 
   await boundarySaved.promise
   await firstStarted.promise
+  assert.ok(emit)
   const duplicate = emit({ cursor: 'cursor-1', memoryId: 'duplicate' })
   const second = emit({ cursor: 'cursor-2', metadata: { source: 'test' } })
 
@@ -419,12 +428,12 @@ test('retries only classified retryable subscription failures', async (t) => {
   const { fiber, memory } = await mountPatchouli()
   t.after(() => fiber.dispose())
 
-  const retryStarted = Promise.withResolvers()
-  const retryBoundarySaved = Promise.withResolvers()
-  const retryClosed = Promise.withResolvers()
+  const retryStarted = Promise.withResolvers<void>()
+  const retryBoundarySaved = Promise.withResolvers<void>()
+  const retryClosed = Promise.withResolvers<void>()
   let retryAttempts = 0
   let fatalAttempts = 0
-  const subscribeRequests = []
+  const subscribeRequests: MemoryPluginSubscribeRequest[] = []
   const disposeRetry = memory.register({
     id: 'retryable',
     async update() {
@@ -437,8 +446,8 @@ test('retries only classified retryable subscription failures', async (t) => {
       retryAttempts += 1
       subscribeRequests.push(request)
       if (retryAttempts === 1) {
-        const disconnected = Promise.withResolvers()
-        void handler({ cursor: 'durable-cursor' }).then(() => {
+        const disconnected = Promise.withResolvers<void>()
+        void Promise.resolve(handler({ cursor: 'durable-cursor' })).then(() => {
           disconnected.reject(new MemorySubscriptionError(
             'temporarily offline',
             { retryable: true },
@@ -478,8 +487,8 @@ test('retries only classified retryable subscription failures', async (t) => {
     disposeRetry()
   })
 
-  const requests = []
-  const failures = []
+  const requests: Array<['load', string] | ['save', string, string]> = []
+  const failures: MemorySubscriptionFailure[] = []
   const subscription = await memory.subscribe(
     { meta: { source: { type: 'test', id: 'plugin-test' }, scope: 'test' } },
     async () => {},
@@ -546,19 +555,20 @@ test('observes fast disconnects and resets retry only after a durable change', a
 
   const originalSetTimeout = globalThis.setTimeout
   const originalRandom = Math.random
-  const retryDelays = []
-  globalThis.setTimeout = (callback, delay, ...args) => {
-    retryDelays.push(delay)
-    return originalSetTimeout(callback, 0, ...args)
-  }
+  const retryDelays: number[] = []
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+    const [callback, delay, ...callbackArgs] = args
+    retryDelays.push(Number(delay ?? 0))
+    return originalSetTimeout(callback, 0, ...callbackArgs)
+  }) as typeof setTimeout
   Math.random = () => 0
   t.after(() => {
     globalThis.setTimeout = originalSetTimeout
     Math.random = originalRandom
   })
 
-  const stable = Promise.withResolvers()
-  const stableClosed = Promise.withResolvers()
+  const stable = Promise.withResolvers<void>()
+  const stableClosed = Promise.withResolvers<void>()
   let attempts = 0
   const dispose = memory.register({
     id: 'flapping',
@@ -581,8 +591,8 @@ test('observes fast disconnects and resets retry only after a durable change', a
         }
       }
       if (attempts === 3) {
-        const disconnected = Promise.withResolvers()
-        void handler({ cursor: 'durable-change' }).then(() => {
+        const disconnected = Promise.withResolvers<void>()
+        void Promise.resolve(handler({ cursor: 'durable-change' })).then(() => {
           disconnected.reject(new MemorySubscriptionError(
             'disconnect after progress',
             { retryable: true },
@@ -612,7 +622,7 @@ test('observes fast disconnects and resets retry only after a durable change', a
     async () => {},
     {
       cursorStore: {
-        async load() {},
+        async load() { return undefined },
         async save(_pluginId, cursor) {
           if (cursor === 'boundary-1') {
             await new Promise(resolve => originalSetTimeout(resolve, 20))
@@ -637,8 +647,8 @@ test('disposes and drains a subscription with its consuming Cordis fiber', async
   const { ctx, fiber, memory } = await mountPatchouli()
   t.after(() => fiber.dispose())
 
-  const providerStarted = Promise.withResolvers()
-  const providerClosed = Promise.withResolvers()
+  const providerStarted = Promise.withResolvers<void>()
+  const providerClosed = Promise.withResolvers<void>()
   let unsubscribeCount = 0
   const dispose = memory.register({
     id: 'owned-stream',
@@ -662,7 +672,7 @@ test('disposes and drains a subscription with its consuming Cordis fiber', async
   })
   t.after(dispose)
 
-  let subscription
+  let subscription: MemorySubscription | undefined
   const consumerFiber = await ctx.plugin({
     name: 'memory-change-consumer',
     inject: ['patchouliMemory'],
@@ -672,7 +682,7 @@ test('disposes and drains a subscription with its consuming Cordis fiber', async
         async () => {},
         {
           cursorStore: {
-            async load() {},
+            async load() { return undefined },
             async save() {},
             async delete() {},
           },
@@ -683,6 +693,7 @@ test('disposes and drains a subscription with its consuming Cordis fiber', async
 
   await providerStarted.promise
   await consumerFiber.dispose()
+  assert.ok(subscription)
   await subscription.closed
   assert.equal(unsubscribeCount, 1)
 })

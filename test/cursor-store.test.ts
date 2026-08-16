@@ -2,13 +2,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { Context } from '@deepseek-ai/cordis'
-import CursorStoreService from '../lib/cursor-store.js'
+import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
+import CursorStoreService, { memoryCursorDomainSpec } from '../lib/cursor-store.js'
+
+interface CursorRecord {
+  cursor: string
+}
 
 async function mountCursorStore() {
-  const records = new Map()
+  const records = new Map<string, CursorRecord>()
   let closeCalls = 0
-  let openedSpec
-  const table = {
+  let openedSpec: typeof memoryCursorDomainSpec | undefined
+  const table: KvTable<string, CursorRecord> = {
     get: key => records.get(key),
     entries: () => new Map(records).entries(),
     keys: () => new Map(records).keys(),
@@ -20,15 +25,16 @@ async function mountCursorStore() {
       return records.delete(key)
     },
     async update(key, transform) {
-      if (!records.has(key)) throw new Error(`missing key: ${key}`)
-      const value = transform(records.get(key))
+      const current = records.get(key)
+      if (current === undefined) throw new Error(`missing key: ${key}`)
+      const value = transform(current)
       records.set(key, value)
       return value
     },
   }
   const domain = {
     name: 'patchouli_memory',
-    table(name) {
+    table(name: string) {
       assert.equal(name, 'cursors')
       return table
     },
@@ -37,18 +43,22 @@ async function mountCursorStore() {
     },
   }
   const ctx = new Context()
-  ctx.provide('storageDomain', {
-    async open(spec) {
+  const storageDomain = {
+    async open(spec: typeof memoryCursorDomainSpec) {
       openedSpec = spec
-      return domain
+      return domain as unknown as Domain<typeof memoryCursorDomainSpec>
     },
-  })
+  } as Context['storageDomain']
+  ctx.provide('storageDomain', storageDomain)
   const fiber = await ctx.plugin(CursorStoreService)
   return {
     ctx,
     fiber,
     records,
-    openedSpec: () => openedSpec,
+    openedSpec: () => {
+      assert.ok(openedSpec)
+      return openedSpec
+    },
     closeCalls: () => closeCalls,
   }
 }
