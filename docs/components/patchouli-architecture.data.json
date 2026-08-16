@@ -1,0 +1,528 @@
+{
+  "canvas": {
+    "wide": {
+      "height": 620
+    },
+    "narrow": {
+      "height": 860
+    }
+  },
+  "nodes": [
+    {
+      "id": "agent",
+      "insideBoundary": true
+    },
+    {
+      "id": "connector",
+      "insideBoundary": true
+    },
+    {
+      "id": "other",
+      "insideBoundary": true
+    },
+    {
+      "id": "coordinator",
+      "insideBoundary": true
+    },
+    {
+      "id": "plugins",
+      "insideBoundary": true
+    },
+    {
+      "id": "backend",
+      "insideBoundary": false
+    }
+  ],
+  "edges": [
+    {
+      "id": "agent-connector",
+      "source": "agent",
+      "target": "connector",
+      "handles": {
+        "wide": [
+          "out-bottom-right",
+          "in-top-right"
+        ],
+        "narrow": [
+          "out-bottom-right",
+          "in-top-right"
+        ]
+      }
+    },
+    {
+      "id": "connector-agent",
+      "source": "connector",
+      "target": "agent",
+      "handles": {
+        "wide": [
+          "out-top-left",
+          "in-bottom-left"
+        ],
+        "narrow": [
+          "out-top-left",
+          "in-bottom-left"
+        ]
+      }
+    },
+    {
+      "id": "connector-coordinator",
+      "source": "connector",
+      "target": "coordinator",
+      "handles": {
+        "wide": [
+          "out-right-bottom",
+          "in-left-bottom"
+        ],
+        "narrow": [
+          "out-right-bottom",
+          "in-left-bottom"
+        ]
+      }
+    },
+    {
+      "id": "coordinator-connector",
+      "source": "coordinator",
+      "target": "connector",
+      "handles": {
+        "wide": [
+          "out-left-top",
+          "in-right-top"
+        ],
+        "narrow": [
+          "out-left-top",
+          "in-right-top"
+        ]
+      }
+    },
+    {
+      "id": "other-coordinator",
+      "source": "other",
+      "target": "coordinator",
+      "handles": {
+        "wide": [
+          "out-bottom-right",
+          "in-top-right"
+        ],
+        "narrow": [
+          "out-bottom-right",
+          "in-top-right"
+        ]
+      }
+    },
+    {
+      "id": "coordinator-other",
+      "source": "coordinator",
+      "target": "other",
+      "handles": {
+        "wide": [
+          "out-top-left",
+          "in-bottom-left"
+        ],
+        "narrow": [
+          "out-top-left",
+          "in-bottom-left"
+        ]
+      }
+    },
+    {
+      "id": "coordinator-plugins",
+      "source": "coordinator",
+      "target": "plugins",
+      "handles": {
+        "wide": [
+          "out-bottom-right",
+          "in-top-right"
+        ],
+        "narrow": [
+          "out-bottom-right",
+          "in-top-right"
+        ]
+      }
+    },
+    {
+      "id": "plugins-coordinator",
+      "source": "plugins",
+      "target": "coordinator",
+      "handles": {
+        "wide": [
+          "out-top-left",
+          "in-bottom-left"
+        ],
+        "narrow": [
+          "out-top-left",
+          "in-bottom-left"
+        ]
+      }
+    },
+    {
+      "id": "coordinator-backend",
+      "source": "coordinator",
+      "target": "backend",
+      "handles": {
+        "wide": [
+          "out-right-bottom",
+          "in-left-bottom"
+        ],
+        "narrow": [
+          "out-bottom-right",
+          "in-top-right"
+        ]
+      }
+    },
+    {
+      "id": "backend-coordinator",
+      "source": "backend",
+      "target": "coordinator",
+      "handles": {
+        "wide": [
+          "out-left-top",
+          "in-right-top"
+        ],
+        "narrow": [
+          "out-top-left",
+          "in-bottom-left"
+        ]
+      }
+    }
+  ],
+  "layouts": {
+    "wide": {
+      "boundary": {
+        "position": {
+          "x": 20,
+          "y": 20
+        },
+        "width": 660,
+        "height": 520
+      },
+      "agent": {
+        "position": {
+          "x": 97,
+          "y": 45
+        },
+        "width": 154,
+        "height": 86
+      },
+      "connector": {
+        "position": {
+          "x": 90,
+          "y": 203
+        },
+        "width": 174,
+        "height": 86
+      },
+      "other": {
+        "position": {
+          "x": 392,
+          "y": 38
+        },
+        "width": 154,
+        "height": 86
+      },
+      "coordinator": {
+        "position": {
+          "x": 383,
+          "y": 204
+        },
+        "width": 174,
+        "height": 86
+      },
+      "plugins": {
+        "position": {
+          "x": 375,
+          "y": 365
+        },
+        "width": 194,
+        "height": 86
+      },
+      "backend": {
+        "position": {
+          "x": 706,
+          "y": 224
+        },
+        "width": 174,
+        "height": 86
+      }
+    },
+    "narrow": {
+      "boundary": {
+        "position": {
+          "x": 10,
+          "y": 10
+        },
+        "width": 340,
+        "height": 650
+      },
+      "agent": {
+        "position": {
+          "x": 18,
+          "y": 66
+        },
+        "width": 135,
+        "height": 104
+      },
+      "connector": {
+        "position": {
+          "x": 18,
+          "y": 256
+        },
+        "width": 135,
+        "height": 104
+      },
+      "other": {
+        "position": {
+          "x": 187,
+          "y": 66
+        },
+        "width": 135,
+        "height": 104
+      },
+      "coordinator": {
+        "position": {
+          "x": 187,
+          "y": 256
+        },
+        "width": 135,
+        "height": 104
+      },
+      "plugins": {
+        "position": {
+          "x": 18,
+          "y": 452
+        },
+        "width": 150,
+        "height": 104
+      },
+      "backend": {
+        "position": {
+          "x": 187,
+          "y": 704
+        },
+        "width": 150,
+        "height": 104
+      }
+    }
+  },
+  "edgeLabels": {
+    "en": {
+      "agent-connector": "Hook / Tool",
+      "connector-agent": "Inject",
+      "connector-coordinator": "Service call",
+      "coordinator-connector": "Outcomes",
+      "other-coordinator": "Service call",
+      "coordinator-other": "Events",
+      "coordinator-plugins": "Dispatch",
+      "plugins-coordinator": "Result",
+      "coordinator-backend": "JSON-RPC",
+      "backend-coordinator": "Notification"
+    },
+    "zh": {
+      "agent-connector": "Hook / Tool",
+      "connector-agent": "注入",
+      "connector-coordinator": "服务调用",
+      "coordinator-connector": "处理结果",
+      "other-coordinator": "服务调用",
+      "coordinator-other": "变更事件",
+      "coordinator-plugins": "分发",
+      "plugins-coordinator": "结果",
+      "coordinator-backend": "JSON-RPC",
+      "backend-coordinator": "通知"
+    }
+  },
+  "nodeCopy": {
+    "en": {
+      "boundary": {
+        "label": "DeepSeek Harness",
+        "role": "",
+        "description": ""
+      },
+      "agent": {
+        "label": "Agent Loop Plugin",
+        "role": "Application",
+        "description": "Produces Hook, Tool, and committed-turn data, then accepts recalled context through official Agent Loop extension points."
+      },
+      "other": {
+        "label": "Other plugins",
+        "role": "Application",
+        "description": "Call the common service directly with trusted source identity, scope, and source-owned JSON data."
+      },
+      "connector": {
+        "label": "Agent Loop connector",
+        "role": "Adapter plugin",
+        "description": "Maps official Agent Loop extension points to lossless update and retrieve calls without owning memory semantics."
+      },
+      "coordinator": {
+        "label": "Patchouli coord hub",
+        "role": "Core plugin",
+        "description": "Routes update, retrieve, and subscribe calls, isolates failures, and preserves the provenance of every plugin outcome."
+      },
+      "plugins": {
+        "label": "Memory / knowledge plugins",
+        "role": "Capability plugins",
+        "description": "Own extraction, retrieval, ranking, and provider-specific memory semantics while registering their own routing filters."
+      },
+      "backend": {
+        "label": "Patchouli backend & database ",
+        "role": "Patchouli-db",
+        "description": "Applies configured identity, consistency, transaction, and conflict policy before durable local or remote provider operations."
+      }
+    },
+    "zh": {
+      "boundary": {
+        "label": "DeepSeek Harness",
+        "role": "",
+        "description": ""
+      },
+      "agent": {
+        "label": "Agent Loop Plugin",
+        "role": "应用插件",
+        "description": "通过官方 Agent Loop 扩展点提供 Hook、Tool 和已提交 Turn 数据，并接收召回上下文。"
+      },
+      "other": {
+        "label": "其他插件",
+        "role": "应用插件",
+        "description": "携带可信来源身份、Scope 和来源自有 JSON 数据，直接调用统一服务。"
+      },
+      "connector": {
+        "label": "Agent Loop 连接器",
+        "role": "适配插件",
+        "description": "将官方 Agent Loop 扩展点映射为无损 Update/Retrieve 调用，本身不拥有记忆语义。"
+      },
+      "coordinator": {
+        "label": "Patchouli 协调中台",
+        "role": "核心插件",
+        "description": "路由 Update、Retrieve 与 Subscribe，隔离插件故障，并保留每项结果的插件来源。"
+      },
+      "plugins": {
+        "label": "记忆 / 知识插件",
+        "role": "能力插件",
+        "description": "拥有抽取、检索、排序和 Provider 特定的记忆语义，并通过自己的 Filter 控制路由。"
+      },
+      "backend": {
+        "label": "Patchouli 后端 & 数据库",
+        "role": "Patchouli-db",
+        "description": "在本地或远程 Provider 操作前执行配置化身份、一致性、事务与冲突处理策略。"
+      }
+    }
+  },
+  "edgeRoutes": {
+    "agent-connector": [
+      "retrieve",
+      "update",
+      "artifact"
+    ],
+    "connector-agent": [
+      "retrieve",
+      "update",
+      "artifact"
+    ],
+    "connector-coordinator": [
+      "retrieve",
+      "update",
+      "artifact"
+    ],
+    "coordinator-connector": [
+      "retrieve",
+      "update",
+      "artifact"
+    ],
+    "other-coordinator": [
+      "retrieve",
+      "update",
+      "subscribe",
+      "artifact"
+    ],
+    "coordinator-other": [
+      "retrieve",
+      "update",
+      "subscribe",
+      "artifact"
+    ],
+    "coordinator-plugins": [
+      "retrieve",
+      "update",
+      "subscribe",
+      "artifact"
+    ],
+    "plugins-coordinator": [
+      "retrieve",
+      "update",
+      "subscribe",
+      "artifact"
+    ],
+    "coordinator-backend": [
+      "retrieve",
+      "update",
+      "subscribe",
+      "artifact"
+    ],
+    "backend-coordinator": [
+      "retrieve",
+      "update",
+      "subscribe",
+      "artifact"
+    ]
+  },
+  "edgeStyles": {
+    "agent-connector": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 17,
+      "color": "#8551a5"
+    },
+    "connector-agent": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 17,
+      "color": "#8551a5"
+    },
+    "connector-coordinator": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 17,
+      "color": "#8551a5"
+    },
+    "coordinator-connector": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 17,
+      "color": "#8551a5"
+    },
+    "other-coordinator": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 17,
+      "color": "#8551a5"
+    },
+    "coordinator-other": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 17,
+      "color": "#8551a5"
+    },
+    "coordinator-plugins": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 15,
+      "color": "#8551a5"
+    },
+    "plugins-coordinator": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 15,
+      "color": "#8551a5"
+    },
+    "coordinator-backend": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 17,
+      "color": "#8551a5"
+    },
+    "backend-coordinator": {
+      "type": "smoothstep",
+      "marker": "closed",
+      "markerSize": 17,
+      "color": "#8551a5"
+    }
+  }
+}

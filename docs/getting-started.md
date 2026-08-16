@@ -18,6 +18,8 @@ its own external service.
 ## Install the DSH plugin from a checkout
 
 ```bash
+git clone --branch main --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+cd dsh-patchouli
 corepack enable
 pnpm install
 pnpm pack

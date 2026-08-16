@@ -69,8 +69,8 @@ cargo install --locked --git https://github.com/memorax-agent/dsh-patchouli \
 patchouli-db init --root "$HOME/.patchouli"
 ```
 
-For a local checkout, replace the first command with
-`cargo install --locked --path crates/server`.
+From a local checkout of the `main` branch, replace the first command with
+`cargo install --locked --path crates/server` from the repository root.
 
 ## Initialized layout
 

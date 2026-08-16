@@ -1,3 +1,7 @@
+<script setup lang="ts">
+import PatchouliConceptFlow from './components/PatchouliConceptFlow.vue'
+</script>
+
 # Backend configuration
 
 Database policy is deployment configuration, not part of the CRUD wire schema.
@@ -7,7 +11,7 @@ configuration fields.
 
 This policy file does not select or configure a physical database provider.
 Physical adapters and scope routing use the separate
-[`config/providers.schema.json`](../config/providers.schema.json) shape. The
+[`config/providers.schema.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/providers.schema.json) shape. The
 only local SQLite adapter is named `local`; remote entries contain an HTTPS
 endpoint plus the name of an environment variable holding its bearer token.
 Ordered route rules partially match canonical scope fields and use the first
@@ -19,16 +23,17 @@ It may request a conflict strategy through the configured metadata field; when
 that field is absent, the selected backend behavior supplies the default.
 The request path is:
 
-```text
-JSON-RPC adapter -> backend engine -> policy selector -> database provider
-```
+<ClientOnly>
+  <PatchouliConceptFlow kind="backend" locale="en" />
+  <template #fallback>Loading the backend request path…</template>
+</ClientOnly>
 
 The normative configuration shape is
-[`config/patchouli.schema.json`](../config/patchouli.schema.json). The default
+[`config/patchouli.schema.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.schema.json). The default
 single-node SQLite policy is
-[`config/patchouli.default.json`](../config/patchouli.default.json). The more
+[`config/patchouli.default.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.default.json). The more
 advanced shared-transaction example is
-[`config/patchouli.example.json`](../config/patchouli.example.json).
+[`config/patchouli.example.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.example.json).
 
 `retention.idempotency_seconds` and `retention.changes_seconds` define the
 durable retry and replay guarantees reported by the protocol handshake. SQLite
@@ -180,7 +185,7 @@ the plan.
 
 ### Default single-node SQLite
 
-[`config/patchouli.default.json`](../config/patchouli.default.json) is the
+[`config/patchouli.default.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.default.json) is the
 shipped default:
 
 - one request snapshot acquired from the authority;
@@ -199,14 +204,14 @@ knowledge by conversation.
 
 ### Eventual multi-source reads
 
-[`config/patterns/eventual.json`](../config/patterns/eventual.json)
+[`config/patterns/eventual.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patterns/eventual.json)
 allows authority or replica snapshots, adds no freshness/session constraint,
 and adds no commit ordering. It uses `mvcc`, so independently accepted
 concurrent candidates remain visible.
 
 ### Causal plugin session
 
-[`config/patterns/causal_session.json`](../config/patterns/causal_session.json)
+[`config/patterns/causal_session.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patterns/causal_session.json)
 accepts authority or replica snapshots, joins an optional opaque causal token
 with persisted `monotonic_reads` and `read_your_writes` progress for one routed
 plugin, and serializes commits within scope. The participant field is required;
@@ -217,7 +222,7 @@ must advertise replica and frontier support before this configuration starts.
 
 ### Shared transaction batch
 
-[`config/patterns/shared_transaction.json`](../config/patterns/shared_transaction.json)
+[`config/patterns/shared_transaction.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patterns/shared_transaction.json)
 uses one configured transaction identity for both the shared snapshot and
 publication key. Creating the work unit records one global change cursor;
 entities first accessed later reconstruct their baseline at that same cursor.
@@ -227,7 +232,7 @@ later requests with the same identity must select the same snapshot,
 publication, TTL, and ordering policy. Each mutation also persists its
 effective conflict policy. A configured marker publishes every mutated entity
 and its change record in one SQLite transaction. The example uses discard-on-expiry
-and leaves idempotency disabled. [`config/patchouli.example.json`](../config/patchouli.example.json)
+and leaves idempotency disabled. [`config/patchouli.example.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.example.json)
 shows how to select this pattern by metadata presence while retaining the
 default-style linearizable fallback for requests without a transaction key.
 

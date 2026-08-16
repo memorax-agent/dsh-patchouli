@@ -1,8 +1,15 @@
 # Development
 
-## Setup
+Product code and documentation are maintained on separate branches. The
+`main` branch owns the monorepo, runtime, protocol, backend, and tests. The
+`docs` branch owns only this VitePress site. Unless a section explicitly says
+otherwise, commands on this page run from a product checkout of `main`.
+
+## Product setup
 
 ```bash
+git clone --branch main --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+cd dsh-patchouli
 corepack enable
 pnpm install
 pnpm check
@@ -219,6 +226,36 @@ override deploy root, endpoint, backend policy, and provider configuration
 paths. Without `PATCHOULI_PROVIDERS`, deployment creates one persistent
 local-only provider configuration under the deploy root. The workflow never
 installs or modifies a DSH profile.
+
+## Documentation site
+
+Use an independent checkout of the `docs` branch when editing this site:
+
+```bash
+git clone --branch docs --single-branch \
+  https://github.com/memorax-agent/dsh-patchouli.git dsh-patchouli-docs
+cd dsh-patchouli-docs
+corepack enable
+pnpm install
+pnpm docs:dev
+```
+
+The development server exposes an architecture-diagram editor on the
+Architecture page. Click **Edit diagram**, or open
+`/architecture?edit-architecture=1` directly. Choose the desktop or mobile
+layout, then edit module positions and dimensions, the Harness boundary,
+localized module copy, directed-edge annotations, route visibility, and the
+canvas height for each layout. Each directed edge also has an editable line
+type, arrow style and size, and color. You can add or delete modules and edges,
+move modules into or out of the Harness boundary, change edge endpoints and
+layout-specific handles, or reverse an edge. Deleting a module also removes its
+incident edges. Modules can be repositioned directly on the canvas. **Save to
+source** validates the result and atomically updates
+`docs/components/patchouli-architecture.data.json`; the editor and write
+endpoint are absent from production builds.
+
+Run `pnpm docs:build` before committing documentation changes. Product build
+commands and source files are intentionally unavailable in this checkout.
 
 ## Generated files
 

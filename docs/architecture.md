@@ -1,3 +1,8 @@
+<script setup lang="ts">
+import PatchouliArchitecture from './components/PatchouliArchitecture.vue'
+import PatchouliConceptFlow from './components/PatchouliConceptFlow.vue'
+</script>
+
 # Architecture
 
 ## Status
@@ -23,29 +28,10 @@ protocol.
 Provide DSH with one common memory capability while keeping Agent Loop policy,
 memory semantics, and storage mechanics independently replaceable.
 
-```text
-Official Agent Loop
-  -> @memorax-agent/dsh-patchouli-agent-loop
-  -> ctx.patchouliMemory
-  -> registered MemoryPlugin
-       |-> MemoraX / another remote API
-       |-> artifact-ingestor -> attachments / fs
-       `-> optional ctx.patchouli
-             <- dsh-patchouli/storage
-             -> JSON-RPC daemon
-             -> BackendEngine
-             -> provider router
-             -> SQLite / remote provider
-
-Reactive Consumer
-  -> ctx.patchouliMemory.subscribe
-  -> ctx.patchouliMemoryCursors
-  -> DSH storageDomain
-
-DSH sessionQuery                  DSH workspaceRegistry + fs
-  -> session-indexer                -> workspace-indexer
-  -> ctx.patchouliMemory            -> ctx.patchouliMemory
-```
+<ClientOnly>
+  <PatchouliArchitecture locale="en" />
+  <template #fallback>Loading the architecture diagram…</template>
+</ClientOnly>
 
 `ctx.patchouliMemory` is an in-process DSH service. Patchouli does not expose
 it through an external bridge; other Harnesses and external applications need
@@ -237,12 +223,10 @@ and `knowledge_relation` entities; see [the fact model](knowledge-model.md).
 
 The frontend binding remains stateless with respect to database policy:
 
-```text
-JSON-RPC adapter
-    -> backend controller
-    -> configured policy engine
-    -> provider boundary
-```
+<ClientOnly>
+  <PatchouliConceptFlow kind="backend" locale="en" />
+  <template #fallback>Loading the backend request path…</template>
+</ClientOnly>
 
 The controller owns schemas, identity extraction, consistency planning,
 logical work units, conflicts, idempotency, and publication. Selected behavior
@@ -320,6 +304,7 @@ Next:
 3. A local Knowledge extraction and retrieval MemoryPlugin.
 4. Operational memory surfaces such as inspection and rebuild.
 
-The root package is the DSH frontend bundle. Rust backend crates live under
-`crates/`; `packages/protocol` is Harness-neutral, while the other TypeScript
-packages are DSH adapters, plugins, and indexers.
+The [product source tree](https://github.com/memorax-agent/dsh-patchouli/tree/main)
+is maintained on `main`. Its root package is the DSH frontend bundle, Rust
+backend crates live under `crates/`, and `packages/protocol` is Harness-neutral;
+the other TypeScript packages are DSH adapters, plugins, and indexers.

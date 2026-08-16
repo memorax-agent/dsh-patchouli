@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Patchouli
   text: Knowledge that outlives the harness.
-  tagline: One coordination layer for DSH applications, memory plugins, and durable transactional storage.
+  tagline: Coordinate your DeepSeek Harness memory and knowledge components with a unified, durable database
   image:
     src: /patchouli-icon-color.png
     alt: A purple isometric bookshelf with a yellow crescent
@@ -17,12 +17,12 @@ hero:
       link: /architecture
 
 features:
-  - title: Coordination first
-    details: Applications call one update, retrieve, and subscribe service while registered plugins own memory semantics.
-  - title: Storage without lock-in
-    details: The Rust backend is harness-neutral, transactional, and routes scopes to local SQLite or remote providers.
-  - title: Reactive by design
-    details: Durable cursors, retained change streams, and explicit lifecycle behavior make live consumers recoverable.
+  - title: One call, many memories
+    details: Route update, retrieve, and subscribe calls to matching plugins while preserving per-plugin provenance and isolated failures.
+  - title: Atomic, consistent, conflict-aware
+    details: Publish multi-call knowledge operations atomically, enforce configured consistency, and merge, preserve, or reject concurrent plugin writes through Automerge, MVCC, or strict rejection.
+  - title: Knowledge beyond text
+    details: Represent files, images, embeddings, and external indexes as typed, scoped Artifacts—managed by Patchouli or referenced in place.
 ---
 
 ## One boundary for knowledge

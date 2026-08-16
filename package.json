@@ -15,6 +15,7 @@
   },
   "packageManager": "pnpm@11.19.0",
   "devDependencies": {
+    "@vue-flow/core": "^1.48.2",
     "vitepress": "1.6.4"
   }
 }

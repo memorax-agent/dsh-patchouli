@@ -1,3 +1,7 @@
+<script setup lang="ts">
+import PatchouliConceptFlow from './components/PatchouliConceptFlow.vue'
+</script>
+
 # Knowledge fact model
 
 Patchouli fact IR version 1 has three public record values:
@@ -8,18 +12,18 @@ Patchouli fact IR version 1 has three public record values:
   `urn:patchouli:schema:knowledge-relation:1`.
 
 They use the existing generic entity CRUD methods. No knowledge-specific JSON-RPC
-method exists. The canonical schemas and examples live under
-[`packages/protocol/schemas`](https://github.com/memorax-agent/dsh-patchouli/tree/docs/packages/protocol/schemas).
+method exists. The canonical schemas and examples are maintained on the product
+branch under
+[`packages/protocol/schemas`](https://github.com/memorax-agent/dsh-patchouli/tree/main/packages/protocol/schemas).
 
 ## Identity
 
 Entity identity and fact value are deliberately separate:
 
-```text
-configured storage scope + EntityRef(type, id) + opaque EntityVersion
-                                  |
-                                  +-- ArtifactValue, KnowledgeValue, or KnowledgeRelationValue
-```
+<ClientOnly>
+  <PatchouliConceptFlow kind="identity" locale="en" />
+  <template #fallback>Loading the entity identity diagram…</template>
+</ClientOnly>
 
 The generic entity envelope is the only authority for an entity ID and storage
 version. Fact values therefore do not repeat `id` or `revision` inside
