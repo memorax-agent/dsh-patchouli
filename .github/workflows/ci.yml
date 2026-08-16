@@ -114,6 +114,7 @@ jobs:
         run: |
           pnpm --filter @memorax-agent/patchouli-protocol pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
           pnpm --filter @memorax-agent/dsh-patchouli-agent-loop pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter @memorax-agent/dsh-patchouli-artifact-ingestor pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
           pnpm --filter @memorax-agent/dsh-patchouli-session-indexer pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
           pnpm --filter @memorax-agent/dsh-patchouli-workspace-indexer pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
           pnpm pack --pack-destination artifacts

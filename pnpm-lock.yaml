@@ -14,6 +14,9 @@ importers:
       '@memorax-agent/dsh-patchouli-agent-loop':
         specifier: workspace:*
         version: link:packages/agent-loop
+      '@memorax-agent/dsh-patchouli-artifact-ingestor':
+        specifier: workspace:*
+        version: link:packages/artifact-ingestor
       '@memorax-agent/dsh-patchouli-session-indexer':
         specifier: workspace:*
         version: link:packages/session-indexer
@@ -33,6 +36,12 @@ importers:
       '@deepseek-ai/dsh-agent':
         specifier: 0.1.0-rc.6
         version: 0.1.0-rc.6(b0514d7a320728b6d8f5a31eb3960e10)
+      '@deepseek-ai/dsh-attachment':
+        specifier: 0.1.0-rc.6
+        version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
+      '@deepseek-ai/dsh-fs':
+        specifier: 0.1.0-rc.6
+        version: 0.1.0-rc.6(6889042eed4b1d3d73c9a7bc6cc8e4e3)
       '@deepseek-ai/dsh-llm':
         specifier: 0.1.0-rc.6
         version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-attachment@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-timeout@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))
@@ -75,6 +84,28 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.1
+    devDependencies:
+      dsh-patchouli:
+        specifier: workspace:*
+        version: link:../..
+
+  packages/artifact-ingestor:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.1
+        version: 4.0.1
+      '@deepseek-ai/dsh-attachment':
+        specifier: '>=0.1.0-rc.5 <0.2.0'
+        version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
+      '@deepseek-ai/dsh-fs':
+        specifier: '>=0.1.0-rc.5 <0.2.0'
+        version: 0.1.0-rc.6(6889042eed4b1d3d73c9a7bc6cc8e4e3)
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.1
+        version: 3.18.1
+      '@memorax-agent/patchouli-protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       dsh-patchouli:
         specifier: workspace:*

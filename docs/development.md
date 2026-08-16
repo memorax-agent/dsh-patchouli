@@ -103,9 +103,10 @@ pnpm test:e2e
 ```
 
 This command builds `patchouli-db`, starts a temporary daemon, mounts the common
-Memory Service, storage client, and private CRUD test plugin, then verifies
-managed Artifact upload/download plus create, read, retrieve, update, and delete
-through the public services. The test plugin is not part of the default bundle.
+Memory Service, storage client, Artifact Ingestor, and private CRUD test plugin,
+then verifies direct and DSH-sourced managed Artifact upload/download plus
+create, read, retrieve, update, and delete through the public services. The CRUD
+test plugin is not part of the default bundle.
 
 ## Test the DSH frontend
 
@@ -123,6 +124,10 @@ The default bundle contains:
 - `patchouli-agent-loop` → `@memorax-agent/dsh-patchouli-agent-loop`,
   registering individually configurable Agent/Session/Tool Hooks and the two
   optional model Tools;
+- `patchouli-artifact-ingestor` →
+  `@memorax-agent/dsh-patchouli-artifact-ingestor`, reading DSH attachment and
+  workspace-file bytes when `ctx.patchouli`, `ctx.attachments`, and `ctx.fs` are
+  available;
 - `patchouli-session-indexer` →
   `@memorax-agent/dsh-patchouli-session-indexer`, currently declaring
   `patchouliMemory + sessionQuery` only;

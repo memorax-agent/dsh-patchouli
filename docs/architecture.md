@@ -9,13 +9,14 @@ Patchouli currently combines two implemented surfaces:
   SQLite and authenticated remote providers, deterministic scope routing, and
   daemon lifecycle recovery;
 - a DSH common Memory Service with reactive subscriptions, durable Consumer
-  cursors, an official Agent Loop adapter, and package boundaries for Session
-  and Workspace Indexers.
+  cursors, an official Agent Loop adapter, managed Artifact ingestion, and
+  package boundaries for Session and Workspace Indexers.
 
-Session and Workspace Indexer behavior and concrete Memory Plugins are not
-implemented yet. The optional TypeScript
-storage client exposes control, CRUD, entity retrieval, structured RPC errors,
-and cursor-based change subscriptions from the backend protocol.
+Session and Workspace Indexer behavior and general Knowledge extraction/
+retrieval MemoryPlugins are not implemented yet. The optional TypeScript
+storage client exposes control, CRUD, entity retrieval, Artifact transfer,
+structured RPC errors, and cursor-based change subscriptions from the backend
+protocol.
 
 ## Goal
 
@@ -28,6 +29,7 @@ Official Agent Loop
   -> ctx.patchouliMemory
   -> registered MemoryPlugin
        |-> MemoraX / another remote API
+       |-> artifact-ingestor -> attachments / fs
        `-> optional ctx.patchouli
              <- dsh-patchouli/storage
              -> JSON-RPC daemon
@@ -90,6 +92,16 @@ while allowing unfiltered third-party plugins to retain broadcast behavior.
 A MemoraX plugin may call the MemoraX API directly. A local plugin may instead
 consume the optional storage client. Storage CRUD types do not appear in the
 common Memory Service contract.
+
+`@memorax-agent/dsh-patchouli-artifact-ingestor` is the narrow local exception:
+it is an update-only MemoryPlugin that converts DSH resource references into
+managed Artifact entities. The high-level call still contains JSON only. For
+session images the plugin resolves `ImageAttachmentRef` through
+`ctx.attachments`; for explicit `workspace-file` requests it resolves the path
+through `ctx.fs`, verifies canonical containment in the Session workspace, and
+applies a configured byte limit. It then transfers bytes through
+`ctx.patchouli.uploadArtifact`. The plugin remains pending unless all three DSH
+services and the optional storage client are present.
 
 The private `@memorax-agent/dsh-patchouli-crud-test-plugin` package exercises
 that boundary without becoming a production memory implementation. It routes
@@ -156,6 +168,12 @@ Session working directory and falls back to the Session id. JSON attributes
 carry `point`, `sessionId`, and any available turn/step/outcome position. The
 model cannot supply this trusted envelope, and the common service never exposes
 Agent, Session, or Tool runtime objects to MemoryPlugins.
+
+The model-facing `memory_update` Tool also accepts JSON `workspace-file`
+resource descriptors. It does not open paths itself. This preserves the same
+adapter boundary while allowing the Artifact Ingestor to perform the trusted
+DSH filesystem lookup. DSH image content already carries a durable attachment
+reference in Session events and is discovered from the committed turn.
 
 ### Indexer Packages
 
@@ -291,15 +309,17 @@ Completed:
    stream, and local/remote providers.
 4. Optional TypeScript control, CRUD, retrieval, and lifecycle-aware
    change-subscription client.
-5. Independent Session and Workspace Indexer package boundaries.
+5. DSH attachment and explicit workspace-file ingestion into managed Artifact
+   storage.
+6. Independent Session and Workspace Indexer package boundaries.
 
 Next:
 
 1. Session and Workspace Indexer behavior.
 2. A MemoraX MemoryPlugin working end to end through the common service.
-3. A local storage-backed MemoryPlugin.
+3. A local Knowledge extraction and retrieval MemoryPlugin.
 4. Operational memory surfaces such as inspection and rebuild.
 
 The root package is the DSH frontend bundle. Rust backend crates live under
-`crates/`; `packages/protocol` is Harness-neutral, while the three other
-TypeScript packages are DSH adapters and indexers.
+`crates/`; `packages/protocol` is Harness-neutral, while the other TypeScript
+packages are DSH adapters, plugins, and indexers.

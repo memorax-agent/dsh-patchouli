@@ -5,12 +5,13 @@ import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import test from 'node:test'
 
 import { Context } from '@deepseek-ai/cordis'
 
+import * as artifactIngestor from '../packages/artifact-ingestor/lib/index.js'
 import * as crudTestPlugin from '../packages/crud-test-plugin/lib/index.js'
 import * as patchouli from '../lib/index.js'
 import * as storage from '../lib/storage.js'
@@ -101,6 +102,35 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   await waitForDaemon(daemon, endpoint)
 
   ctx = new Context()
+  const workspaceRoot = join(root, 'workspace')
+  const workspaceBytes = new TextEncoder().encode('workspace artifact through the DSH filesystem')
+  const imageBytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])
+  ctx.provide('attachments', {
+    async readImage(ref) {
+      assert.equal(ref.attachmentId, 'image-e2e-1')
+      return { ref, data: imageBytes }
+    },
+  })
+  ctx.provide('fs', {
+    async resolve(path, options = {}) {
+      const displayPath = isAbsolute(path) ? path : join(options.cwd, path)
+      return { targetKey: displayPath, displayPath }
+    },
+    contains(parent, child) {
+      const relativePath = relative(parent.targetKey, child.targetKey)
+      return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+    },
+    async stat(target) {
+      return target.targetKey === join(workspaceRoot, 'docs', 'design.bin')
+        ? { type: 'file', size: workspaceBytes.byteLength, version: 'file-version-1' }
+        : { type: 'directory', version: 'directory-version-1' }
+    },
+    async readBytes(target, _signal, maxBytes) {
+      assert.equal(target.targetKey, join(workspaceRoot, 'docs', 'design.bin'))
+      assert.ok(workspaceBytes.byteLength <= maxBytes)
+      return workspaceBytes
+    },
+  })
   await ctx.plugin(patchouli)
   await ctx.plugin(storage, {
     endpoint,
@@ -108,6 +138,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     autoStart: false,
     startupTimeoutMs: 1_000,
   })
+  await ctx.plugin(artifactIngestor, { maxFileBytes: 1_024 * 1_024 })
   await ctx.plugin(crudTestPlugin)
 
   const knowledge = JSON.parse(await readFile(
@@ -146,6 +177,79 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   const downloadedArtifact = await ctx.patchouli.downloadArtifact(databaseMeta, 'artifact-e2e-1')
   assert.equal(downloadedArtifact.byteLength, artifactBytes.byteLength)
   assert.equal(Buffer.compare(Buffer.from(downloadedArtifact), Buffer.from(artifactBytes)), 0)
+
+  const ingestorCallMeta = {
+    source: { type: 'agent-loop', id: 'dsh-patchouli-agent-loop' },
+    scope: workspaceRoot,
+    attributes: {
+      point: 'tool/memory-update',
+      sessionId: 'session-file-e2e',
+      workspaceRoot,
+    },
+  }
+  const ingestedFile = await ctx.patchouliMemory.update({
+    meta: ingestorCallMeta,
+    data: {
+      resources: [{
+        kind: 'workspace-file',
+        path: 'docs/design.bin',
+        mediaType: 'application/octet-stream',
+        role: 'source',
+      }],
+    },
+  })
+  assert.equal(ingestedFile.length, 1)
+  assert.equal(ingestedFile[0].ok, true, ingestedFile[0].error)
+  assert.equal(ingestedFile[0].pluginId, 'artifact-ingestor')
+  assert.equal(ingestedFile[0].value.artifacts[0].role, 'source')
+
+  const ingestorDatabaseMeta = {
+    workspace_id: workspaceRoot,
+    user_id: 'agent-loop:dsh-patchouli-agent-loop',
+    channel_id: 'session-file-e2e',
+  }
+  const fileArtifactId = ingestedFile[0].value.artifacts[0].ref.id
+  const downloadedFile = await ctx.patchouli.downloadArtifact(ingestorDatabaseMeta, fileArtifactId)
+  assert.equal(Buffer.compare(Buffer.from(downloadedFile), Buffer.from(workspaceBytes)), 0)
+
+  const rejectedFile = await ctx.patchouliMemory.update({
+    meta: ingestorCallMeta,
+    data: {
+      resources: [{ kind: 'workspace-file', path: '/outside/secret.bin' }],
+    },
+  })
+  assert.equal(rejectedFile.length, 1)
+  assert.equal(rejectedFile[0].ok, false)
+  assert.match(rejectedFile[0].error, /outside the session workspace/)
+
+  const imageRef = {
+    attachmentId: 'image-e2e-1',
+    mediaType: 'image/png',
+    bytes: imageBytes.byteLength,
+    width: 2,
+    height: 2,
+    name: 'image.png',
+  }
+  const ingestedImage = await ctx.patchouliMemory.update({
+    meta: {
+      ...ingestorCallMeta,
+      attributes: {
+        ...ingestorCallMeta.attributes,
+        point: 'session/turn-end',
+      },
+    },
+    data: {
+      events: [{
+        type: 'user/message',
+        data: { content: [{ type: 'image', attachment: imageRef }] },
+      }],
+    },
+  })
+  assert.equal(ingestedImage.length, 1)
+  assert.equal(ingestedImage[0].ok, true, ingestedImage[0].error)
+  const imageArtifactId = ingestedImage[0].value.artifacts[0].ref.id
+  const downloadedImage = await ctx.patchouli.downloadArtifact(ingestorDatabaseMeta, imageArtifactId)
+  assert.equal(Buffer.compare(Buffer.from(downloadedImage), Buffer.from(imageBytes)), 0)
 
   const created = valueOf(await ctx.patchouliMemory.update({
     meta: callMeta('create'),

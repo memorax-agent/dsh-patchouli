@@ -43,3 +43,23 @@ All calls use `{ meta, data }`. `meta.attributes.point` identifies the row,
 while `data` contains only facts visible at that point. Updates are serialized
 per Session, and the adapter extends `session/flush` to wait for admitted update
 work.
+
+The `memory_update` Tool accepts optional `messages` and `resources`; at least
+one must be present. A resource is a JSON request for a workspace file, not its
+bytes:
+
+```json
+{
+  "resources": [{
+    "kind": "workspace-file",
+    "path": "docs/design.pdf",
+    "mediaType": "application/pdf",
+    "role": "source"
+  }]
+}
+```
+
+The Agent Loop adapter never reads that path. The separate Artifact Ingestor
+validates it against the Session workspace through `ctx.fs` and transfers its
+bytes when local Patchouli storage is enabled. Image content blocks already
+carry durable DSH attachment references and need no model-supplied resource.

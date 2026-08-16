@@ -93,6 +93,14 @@ export type AgentLoopDataPoint =
   | 'tools/post-execute'
   | 'tools/result'
 
+export interface WorkspaceFileResource {
+  readonly kind: 'workspace-file'
+  readonly path: string
+  readonly mediaType?: string
+  readonly name?: string
+  readonly role?: 'source' | 'attachment'
+}
+
 function snapshot(value: unknown): MemoryData {
   const data = snapshotJsonValue(value)
   if (data === undefined) throw new TypeError('agent-loop observation must be lossless JSON')
@@ -117,6 +125,7 @@ function callMeta(
     attributes: {
       point,
       sessionId: String(session.header.id),
+      ...session.header.cwd === undefined ? {} : { workspaceRoot: session.header.cwd },
       ...attributes,
     },
   }
@@ -353,11 +362,10 @@ export function apply(ctx: Context, config: Config): void {
   if (modelTools.update) {
     ctx.tools.register(defineTool({
       name: 'memory_update',
-      description: 'Submit the supplied messages to installed memory plugins.',
+      description: 'Submit messages or workspace files to installed memory plugins.',
       parameters: {
         messages: {
           type: 'array',
-          required: true,
           description: 'One or more user or assistant messages to submit.',
           items: {
             type: 'object',
@@ -375,6 +383,35 @@ export function apply(ctx: Context, config: Config): void {
             },
           },
         },
+        resources: {
+          type: 'array',
+          description: 'Workspace files to store as managed knowledge artifacts.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: {
+                type: 'string',
+                required: true,
+                enum: ['workspace-file'],
+              },
+              path: {
+                type: 'string',
+                required: true,
+              },
+              mediaType: {
+                type: 'string',
+              },
+              name: {
+                type: 'string',
+              },
+              role: {
+                type: 'string',
+                enum: ['source', 'attachment'],
+              },
+            },
+          },
+        },
       },
       output: {
         schema: { type: 'string' },
@@ -382,21 +419,50 @@ export function apply(ctx: Context, config: Config): void {
       },
       async execute(args, exec) {
         if (exec.agent === undefined) throw new Error('memory_update requires an owning agent session')
-        if (args.messages.length === 0) throw new Error('memory_update requires at least one message')
-        const messages = args.messages.map(message => {
+        const messages = (args.messages ?? []).map(message => {
           const content = message.content.trim()
           if (content === '') throw new Error('memory_update message content must be non-empty')
           return { role: message.role, content }
         })
+        const resources: WorkspaceFileResource[] = (args.resources ?? []).map(resource => {
+          const path = resource.path.trim()
+          if (path === '') throw new Error('memory_update resource path must be non-empty')
+          const mediaType = resource.mediaType?.trim()
+          if (resource.mediaType !== undefined && mediaType === '') {
+            throw new Error('memory_update resource mediaType must be non-empty')
+          }
+          const name = resource.name?.trim()
+          if (resource.name !== undefined && name === '') {
+            throw new Error('memory_update resource name must be non-empty')
+          }
+          return {
+            kind: 'workspace-file',
+            path,
+            ...mediaType === undefined ? {} : { mediaType },
+            ...name === undefined ? {} : { name },
+            ...resource.role === undefined ? {} : { role: resource.role },
+          }
+        })
+        if (messages.length === 0 && resources.length === 0) {
+          throw new Error('memory_update requires at least one message or resource')
+        }
 
         const outcomes = await ctx.patchouliMemory.update({
           meta: callMeta(exec.agent.session, 'tool/memory-update'),
-          data: snapshot({ messages }),
+          data: snapshot({
+            ...messages.length === 0 ? {} : { messages },
+            ...resources.length === 0 ? {} : { resources },
+          }),
         }, exec.signal)
         warnFailures(ctx, 'update', outcomes)
         return outcomeJson(outcomes)
       },
-      presentCall: args => ({ card: 'generic', title: 'Update memory', kind: 'other', rawInput: args.messages }),
+      presentCall: args => ({
+        card: 'generic',
+        title: 'Update memory',
+        kind: 'other',
+        rawInput: args,
+      }),
     }))
   }
 

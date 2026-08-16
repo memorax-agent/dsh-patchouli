@@ -94,6 +94,21 @@ test('registers update/retrieve tools and derives their scope from the agent', a
     signal: SIGNAL,
   })
   assert.equal(update.isError, false)
+  const resourceUpdate = await ctx.tools.execute({
+    callId: CallId('update-file-1'),
+    name: 'memory_update',
+    arguments: {
+      resources: [{
+        kind: 'workspace-file',
+        path: ' docs/design.pdf ',
+        mediaType: ' application/pdf ',
+        role: 'source',
+      }],
+    },
+    agent,
+    signal: SIGNAL,
+  })
+  assert.equal(resourceUpdate.isError, false)
   assert.deepEqual(JSON.parse(retrieve.content[0].text), [{
     pluginId: 'fixture',
     ok: true,
@@ -113,6 +128,7 @@ test('registers update/retrieve tools and derives their scope from the agent', a
         attributes: {
         point: 'tool/memory-retrieve',
         sessionId: 'session-1',
+        workspaceRoot: '/workspace/patchouli',
       },
     },
       data: { query: 'prior work', limit: 3 },
@@ -124,9 +140,29 @@ test('registers update/retrieve tools and derives their scope from the agent', a
         attributes: {
         point: 'tool/memory-update',
         sessionId: 'session-1',
+        workspaceRoot: '/workspace/patchouli',
       },
     },
       data: { messages: [{ role: 'user', content: 'remember this' }] },
+    }, SIGNAL],
+    ['update', {
+      meta: {
+        source: { type: 'agent-loop', id: 'dsh-patchouli-agent-loop' },
+        scope: '/workspace/patchouli',
+        attributes: {
+          point: 'tool/memory-update',
+          sessionId: 'session-1',
+          workspaceRoot: '/workspace/patchouli',
+        },
+      },
+      data: {
+        resources: [{
+          kind: 'workspace-file',
+          path: 'docs/design.pdf',
+          mediaType: 'application/pdf',
+          role: 'source',
+        }],
+      },
     }, SIGNAL],
   ])
 })
@@ -179,6 +215,7 @@ test('retrieves from the complete pre-step observation and injects data without 
       attributes: {
         point: 'agent/pre-step',
         sessionId: 'session-1',
+        workspaceRoot: '/workspace/patchouli',
         turn: 1,
         step: 1,
       },
@@ -257,7 +294,20 @@ test('submits the complete committed turn without filtering its event data', asy
   session.append('turn/start', { turn: 1 })
   session.append('step/start', { turn: 1, step: 1 })
   session.append('user/message', createUserMessage({
-    content: [{ type: 'text', text: ' remember this decision ' }],
+    content: [
+      { type: 'text', text: ' remember this decision ' },
+      {
+        type: 'image',
+        attachment: {
+          attachmentId: 'attachment-1',
+          mediaType: 'image/png',
+          bytes: 12,
+          width: 2,
+          height: 3,
+          name: 'diagram.png',
+        },
+      },
+    ],
     source: { kind: 'user' },
   }), { surfaceOp: 'append' })
   session.append('user/message', createUserMessage({
@@ -309,6 +359,7 @@ test('submits the complete committed turn without filtering its event data', asy
     attributes: {
       point: 'session/turn-end',
       sessionId: 'session-turn',
+      workspaceRoot: '/workspace/patchouli',
       turn: 1,
       outcome: 'completed',
     },
@@ -328,6 +379,14 @@ test('submits the complete committed turn without filtering its event data', asy
     'turn/end',
   ])
   assert.equal(first.data.events[3].data.source.plugin, 'fixture-recall')
+  assert.deepEqual(first.data.events[2].data.content[1].attachment, {
+    attachmentId: 'attachment-1',
+    mediaType: 'image/png',
+    bytes: 12,
+    width: 2,
+    height: 3,
+    name: 'diagram.png',
+  })
   assert.equal(first.data.events[4].data.message.content[0].type, 'reasoning')
   assert.equal(first.data.events[4].data.message.content[2].type, 'tool-call')
   assert.equal(first.data.events[5].data.message.content[0].type, 'tool-result')
