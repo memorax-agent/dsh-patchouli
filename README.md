@@ -1,3 +1,7 @@
+<div align="center">
+  <img width="100%" alt="Patchouli" src="assets/patchouli-banner-zh.png">
+</div>
+
 # dsh-patchouli
 
 Patchouli 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的本地知识依赖。目标是在不要求模型发起 Tool Call 的前提下，按当前任务检索相关知识，并通过 Harness 原生、可记录的上下文链路注入模型请求。
