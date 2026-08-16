@@ -3,59 +3,37 @@
 
   <h1>Patchouli</h1>
   <p>
-    <strong>Knowledge and memory middleware for AI harnesses.</strong>
+    <strong>A local memory and knowledge hub for DeepSeek Harness.</strong>
     <br />
-    Connect applications, memory plugins, and durable knowledge storage through one common service.
+    Integrates heterogeneous Agent data augmentation while keeping data and algorithms decoupled.
   </p>
 
-  [![CI](https://github.com/memorax-agent/dsh-patchouli/actions/workflows/ci.yml/badge.svg)](https://github.com/memorax-agent/dsh-patchouli/actions/workflows/ci.yml)
-  [![License: MIT](https://img.shields.io/badge/License-MIT-2f6f4e.svg)](LICENSE)
-  [![Node.js](https://img.shields.io/badge/Node.js-%5E22.19.0%20%7C%7C%20%3E%3D24-2f6f4e?logo=nodedotjs&logoColor=white)](package.json)
-  [![Rust](https://img.shields.io/badge/Rust-stable-b55b3d?logo=rust&logoColor=white)](Cargo.toml)
+  **English** · [简体中文](README.zh-CN.md)
 
-  **English** / [简体中文](README.zh-CN.md)
+  [![Documentation](https://img.shields.io/badge/docs-read-75439a?logo=readthedocs&logoColor=white)](https://memorax-agent.github.io/dsh-patchouli/)
+  [![CI](https://github.com/memorax-agent/dsh-patchouli/actions/workflows/ci.yml/badge.svg)](https://github.com/memorax-agent/dsh-patchouli/actions/workflows/ci.yml)
+  [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
+  [![Node.js](https://img.shields.io/badge/Node.js-%5E22.19.0%20%7C%7C%20%3E%3D24-2f6f4e?logo=nodedotjs&logoColor=white)](https://memorax-agent.github.io/dsh-patchouli/installation)
+  [![Rust](https://img.shields.io/badge/Rust-stable-b55b3d?logo=rust&logoColor=white)](https://memorax-agent.github.io/dsh-patchouli/installation)
 </div>
 
 ## Overview
 
-Patchouli is a knowledge and memory middleware layer. Applications call a
-stable `update` / `retrieve` / `subscribe` service, registered plugins provide
-the memory semantics, and an independent Rust backend provides transactional
-storage.
+Patchouli exposes one `update` / `retrieve` / `subscribe` service inside
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Connectors
+provide trusted runtime data, memory and knowledge plugins own their algorithms,
+and an independent Rust backend provides durable transactional storage.
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) is the first
-supported integration. The database backend remains harness-neutral.
+DeepSeek Harness is the first supported integration. The database backend
+remains harness-neutral.
 
-## Capabilities
+## Features
 
-- Common DSH Memory Service with plugin routing, aggregation, and provenance.
-- Agent Loop hooks and model tools through a dedicated connector plugin.
+- Common Memory Service with plugin-owned routing, aggregation, and provenance.
+- Agent Loop connector with configurable hooks and model tools.
 - Pluggable local or remote memory and knowledge implementations.
 - Managed image and workspace-file ingestion as typed Artifacts.
-- Durable cursors and reactive subscriptions.
-- Transactional Rust backend with SQLite, remote providers, conflict handling,
-  change streams, and lifecycle recovery.
-
-## Documentation
-
-Read the [Patchouli documentation](https://memorax-agent.github.io/dsh-patchouli/)
-for installation, DSH integration, architecture, consistency configuration,
-the knowledge model, and backend operation.
-
-The source pages live in [`docs/`](docs/). The normative JSON-RPC contract lives
-in [`packages/protocol/SPEC.md`](packages/protocol/SPEC.md).
-
-## Status
-
-The Memory Service, Agent Loop connector, Artifact Ingestor, transactional Rust
-backend, SQLite and remote providers, conflict handling, change streams, and
-lifecycle recovery are implemented. Session and Workspace Indexers currently
-define package boundaries; a general-purpose Knowledge extraction plugin is not
-included yet.
-
-## License
-
-Licensed under the [MIT License](LICENSE).
+- Durable subscriptions and a transactional Rust backend with SQLite and remote providers.
 
 ## What does the plugin's name mean???
 
