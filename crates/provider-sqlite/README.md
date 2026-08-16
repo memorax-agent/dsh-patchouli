@@ -10,7 +10,7 @@ listening. Manual checkpoints use complete WAL checkpointing. Graceful shutdown
 marks the generation clean, truncates the WAL, closes the connection, and
 releases the ownership lock.
 
-Storage schema version 11 contains generic immutable entity versions, published
+Storage schema version 12 contains generic immutable entity versions, published
 heads, non-expiring head history, a separately retained atomic change log,
 durable causal/session frontiers, published and staged idempotency records,
 Automerge change/frontier tables, and durable work units with one scope-local
@@ -23,7 +23,9 @@ whole unit in one SQLite transaction. Expired open units are swept on startup,
 checkpoint, shutdown, and every provider operation. Read-only
 `patchouli_artifact`, `patchouli_knowledge`, and `patchouli_knowledge_relation`
 views project typed fact fields from the one authoritative JSON value. The
-views do not duplicate semantic state. SQLite advertises these capabilities
+views do not duplicate semantic state. A trigram FTS5 index accelerates literal
+text retrieval across the authoritative JSON values, while scope, entity type,
+and entity ID selection runs inside SQLite. SQLite advertises these capabilities
 before engine startup so an incompatible backend policy cannot begin serving
 requests.
 

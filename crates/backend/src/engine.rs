@@ -9,9 +9,9 @@ use patchouli_provider::{
     ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit, EntityCommitOutcome,
     EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord, IdempotentCommitOutcome,
     Provider, ProviderCapabilities, ProviderError, ProviderErrorReason, ProviderRecovery,
-    RetrieveQuery, StoredChangeKind, StoredCrdtChange, StoredCrdtField, StoredEntityVersion,
-    StoredVersionState, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitConflict,
-    WorkUnitExpiryAction, WorkUnitPublish, WorkUnitReadOutcome, WorkUnitResolution,
+    StoredChangeKind, StoredCrdtChange, StoredCrdtField, StoredEntityVersion, StoredVersionState,
+    WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitConflict, WorkUnitExpiryAction,
+    WorkUnitPublish, WorkUnitReadOutcome, WorkUnitResolution,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -29,6 +29,7 @@ use crate::{
     PublishedChange, ReadEntityParams, ReadEntityResult, ReadEntityResultData, ReadState,
     RequestDeadline, RetrievalHit, RetrieveEntitiesParams, RetrieveEntitiesResult,
     RetrieveEntitiesResultData, RpcResult, SubscribeChangesParams, UpdateEntityParams,
+    query::{encode_cursor, parse_query},
     resolve_prepared_conflict,
 };
 
@@ -321,9 +322,6 @@ impl BackendService for BackendEngine {
     ) -> Result<RetrieveEntitiesResult, BackendError> {
         let deadline = RequestDeadline::from_meta(&params.meta)?;
         deadline.check_now()?;
-        if params.data.query.trim().is_empty() {
-            return Err(invalid_request("retrieval query must not be empty"));
-        }
         if params.data.limit == 0 || params.data.limit > 100 {
             return Err(invalid_request("retrieval limit must be between 1 and 100"));
         }
@@ -337,11 +335,13 @@ impl BackendService for BackendEngine {
                 "retrieval types must be a non-empty list of configured entity types",
             ));
         }
-        let selected_types = params
+        let mut selected_types = params
             .data
             .types
             .clone()
             .unwrap_or_else(|| self.config.entity_types.keys().cloned().collect());
+        selected_types.sort();
+        selected_types.dedup();
         let selections = selected_types
             .iter()
             .map(|entity_type| self.select(entity_type, &params.meta))
@@ -359,18 +359,26 @@ impl BackendService for BackendEngine {
         }
         let meta = serde_json::to_value(&params.meta).map_err(invalid_request)?;
         let scope = self.selector.select_scope(&meta).map_err(invalid_request)?;
-        let entities = self
+        let query = parse_query(
+            serde_json::to_string(&scope).map_err(invalid_request)?,
+            selected_types,
+            &params.data.query,
+            params.data.limit,
+        )?;
+        let page = self
             .provider
-            .retrieve_entities(RetrieveQuery {
-                scope_json: serde_json::to_string(&scope).map_err(invalid_request)?,
-                entity_types: Some(selected_types),
-                query: params.data.query,
-                limit: params.data.limit,
-            })
+            .retrieve_entities(query)
             .await
             .map_err(provider_backend_error)?;
         deadline.check_now()?;
-        let hits = entities
+        if let Some(cursor) = &page.next_cursor {
+            result_meta.insert(
+                "next_cursor".to_owned(),
+                Value::String(encode_cursor(cursor)?),
+            );
+        }
+        let hits = page
+            .entities
             .into_iter()
             .map(|entity| {
                 let entity_ref = EntityRef {
@@ -378,7 +386,7 @@ impl BackendService for BackendEngine {
                     id: entity.key.entity_id,
                 };
                 Ok(RetrievalHit {
-                    score: 1.0,
+                    score: entity.score,
                     variants: head_entities(&entity_ref, &entity.snapshot)?,
                 })
             })

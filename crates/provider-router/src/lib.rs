@@ -5,8 +5,8 @@ use patchouli_provider::{
     ChangePage, ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit,
     EntityCommitOutcome, EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord,
     IdempotentCommitOutcome, Provider, ProviderCapabilities, ProviderError, ProviderRecovery,
-    RetrieveQuery, RetrievedEntity, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome,
-    WorkUnitPublish, WorkUnitReadOutcome,
+    RetrieveQuery, RetrievedPage, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitPublish,
+    WorkUnitReadOutcome,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -218,7 +218,7 @@ impl Provider for RoutingProvider {
     async fn retrieve_entities(
         &self,
         query: RetrieveQuery,
-    ) -> Result<Vec<RetrievedEntity>, ProviderError> {
+    ) -> Result<RetrievedPage, ProviderError> {
         self.route_scope(&query.scope_json)?
             .retrieve_entities(query)
             .await

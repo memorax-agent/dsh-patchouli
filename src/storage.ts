@@ -13,6 +13,8 @@ export {
   type ChangeHandler,
   type ChangeSubscriptionClose,
   type ChangeSubscriptionHandle,
+  type EntityQueryOptions,
+  type WorkUnitMutation,
 } from './service.js'
 
 /** Optional Cordis plugin that binds the Patchouli storage daemon. */

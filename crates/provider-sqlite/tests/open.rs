@@ -314,7 +314,7 @@ async fn defines_generic_entries_and_typed_fact_views() {
     let schema_version: u32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read schema version");
-    assert_eq!(schema_version, 11);
+    assert_eq!(schema_version, 12);
 
     insert_active_version(&connection, "artifact", "artifact-pdf", "v1", ARTIFACT);
 

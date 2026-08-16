@@ -6,6 +6,7 @@ mod engine;
 mod error;
 mod fact;
 mod model;
+mod query;
 mod service;
 mod wire;
 

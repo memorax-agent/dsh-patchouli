@@ -745,7 +745,10 @@
         "additionalProperties": false,
         "required": ["query"],
         "properties": {
-          "query": { "$ref": "#/components/schemas/NonEmptyString" },
+          "query": {
+            "allOf": [{ "$ref": "#/components/schemas/NonEmptyString" }],
+            "description": "A serialized JSON query instruction. An empty JSON object lists entities."
+          },
           "types": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/NonEmptyString" },

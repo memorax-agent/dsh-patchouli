@@ -161,18 +161,70 @@ pub enum ConsistencyAcquireOutcome {
     Unavailable,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetrieveQuery {
     pub scope_json: String,
     pub entity_types: Option<Vec<String>>,
-    pub query: String,
+    pub text: Option<String>,
+    pub entity_ids: Option<Vec<String>>,
+    pub filters: Vec<RetrieveFilter>,
+    pub order: RetrieveOrder,
+    pub fingerprint: String,
+    pub after: Option<RetrieveCursor>,
     pub limit: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrieveFilterOperator {
+    Equal,
+    NotEqual,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    Contains,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetrieveFilter {
+    pub pointer: String,
+    pub operator: RetrieveFilterOperator,
+    pub value_json: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrieveOrder {
+    Relevance,
+    Newest,
+    Oldest,
+    IdAscending,
+    IdDescending,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetrieveCursor {
+    pub order: RetrieveOrder,
+    pub query_fingerprint: String,
+    pub score: f64,
+    pub recorded_at_unix_ms: u64,
+    pub entity_type: String,
+    pub entity_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetrievedEntity {
     pub key: EntityKey,
     pub snapshot: EntitySnapshot,
+    pub score: f64,
+    pub recorded_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetrievedPage {
+    pub entities: Vec<RetrievedEntity>,
+    pub next_cursor: Option<RetrieveCursor>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -339,7 +391,7 @@ pub trait Provider: Send + Sync {
     async fn retrieve_entities(
         &self,
         _query: RetrieveQuery,
-    ) -> Result<Vec<RetrievedEntity>, ProviderError> {
+    ) -> Result<RetrievedPage, ProviderError> {
         Err(ProviderError::new(
             "provider does not support entity retrieval",
         ))

@@ -96,6 +96,7 @@ export type ReadEntityResult<
 > = RpcResult<ReadEntityResultData<TType, TValue>>
 
 export interface RetrieveEntitiesData<TType extends string = string> {
+  /** A serialized JSON query instruction; use `{}` to list entities. */
   readonly query: string
   readonly types?: readonly TType[]
   readonly limit?: number

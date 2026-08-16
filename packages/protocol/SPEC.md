@@ -252,12 +252,49 @@ succeeds; safe garbage collection is outside version 1.
 ## 8. Entity retrieval
 
 `patchouli.entity.retrieve@1` searches active published entities inside the
-scope selected from request `meta`. Its business data is `query`, optional
-`types`, and an optional `limit` from 1 through 100. Results contain scored
-hits with the current entity variants. The RPC remains entity-generic;
-deployments choose which types (for example `knowledge`) a consumer requests.
-The initial SQLite provider performs case-insensitive lexical matching over the
-stored JSON value. Retrieval never exposes staged work-unit candidates.
+scope selected from request `meta`. Its business data remains a `query` string,
+optional `types`, and an optional `limit` from 1 through 100. The string MUST
+contain one JSON object; there is no parallel plain-text query form. `{}` lists
+entities. All instruction fields are optional:
+
+```json
+{
+  "text": "code review",
+  "ids": ["knowledge-1", "knowledge-2"],
+  "where": {
+    "/metadata/core/origin/provider": "local",
+    "/metadata/core/time/ingested_at": { "$gte": "2026-08-01T00:00:00Z" },
+    "/from": { "$contains": { "type": "knowledge", "id": "knowledge-source" } }
+  },
+  "order": "relevance",
+  "cursor": "opaque cursor from result.meta.next_cursor"
+}
+```
+
+- `text` is a non-empty, case-insensitive literal search over stored JSON.
+- `ids` is a non-empty, unique entity-ID set. Entity types remain in the
+  existing outer `types` field.
+- `where` maps RFC 6901 JSON pointers to predicates. A bare value means exact
+  equality. Operator objects support `$eq`, `$ne`, `$lt`, `$lte`, `$gt`,
+  `$gte`, and `$contains`. `$contains` tests exact array membership or a string
+  substring. Every predicate is combined with logical AND, and one active head
+  variant must satisfy all predicates.
+- `order` is `relevance`, `newest`, `oldest`, `id_asc`, or `id_desc`.
+  Relevance requires `text`; it is the default with text, while `newest` is the
+  default without text. Every order has deterministic entity type/ID tie
+  breakers.
+- `cursor` resumes after a prior page. If another page exists, the result places
+  its opaque cursor in the existing `meta.next_cursor`; otherwise that metadata
+  field is absent. The cursor is bound to the selected scope, entity types,
+  IDs, text, predicates, and order; the backend rejects reuse with a different
+  query. `limit` controls page size and may change between pages.
+
+Unknown instruction fields and operators are invalid requests. Results retain
+the existing scored-hit shape with current entity variants. Scores are
+provider-defined and are zero for unscored list/filter queries. The SQLite
+provider uses a trigram FTS5 index for literal searches of at least three
+characters and direct literal matching for shorter searches. Retrieval never
+exposes staged work-unit candidates.
 
 ## 9. Change subscriptions
 

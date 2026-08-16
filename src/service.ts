@@ -17,6 +17,7 @@ import {
   type CreateEntityParams,
   type ControlCheckpointResult,
   type DeleteEntityParams,
+  type JsonObject,
   type JsonValue,
   type Meta,
   type MutationResult,
@@ -30,6 +31,7 @@ import {
   type JsonRpcSuccess,
   type ReadEntityParams,
   type ReadEntityResult,
+  type RetrieveEntitiesData,
   type RetrieveEntitiesParams,
   type RetrieveEntitiesResult,
   type SubscribeChangesParams,
@@ -62,6 +64,13 @@ export interface ChangeSubscriptionClose {
   readonly kind: 'unsubscribed' | 'connection-lost' | 'client-closed'
   readonly error?: Error
 }
+
+export type EntityQueryOptions<TType extends string = string> = Omit<
+  RetrieveEntitiesData<TType>,
+  'query'
+>
+
+export type WorkUnitMutation<TResult> = (meta: Meta) => Promise<TResult>
 
 /** A subscribe result with an observable, locally managed lifecycle. */
 export interface ChangeSubscriptionHandle extends SubscribeChangesResult {
@@ -244,6 +253,72 @@ export class PatchouliService extends Service {
     params: RetrieveEntitiesParams<TType>,
   ): Promise<RetrieveEntitiesResult<TType, TValue>> {
     return this.call<RetrieveEntitiesResult<TType, TValue>>(methods.entityRetrieve, params)
+  }
+
+  /** Serialize an untyped backend query instruction without changing the RPC shape. */
+  async query<TType extends string = string, TValue extends JsonValue = JsonValue>(
+    meta: Meta,
+    instruction: JsonObject,
+    options: EntityQueryOptions<TType> = {},
+  ): Promise<RetrieveEntitiesResult<TType, TValue>> {
+    return this.retrieve({
+      meta,
+      data: { ...options, query: JSON.stringify(instruction) },
+    })
+  }
+
+  /** Follow `meta.next_cursor` until the backend reports the final page. */
+  async *queryPages<TType extends string = string, TValue extends JsonValue = JsonValue>(
+    meta: Meta,
+    instruction: JsonObject,
+    options: EntityQueryOptions<TType> = {},
+  ): AsyncGenerator<RetrieveEntitiesResult<TType, TValue>> {
+    let pageInstruction = instruction
+    while (true) {
+      const page = await this.query<TType, TValue>(meta, pageInstruction, options)
+      yield page
+      const cursor = page.meta.next_cursor
+      if (cursor === undefined) return
+      if (typeof cursor !== 'string') {
+        throw new Error('Patchouli retrieval returned a non-string next_cursor')
+      }
+      pageInstruction = { ...instruction, cursor }
+    }
+  }
+
+  /** Retrieve active entities by ID through the same JSON query path. */
+  retrieveByIds<TType extends string = string, TValue extends JsonValue = JsonValue>(
+    meta: Meta,
+    ids: readonly string[],
+    options: EntityQueryOptions<TType> = {},
+  ): Promise<RetrieveEntitiesResult<TType, TValue>> {
+    return this.query<TType, TValue>(meta, { ids }, options)
+  }
+
+  /** Apply config-defined identity metadata to every mutation and close on the final call. */
+  async runWorkUnit<TResult>(
+    meta: Meta,
+    closeMeta: Meta,
+    mutations: readonly WorkUnitMutation<TResult>[],
+  ): Promise<readonly TResult[]> {
+    if (mutations.length === 0) {
+      throw new Error('Patchouli work unit requires at least one mutation')
+    }
+    const closeFields = Object.keys(closeMeta)
+    if (closeFields.length === 0) {
+      throw new Error('Patchouli work unit requires close metadata')
+    }
+    if (closeFields.some(field => Object.hasOwn(meta, field))) {
+      throw new Error('Patchouli work unit close metadata must not override base metadata')
+    }
+    const results: TResult[] = []
+    for (const [index, mutation] of mutations.entries()) {
+      const mutationMeta = index === mutations.length - 1
+        ? { ...meta, ...closeMeta }
+        : { ...meta }
+      results.push(await mutation(mutationMeta))
+    }
+    return results
   }
 
   async update<TType extends string = string, TValue extends JsonValue = JsonValue>(

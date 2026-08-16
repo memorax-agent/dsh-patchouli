@@ -26,6 +26,10 @@ const KNOWLEDGE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../packages/protocol/schemas/examples/knowledge@1.json"
 ));
+const KNOWLEDGE_RELATION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/protocol/schemas/examples/knowledge-relation@1.json"
+));
 
 #[tokio::test]
 async fn sqlite_replays_idempotent_mutations_and_retrieves_and_streams_changes() {
@@ -68,7 +72,7 @@ async fn sqlite_replays_idempotent_mutations_and_retrieves_and_streams_changes()
         .retrieve(RpcParams {
             meta: meta([]),
             data: RetrieveEntitiesData {
-                query: "needle".to_owned(),
+                query: json!({ "text": "needle" }).to_string(),
                 types: Some(vec!["knowledge".to_owned()]),
                 limit: 10,
             },
@@ -101,7 +105,7 @@ async fn default_retrieval_across_all_entity_types_does_not_reacquire_the_same_l
         engine.retrieve(RpcParams {
             meta: meta([]),
             data: RetrieveEntitiesData {
-                query: "nothing".to_owned(),
+                query: json!({ "text": "nothing" }).to_string(),
                 types: None,
                 limit: 10,
             },
@@ -111,6 +115,150 @@ async fn default_retrieval_across_all_entity_types_does_not_reacquire_the_same_l
     .expect("multi-type retrieval must not deadlock")
     .unwrap();
     assert!(result.data.hits.is_empty());
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn json_retrieval_queries_filter_relations_and_page_stably() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = start_engine(&directory.path().join("patchouli.db")).await;
+    for (id, text, source, sequence) in [
+        ("knowledge-a", "alpha needle context", "first", 1),
+        ("knowledge-b", "beta context", "second", 2),
+        ("knowledge-c", "gamma context", "first", 3),
+    ] {
+        let mut value = knowledge(text, source);
+        value["metadata"]["extensions"]["test.source"]["sequence"] = json!(sequence);
+        engine
+            .create(RpcParams {
+                meta: meta([]),
+                data: CreateEntityData {
+                    entity_type: "knowledge".to_owned(),
+                    id: Some(id.to_owned()),
+                    value,
+                },
+            })
+            .await
+            .unwrap();
+    }
+
+    let mut relation: Value = serde_json::from_str(KNOWLEDGE_RELATION).unwrap();
+    relation["from"] = json!([{ "type": "knowledge", "id": "knowledge-a" }]);
+    relation["to"] = json!([{ "type": "knowledge", "id": "knowledge-b" }]);
+    engine
+        .create(RpcParams {
+            meta: meta([]),
+            data: CreateEntityData {
+                entity_type: "knowledge_relation".to_owned(),
+                id: Some("relation-a-b".to_owned()),
+                value: relation,
+            },
+        })
+        .await
+        .unwrap();
+
+    let filtered = engine
+        .retrieve(RpcParams {
+            meta: meta([]),
+            data: RetrieveEntitiesData {
+                query: json!({
+                    "ids": ["knowledge-a", "knowledge-c"],
+                    "where": {
+                        "/metadata/extensions/test.source/source": "first",
+                        "/metadata/extensions/test.source/sequence": { "$gte": 2 }
+                    },
+                    "order": "id_asc"
+                })
+                .to_string(),
+                types: Some(vec!["knowledge".to_owned()]),
+                limit: 10,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(hit_ids(&filtered.data.hits), ["knowledge-c"]);
+
+    let text = engine
+        .retrieve(RpcParams {
+            meta: meta([]),
+            data: RetrieveEntitiesData {
+                query: json!({ "text": "alpha needle" }).to_string(),
+                types: Some(vec!["knowledge".to_owned()]),
+                limit: 10,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(hit_ids(&text.data.hits), ["knowledge-a"]);
+    assert!(text.data.hits[0].score > 0.0);
+
+    let related = engine
+        .retrieve(RpcParams {
+            meta: meta([]),
+            data: RetrieveEntitiesData {
+                query: json!({
+                    "where": {
+                        "/from": {
+                            "$contains": { "type": "knowledge", "id": "knowledge-a" }
+                        }
+                    }
+                })
+                .to_string(),
+                types: Some(vec!["knowledge_relation".to_owned()]),
+                limit: 10,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(hit_ids(&related.data.hits), ["relation-a-b"]);
+
+    let first_page = engine
+        .retrieve(RpcParams {
+            meta: meta([]),
+            data: RetrieveEntitiesData {
+                query: json!({ "order": "id_asc" }).to_string(),
+                types: Some(vec!["knowledge".to_owned()]),
+                limit: 2,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        hit_ids(&first_page.data.hits),
+        ["knowledge-a", "knowledge-b"]
+    );
+    let cursor = first_page.meta.get("next_cursor").unwrap().clone();
+    let second_page = engine
+        .retrieve(RpcParams {
+            meta: meta([]),
+            data: RetrieveEntitiesData {
+                query: json!({ "order": "id_asc", "cursor": cursor.clone() }).to_string(),
+                types: Some(vec!["knowledge".to_owned()]),
+                limit: 2,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(hit_ids(&second_page.data.hits), ["knowledge-c"]);
+    assert!(!second_page.meta.contains_key("next_cursor"));
+
+    let mismatched_cursor = engine
+        .retrieve(RpcParams {
+            meta: meta([]),
+            data: RetrieveEntitiesData {
+                query: json!({
+                    "ids": ["knowledge-a"],
+                    "order": "id_asc",
+                    "cursor": cursor,
+                })
+                .to_string(),
+                types: Some(vec!["knowledge".to_owned()]),
+                limit: 2,
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(mismatched_cursor.reason, BackendErrorReason::InvalidRequest);
     engine.shutdown().await.unwrap();
 }
 
@@ -1178,6 +1326,15 @@ fn knowledge(text: &str, source: &str) -> Value {
         "test.source": { "source": source }
     });
     value
+}
+
+fn hit_ids(hits: &[patchouli_backend::RetrievalHit]) -> Vec<&str> {
+    hits.iter()
+        .map(|hit| match &hit.variants[0] {
+            EntityVersion::Active { entity_ref, .. }
+            | EntityVersion::Deleted { entity_ref, .. } => entity_ref.id.as_str(),
+        })
+        .collect()
 }
 
 fn version(entity: &EntityVersion) -> String {

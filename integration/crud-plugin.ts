@@ -331,7 +331,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     meta: callMeta('retrieve'),
     data: {
       meta: databaseMeta,
-      data: { query: '代码审查', types: ['knowledge'], limit: 10 },
+      data: { query: JSON.stringify({ text: '代码审查' }), types: ['knowledge'], limit: 10 },
     },
   }))
   assert.equal(retrieved.data.hits.length, 1)

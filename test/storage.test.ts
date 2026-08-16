@@ -20,6 +20,8 @@ test('bridges storage requests and change notifications', async (t) => {
   let serverSocket: Socket | undefined
   let nextSubscriptionId = 1
   let unsubscribeRequests = 0
+  const retrievalRequests: Array<{ data: { query: string } }> = []
+  const successfulCreateRequests: Array<{ meta: Record<string, unknown> }> = []
   const server = createServer((socket) => {
     serverSocket = socket
     let buffer = ''
@@ -40,16 +42,20 @@ test('bridges storage requests and change notifications', async (t) => {
           continue
         }
         if (request.method === 'patchouli.entity.retrieve@1') {
+          retrievalRequests.push(request.params)
+          const instruction = JSON.parse(request.params.data.query)
+          const secondPage = instruction.cursor === 'cursor-page-1'
+          const paged = instruction.order === 'id_asc'
           socket.write(JSON.stringify({
             jsonrpc: '2.0',
             id: request.id,
             result: {
-              meta: {},
+              meta: paged && !secondPage ? { next_cursor: 'cursor-page-1' } : {},
               data: {
                 hits: [{
                   score: 1,
                   variants: [{
-                    ref: { type: 'event', id: 'event-1' },
+                    ref: { type: 'event', id: secondPage ? 'event-2' : 'event-1' },
                     version: 'version-1',
                     state: 'active',
                     value: { payload: 'hello' },
@@ -61,6 +67,28 @@ test('bridges storage requests and change notifications', async (t) => {
           continue
         }
         if (request.method === 'patchouli.entity.create@1') {
+          if (request.params.meta.fixture_success === true) {
+            successfulCreateRequests.push(request.params)
+            socket.write(JSON.stringify({
+              jsonrpc: '2.0',
+              id: request.id,
+              result: {
+                meta: {},
+                data: {
+                  entity: {
+                    ref: {
+                      type: request.params.data.type,
+                      id: request.params.data.id,
+                    },
+                    version: `version-${successfulCreateRequests.length}`,
+                    state: 'active',
+                    value: request.params.data.value,
+                  },
+                },
+              },
+            }) + '\n')
+            continue
+          }
           socket.write(JSON.stringify({
             jsonrpc: '2.0',
             id: request.id,
@@ -198,7 +226,7 @@ test('bridges storage requests and change notifications', async (t) => {
   assert.equal((await ctx.patchouli.checkpoint()).data.completed, true)
   const retrieval = await ctx.patchouli.retrieve({
     meta: { workspace: 'test' },
-    data: { query: 'hello', types: ['event'], limit: 1 },
+    data: { query: JSON.stringify({ text: 'hello' }), types: ['event'], limit: 1 },
   })
   assert.equal(retrieval.data.hits.length, 1)
   const hit = retrieval.data.hits[0]
@@ -207,6 +235,79 @@ test('bridges storage requests and change notifications', async (t) => {
   const variant = hit.variants[0]
   assert.ok(variant)
   assert.equal(variant.ref.id, 'event-1')
+
+  await ctx.patchouli.query(
+    { workspace: 'test' },
+    { text: 'hello', where: { '/payload': 'hello' } },
+    { types: ['event'], limit: 1 },
+  )
+  assert.deepEqual(
+    JSON.parse(retrievalRequests.at(-1)!.data.query),
+    { text: 'hello', where: { '/payload': 'hello' } },
+  )
+
+  const pageIds: string[] = []
+  for await (const page of ctx.patchouli.queryPages(
+    { workspace: 'test' },
+    { order: 'id_asc' },
+    { types: ['event'], limit: 1 },
+  )) {
+    pageIds.push(page.data.hits[0]!.variants[0]!.ref.id)
+  }
+  assert.deepEqual(pageIds, ['event-1', 'event-2'])
+  assert.deepEqual(
+    JSON.parse(retrievalRequests.at(-1)!.data.query),
+    { order: 'id_asc', cursor: 'cursor-page-1' },
+  )
+
+  await ctx.patchouli.retrieveByIds(
+    { workspace: 'test' },
+    ['event-1', 'event-2'],
+    { types: ['event'], limit: 2 },
+  )
+  assert.deepEqual(
+    JSON.parse(retrievalRequests.at(-1)!.data.query),
+    { ids: ['event-1', 'event-2'] },
+  )
+
+  const workUnit = await ctx.patchouli.runWorkUnit(
+    { workspace: 'test', work_id: 'work-1', fixture_success: true },
+    { work_state: 'commit' },
+    [
+      meta => ctx.patchouli.create({
+        meta,
+        data: { type: 'event', id: 'work-event-1', value: { payload: 'first' } },
+      }),
+      meta => ctx.patchouli.create({
+        meta,
+        data: { type: 'event', id: 'work-event-2', value: { payload: 'second' } },
+      }),
+    ],
+  )
+  assert.equal(workUnit.length, 2)
+  assert.deepEqual(successfulCreateRequests[0]!.meta, {
+    workspace: 'test',
+    work_id: 'work-1',
+    fixture_success: true,
+  })
+  assert.deepEqual(successfulCreateRequests[1]!.meta, {
+    workspace: 'test',
+    work_id: 'work-1',
+    fixture_success: true,
+    work_state: 'commit',
+  })
+  await assert.rejects(
+    ctx.patchouli.runWorkUnit({}, {}, []),
+    /requires at least one mutation/,
+  )
+  await assert.rejects(
+    ctx.patchouli.runWorkUnit(
+      { work_id: 'one' },
+      { work_id: 'two' },
+      [async () => undefined],
+    ),
+    /must not override base metadata/,
+  )
 
   const events: ChangesEventParams[] = []
   const subscription = await ctx.patchouli.subscribe({

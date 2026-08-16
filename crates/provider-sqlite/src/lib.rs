@@ -1,4 +1,6 @@
 use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
     ffi::OsString,
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
@@ -14,17 +16,19 @@ use patchouli_provider::{
     ChangePage, ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit,
     EntityCommitOutcome, EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord,
     IdempotentCommitOutcome, Provider, ProviderCapabilities, ProviderError, ProviderRecovery,
-    RetrieveQuery, RetrievedEntity, StoredChange, StoredChangeKind, StoredCrdtChange,
+    RetrieveCursor, RetrieveFilter, RetrieveFilterOperator, RetrieveOrder, RetrieveQuery,
+    RetrievedEntity, RetrievedPage, StoredChange, StoredChangeKind, StoredCrdtChange,
     StoredCrdtField, StoredEntityVersion, StoredVersionState, WorkUnit, WorkUnitCommit,
     WorkUnitCommitOutcome, WorkUnitConflict, WorkUnitExpiryAction, WorkUnitPublish,
     WorkUnitReadOutcome,
 };
+use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::{Mutex, watch};
 use tokio_rusqlite::rusqlite::OptionalExtension;
 use tokio_rusqlite::{Connection, rusqlite};
 
-const STORAGE_SCHEMA_VERSION: i64 = 11;
+const STORAGE_SCHEMA_VERSION: i64 = 12;
 
 #[derive(Debug, Error)]
 pub enum SqliteProviderError {
@@ -410,6 +414,24 @@ impl Provider for SqliteProvider {
                             )
                         ) STRICT;
 
+                        CREATE VIRTUAL TABLE IF NOT EXISTS patchouli_entity_fts USING fts5(
+                            value_json,
+                            tokenize = 'trigram case_sensitive 0'
+                        );
+                        CREATE TRIGGER IF NOT EXISTS patchouli_entity_fts_insert
+                        AFTER INSERT ON patchouli_entity_version
+                        WHEN NEW.state = 'active'
+                        BEGIN
+                            INSERT INTO patchouli_entity_fts (rowid, value_json)
+                            VALUES (NEW.rowid, NEW.value_json);
+                        END;
+                        CREATE TRIGGER IF NOT EXISTS patchouli_entity_fts_delete
+                        AFTER DELETE ON patchouli_entity_version
+                        WHEN OLD.state = 'active'
+                        BEGIN
+                            DELETE FROM patchouli_entity_fts WHERE rowid = OLD.rowid;
+                        END;
+
                         CREATE TABLE IF NOT EXISTS patchouli_work_unit_entity (
                             work_unit_json TEXT NOT NULL,
                             scope_json TEXT NOT NULL,
@@ -704,6 +726,21 @@ impl Provider for SqliteProvider {
                     )
                     .map_err(database_error)?;
 
+                transaction
+                    .execute(
+                        "INSERT INTO patchouli_entity_fts (rowid, value_json)
+                         SELECT version.rowid, version.value_json
+                         FROM patchouli_entity_version AS version
+                         WHERE version.state = 'active'
+                           AND NOT EXISTS (
+                               SELECT 1
+                               FROM patchouli_entity_fts AS indexed
+                               WHERE indexed.rowid = version.rowid
+                           )",
+                        [],
+                    )
+                    .map_err(database_error)?;
+
                 expire_open_work_units(&transaction, started_at_unix_ms)?;
 
                 let (generation, running): (u64, bool) = transaction
@@ -820,7 +857,7 @@ impl Provider for SqliteProvider {
     async fn retrieve_entities(
         &self,
         query: RetrieveQuery,
-    ) -> Result<Vec<RetrievedEntity>, ProviderError> {
+    ) -> Result<RetrievedPage, ProviderError> {
         let connection = self.connection().await?;
         connection
             .call(move |connection| retrieve_entities(connection, &query))
@@ -1376,50 +1413,344 @@ fn read_changes(
 fn retrieve_entities(
     connection: &rusqlite::Connection,
     query: &RetrieveQuery,
-) -> Result<Vec<RetrievedEntity>, ProviderError> {
-    let keys = connection
-        .prepare(
-            "SELECT DISTINCT version.entity_type, version.entity_id,
-                    max(version.recorded_at_unix_ms) AS newest
+) -> Result<RetrievedPage, ProviderError> {
+    let filters = query
+        .filters
+        .iter()
+        .map(|filter| {
+            Ok((
+                filter,
+                serde_json::from_str::<Value>(&filter.value_json).map_err(|error| {
+                    ProviderError::new(format!("invalid retrieval filter value: {error}"))
+                })?,
+            ))
+        })
+        .collect::<Result<Vec<_>, ProviderError>>()?;
+    let mut candidates = BTreeMap::new();
+    for version in matching_versions(connection, query)? {
+        let value: Value = serde_json::from_str(&version.value_json).map_err(|error| {
+            ProviderError::new(format!(
+                "invalid stored entity value during retrieval: {error}"
+            ))
+        })?;
+        if !filters
+            .iter()
+            .all(|(filter, expected)| matches_filter(&value, filter, expected))
+        {
+            continue;
+        }
+        let key = (version.entity_type.clone(), version.entity_id.clone());
+        candidates
+            .entry(key)
+            .and_modify(|candidate: &mut RetrievalCandidate| {
+                candidate.score = candidate.score.max(version.score);
+                candidate.recorded_at_unix_ms = candidate
+                    .recorded_at_unix_ms
+                    .max(version.recorded_at_unix_ms);
+            })
+            .or_insert(RetrievalCandidate {
+                entity_type: version.entity_type,
+                entity_id: version.entity_id,
+                score: version.score,
+                recorded_at_unix_ms: version.recorded_at_unix_ms,
+            });
+    }
+
+    let mut candidates = candidates.into_values().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| compare_candidates(left, right, query.order));
+    if let Some(cursor) = &query.after {
+        candidates.retain(|candidate| {
+            compare_candidate_to_cursor(candidate, cursor, query.order) == Ordering::Greater
+        });
+    }
+    let has_more = candidates.len() > query.limit;
+    candidates.truncate(query.limit);
+    let next_cursor = has_more.then(|| {
+        candidate_cursor(
+            candidates
+                .last()
+                .expect("a page with more results has a last candidate"),
+            query.order,
+            &query.fingerprint,
+        )
+    });
+
+    let mut entities = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let key = EntityKey {
+            scope_json: query.scope_json.clone(),
+            entity_type: candidate.entity_type,
+            entity_id: candidate.entity_id,
+        };
+        if let Some(snapshot) = read_entity_snapshot(connection, &key)? {
+            entities.push(RetrievedEntity {
+                key,
+                snapshot,
+                score: candidate.score,
+                recorded_at_unix_ms: candidate.recorded_at_unix_ms,
+            });
+        }
+    }
+    Ok(RetrievedPage {
+        entities,
+        next_cursor,
+    })
+}
+
+#[derive(Debug)]
+struct MatchedVersion {
+    entity_type: String,
+    entity_id: String,
+    value_json: String,
+    recorded_at_unix_ms: u64,
+    score: f64,
+}
+
+#[derive(Debug, Default)]
+struct RetrievalCandidate {
+    entity_type: String,
+    entity_id: String,
+    recorded_at_unix_ms: u64,
+    score: f64,
+}
+
+fn matching_versions(
+    connection: &rusqlite::Connection,
+    query: &RetrieveQuery,
+) -> Result<Vec<MatchedVersion>, ProviderError> {
+    let mut parameters = vec![rusqlite::types::Value::Text(query.scope_json.clone())];
+    let mut sql = match &query.text {
+        None => "SELECT version.entity_type, version.entity_id, version.value_json,
+                        version.recorded_at_unix_ms, 0.0
+                 FROM patchouli_entity_version AS version
+                 INNER JOIN patchouli_entity_head AS head USING (
+                    scope_json, entity_type, entity_id, version
+                 )
+                 WHERE version.scope_json = ? AND version.state = 'active'"
+            .to_owned(),
+        Some(text) if text.chars().count() < 3 => {
+            parameters.push(rusqlite::types::Value::Text(text.clone()));
+            "SELECT version.entity_type, version.entity_id, version.value_json,
+                    version.recorded_at_unix_ms, 1.0
              FROM patchouli_entity_version AS version
              INNER JOIN patchouli_entity_head AS head USING (
                 scope_json, entity_type, entity_id, version
              )
-             WHERE version.scope_json = ?1
+             WHERE version.scope_json = ?
                AND version.state = 'active'
-               AND instr(lower(version.value_json), lower(?2)) > 0
-             GROUP BY version.entity_type, version.entity_id
-             ORDER BY newest DESC",
+               AND instr(lower(version.value_json), lower(?)) > 0"
+                .to_owned()
+        }
+        Some(text) => {
+            parameters.push(rusqlite::types::Value::Text(format!(
+                "\"{}\"",
+                text.replace('"', "\"\"")
+            )));
+            "SELECT version.entity_type, version.entity_id, version.value_json,
+                    version.recorded_at_unix_ms, -bm25(patchouli_entity_fts)
+             FROM patchouli_entity_fts
+             INNER JOIN patchouli_entity_version AS version
+                ON version.rowid = patchouli_entity_fts.rowid
+             INNER JOIN patchouli_entity_head AS head USING (
+                scope_json, entity_type, entity_id, version
+             )
+             WHERE version.scope_json = ?
+               AND version.state = 'active'
+               AND patchouli_entity_fts MATCH ?"
+                .to_owned()
+        }
+    };
+    append_entity_selection(&mut sql, &mut parameters, query);
+    connection
+        .prepare(&sql)
+        .map_err(database_error)?
+        .query_map(
+            rusqlite::params_from_iter(parameters.iter()),
+            matched_version,
         )
         .map_err(database_error)?
-        .query_map((&query.scope_json, &query.query), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(database_error)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(database_error)?;
-    let mut entities = Vec::new();
-    for (entity_type, entity_id) in keys {
-        if query
-            .entity_types
-            .as_ref()
-            .is_some_and(|types| !types.contains(&entity_type))
-        {
-            continue;
-        }
-        let key = EntityKey {
-            scope_json: query.scope_json.clone(),
-            entity_type,
-            entity_id,
-        };
-        if let Some(snapshot) = read_entity_snapshot(connection, &key)? {
-            entities.push(RetrievedEntity { key, snapshot });
-        }
-        if entities.len() == query.limit {
-            break;
-        }
+        .map_err(database_error)
+}
+
+fn append_entity_selection(
+    sql: &mut String,
+    parameters: &mut Vec<rusqlite::types::Value>,
+    query: &RetrieveQuery,
+) {
+    if let Some(types) = &query.entity_types {
+        append_in_predicate(sql, parameters, "version.entity_type", types);
     }
-    Ok(entities)
+    if let Some(ids) = &query.entity_ids {
+        append_in_predicate(sql, parameters, "version.entity_id", ids);
+    }
+}
+
+fn append_in_predicate(
+    sql: &mut String,
+    parameters: &mut Vec<rusqlite::types::Value>,
+    column: &str,
+    values: &[String],
+) {
+    sql.push_str(" AND ");
+    sql.push_str(column);
+    sql.push_str(" IN (");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            sql.push_str(", ");
+        }
+        sql.push('?');
+        parameters.push(rusqlite::types::Value::Text(value.clone()));
+    }
+    sql.push(')');
+}
+
+fn matched_version(row: &rusqlite::Row<'_>) -> rusqlite::Result<MatchedVersion> {
+    let recorded_at_unix_ms = row.get::<_, i64>(3)?;
+    Ok(MatchedVersion {
+        entity_type: row.get(0)?,
+        entity_id: row.get(1)?,
+        value_json: row.get(2)?,
+        recorded_at_unix_ms: u64::try_from(recorded_at_unix_ms)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(3, recorded_at_unix_ms))?,
+        score: row.get(4)?,
+    })
+}
+
+fn matches_filter(value: &Value, filter: &RetrieveFilter, expected: &Value) -> bool {
+    let Some(actual) = value.pointer(&filter.pointer) else {
+        return false;
+    };
+    match filter.operator {
+        RetrieveFilterOperator::Equal => actual == expected,
+        RetrieveFilterOperator::NotEqual => actual != expected,
+        RetrieveFilterOperator::LessThan => compare_json(actual, expected) == Some(Ordering::Less),
+        RetrieveFilterOperator::LessThanOrEqual => {
+            matches!(
+                compare_json(actual, expected),
+                Some(Ordering::Less | Ordering::Equal)
+            )
+        }
+        RetrieveFilterOperator::GreaterThan => {
+            compare_json(actual, expected) == Some(Ordering::Greater)
+        }
+        RetrieveFilterOperator::GreaterThanOrEqual => {
+            matches!(
+                compare_json(actual, expected),
+                Some(Ordering::Greater | Ordering::Equal)
+            )
+        }
+        RetrieveFilterOperator::Contains => match (actual, expected) {
+            (Value::Array(values), expected) => values.contains(expected),
+            (Value::String(value), Value::String(expected)) => value.contains(expected),
+            _ => false,
+        },
+    }
+}
+
+fn compare_json(left: &Value, right: &Value) -> Option<Ordering> {
+    match (left, right) {
+        (Value::String(left), Value::String(right)) => Some(left.cmp(right)),
+        (Value::Number(left), Value::Number(right)) => {
+            if let (Some(left), Some(right)) = (left.as_i64(), right.as_i64()) {
+                Some(left.cmp(&right))
+            } else if let (Some(left), Some(right)) = (left.as_u64(), right.as_u64()) {
+                Some(left.cmp(&right))
+            } else {
+                left.as_f64()?.partial_cmp(&right.as_f64()?)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn compare_candidates(
+    left: &RetrievalCandidate,
+    right: &RetrievalCandidate,
+    order: RetrieveOrder,
+) -> Ordering {
+    compare_retrieval_keys(
+        (
+            left.score,
+            left.recorded_at_unix_ms,
+            &left.entity_type,
+            &left.entity_id,
+        ),
+        (
+            right.score,
+            right.recorded_at_unix_ms,
+            &right.entity_type,
+            &right.entity_id,
+        ),
+        order,
+    )
+}
+
+fn compare_candidate_to_cursor(
+    candidate: &RetrievalCandidate,
+    cursor: &RetrieveCursor,
+    order: RetrieveOrder,
+) -> Ordering {
+    compare_retrieval_keys(
+        (
+            candidate.score,
+            candidate.recorded_at_unix_ms,
+            &candidate.entity_type,
+            &candidate.entity_id,
+        ),
+        (
+            cursor.score,
+            cursor.recorded_at_unix_ms,
+            &cursor.entity_type,
+            &cursor.entity_id,
+        ),
+        order,
+    )
+}
+
+fn compare_retrieval_keys(
+    left: (f64, u64, &str, &str),
+    right: (f64, u64, &str, &str),
+    order: RetrieveOrder,
+) -> Ordering {
+    let (left_score, left_recorded, left_type, left_id) = left;
+    let (right_score, right_recorded, right_type, right_id) = right;
+    match order {
+        RetrieveOrder::Relevance => right_score
+            .total_cmp(&left_score)
+            .then_with(|| right_recorded.cmp(&left_recorded))
+            .then_with(|| left_type.cmp(right_type))
+            .then_with(|| left_id.cmp(right_id)),
+        RetrieveOrder::Newest => right_recorded
+            .cmp(&left_recorded)
+            .then_with(|| left_type.cmp(right_type))
+            .then_with(|| left_id.cmp(right_id)),
+        RetrieveOrder::Oldest => left_recorded
+            .cmp(&right_recorded)
+            .then_with(|| left_type.cmp(right_type))
+            .then_with(|| left_id.cmp(right_id)),
+        RetrieveOrder::IdAscending => left_id
+            .cmp(right_id)
+            .then_with(|| left_type.cmp(right_type)),
+        RetrieveOrder::IdDescending => right_id
+            .cmp(left_id)
+            .then_with(|| right_type.cmp(left_type)),
+    }
+}
+
+fn candidate_cursor(
+    candidate: &RetrievalCandidate,
+    order: RetrieveOrder,
+    query_fingerprint: &str,
+) -> RetrieveCursor {
+    RetrieveCursor {
+        order,
+        query_fingerprint: query_fingerprint.to_owned(),
+        score: candidate.score,
+        recorded_at_unix_ms: candidate.recorded_at_unix_ms,
+        entity_type: candidate.entity_type.clone(),
+        entity_id: candidate.entity_id.clone(),
+    }
 }
 
 fn read_entity_snapshot(

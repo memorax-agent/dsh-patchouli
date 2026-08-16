@@ -16,8 +16,9 @@ overrides. The conflict resolver implements Automerge for configured JSON
 fields and MVCC variants for other data. Engine startup retains a validated
 immutable policy and a healthy injected provider. Shared snapshot plus marker
 publication runs as a durable work unit. SQLite-backed causal/session frontiers,
-immediate and batch keyed idempotency, retained change streams, and lexical
-retrieval are executable. Configuration version 1 deliberately exposes only
+immediate and batch keyed idempotency, retained change streams, and JSON-directed
+filtering, pagination, relation lookup, and full-text retrieval are executable.
+Configuration version 1 deliberately exposes only
 marker close plus discard-on-expiry rather than advertising unfinished modes.
 
 Entity kinds remain opaque to the CRUD protocol. The backend additionally

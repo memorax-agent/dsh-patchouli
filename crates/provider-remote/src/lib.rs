@@ -12,7 +12,7 @@ use patchouli_provider::{
     ChangePage, ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit,
     EntityCommitOutcome, EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord,
     IdempotentCommitOutcome, Provider, ProviderCapabilities, ProviderError, ProviderErrorReason,
-    ProviderRecovery, RetrieveQuery, RetrievedEntity, WorkUnit, WorkUnitCommit,
+    ProviderRecovery, RetrieveQuery, RetrievedPage, WorkUnit, WorkUnitCommit,
     WorkUnitCommitOutcome, WorkUnitPublish, WorkUnitReadOutcome,
 };
 use reqwest::{Client, Url, redirect::Policy};
@@ -21,7 +21,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::watch;
 
 // Bump this whenever a serialized provider call, reply, info, or error shape changes.
-const REMOTE_PROVIDER_PROTOCOL: u16 = 2;
+const REMOTE_PROVIDER_PROTOCOL: u16 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteProviderInfo {
@@ -271,7 +271,7 @@ impl Provider for RemoteProvider {
     async fn retrieve_entities(
         &self,
         query: RetrieveQuery,
-    ) -> Result<Vec<RetrievedEntity>, ProviderError> {
+    ) -> Result<RetrievedPage, ProviderError> {
         match self.call(ProviderCall::RetrieveEntities(query)).await? {
             ProviderReply::Retrieved(value) => Ok(value),
             reply => Err(unexpected_reply(reply)),
@@ -670,7 +670,7 @@ enum ProviderReply {
     Entity(Option<EntitySnapshot>),
     Consistency(ConsistencyAcquireOutcome),
     Changes(ChangePage),
-    Retrieved(Vec<RetrievedEntity>),
+    Retrieved(RetrievedPage),
     EntityCommit(EntityCommitOutcome),
     IdempotencyRead(IdempotencyReadOutcome),
     IdempotentCommit(IdempotentCommitOutcome),
@@ -695,8 +695,8 @@ mod wire_tests {
     use super::{ProviderCall, ProviderReply, REMOTE_PROVIDER_PROTOCOL};
 
     #[test]
-    fn protocol_v2_commit_fixture_is_stable() {
-        assert_eq!(REMOTE_PROVIDER_PROTOCOL, 2);
+    fn protocol_v3_commit_fixture_is_stable() {
+        assert_eq!(REMOTE_PROVIDER_PROTOCOL, 3);
         let call = ProviderCall::CommitEntity(EntityCommit {
             key: EntityKey {
                 scope_json: r#"{"workspace_id":"one"}"#.to_owned(),
