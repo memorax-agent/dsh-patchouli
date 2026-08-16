@@ -3,8 +3,11 @@ node_modules/
 
 # Build and package output
 lib/
+target/
 artifacts/
 *.tgz
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 
 # Test output
 coverage/
@@ -15,12 +18,14 @@ coverage/
 *.db
 *.db-shm
 *.db-wal
+*.db.lock
 
 # Local configuration and secrets
 .env
 .env.*
 !.env.example
 *.local
+PRODUCT.md
 
 # Logs
 *.log

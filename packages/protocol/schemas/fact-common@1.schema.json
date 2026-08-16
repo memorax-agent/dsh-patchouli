@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:patchouli:schema:fact-common:1",
+  "title": "Patchouli fact common types version 1",
+  "$defs": {
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nullable_string": {
+      "oneOf": [
+        { "$ref": "#/$defs/non_empty_string" },
+        { "type": "null" }
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "nullable_timestamp": {
+      "oneOf": [
+        { "$ref": "#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "knowledge_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "knowledge" },
+        "id": { "$ref": "#/$defs/non_empty_string" }
+      }
+    },
+    "artifact_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id", "role"],
+      "properties": {
+        "type": { "const": "artifact" },
+        "id": { "$ref": "#/$defs/non_empty_string" },
+        "role": {
+          "type": "string",
+          "enum": ["source", "attachment", "embedding"]
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant", "workspace", "user", "session"],
+      "properties": {
+        "tenant": { "$ref": "#/$defs/nullable_string" },
+        "workspace": { "$ref": "#/$defs/nullable_string" },
+        "user": { "$ref": "#/$defs/nullable_string" },
+        "session": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "binding", "native_type", "native_id", "native_revision"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/nullable_string" },
+        "binding": { "$ref": "#/$defs/nullable_string" },
+        "native_type": { "$ref": "#/$defs/nullable_string" },
+        "native_id": { "$ref": "#/$defs/nullable_string" },
+        "native_revision": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_at", "source_created_at", "source_updated_at", "observed_at", "ingested_at"],
+      "properties": {
+        "event_at": { "$ref": "#/$defs/nullable_timestamp" },
+        "source_created_at": { "$ref": "#/$defs/nullable_timestamp" },
+        "source_updated_at": { "$ref": "#/$defs/nullable_timestamp" },
+        "observed_at": { "$ref": "#/$defs/timestamp" },
+        "ingested_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "expires_at"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["active", "superseded", "retracted"]
+        },
+        "expires_at": { "$ref": "#/$defs/nullable_timestamp" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "actor", "source", "recorded_at"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["observed", "asserted", "derived", "imported"]
+        },
+        "actor": { "$ref": "#/$defs/non_empty_string" },
+        "source": { "$ref": "#/$defs/nullable_string" },
+        "recorded_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "metadata_core": {
+      "type": "object",
+      "required": ["scope", "origin", "time", "lifecycle", "provenance"],
+      "properties": {
+        "scope": { "$ref": "#/$defs/scope" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "time": { "$ref": "#/$defs/time" },
+        "lifecycle": { "$ref": "#/$defs/lifecycle" },
+        "provenance": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/provenance" },
+          "maxItems": 64
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*(\\.[A-Za-z0-9][A-Za-z0-9_-]*)+$"
+      },
+      "additionalProperties": {
+        "type": "object"
+      }
+    }
+  }
+}

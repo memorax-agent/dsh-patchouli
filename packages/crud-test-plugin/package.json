@@ -1,0 +1,32 @@
+{
+  "name": "@memorax-agent/dsh-patchouli-crud-test-plugin",
+  "version": "0.1.0",
+  "description": "Test-only passthrough CRUD MemoryPlugin for Patchouli",
+  "private": true,
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "dsh-patchouli": "0.1.0"
+  },
+  "dependencies": {
+    "@memorax-agent/patchouli-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "dsh-patchouli": "workspace:*"
+  }
+}
