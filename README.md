@@ -42,7 +42,7 @@ compatible with `0.1.0-rc.6`. Until the first packaged release, install the
 current source branch:
 
 ```bash
-git clone --branch docs --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+git clone --branch main --single-branch https://github.com/memorax-agent/dsh-patchouli.git
 cd dsh-patchouli
 corepack enable
 pnpm install

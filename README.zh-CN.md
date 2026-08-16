@@ -39,7 +39,7 @@ DeepSeek Harness 是目前首个受支持的集成，数据库后端本身不依
 DeepSeek Harness。首个打包版本发布前，请从当前源码分支安装：
 
 ```bash
-git clone --branch docs --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+git clone --branch main --single-branch https://github.com/memorax-agent/dsh-patchouli.git
 cd dsh-patchouli
 corepack enable
 pnpm install
