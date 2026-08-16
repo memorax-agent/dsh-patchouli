@@ -31,90 +31,19 @@ Patchouli 是一个知识与记忆中台。应用通过稳定的 `update`、`ret
 - 提供持久化 cursor 与响应式订阅。
 - 提供支持 SQLite、远程 Provider、冲突处理、变更流和故障恢复的事务化 Rust 后端。
 
-## 架构
+## 详细文档
 
-```mermaid
-flowchart TB
-  subgraph dsh["DeepSeek Harness"]
-    direction LR
-    agentLoop["Agent Loop Plugin"]
-    otherPlugins["其它插件"]
-    connector["Agent Loop 连接器插件"]
-    middleware["Patchouli 协调中台插件"]
-    memoryPlugins["记忆 / 知识插件"]
+安装、DSH 集成、架构、一致性配置、知识模型和后端运维说明都在
+[Patchouli 文档站](https://memorax-agent.github.io/dsh-patchouli/)中。
 
-    connector -->|"注册 Hook 与记忆 Tool"| agentLoop
-    agentLoop -->|"Hook 回调 / Tool 执行"| connector
-
-    connector -->|"ctx.patchouliMemory.update() / retrieve()"| middleware
-    middleware -->|"MemoryPluginOutcome[]"| connector
-
-    otherPlugins -->|"ctx.patchouliMemory.update() / retrieve() / subscribe()"| middleware
-    middleware -->|"调用结果 / MemoryChangeEvent"| otherPlugins
-
-    memoryPlugins -->|"ctx.patchouliMemory.register(plugin, options)"| middleware
-    middleware -->|"MemoryPlugin.update() / retrieve() / subscribe()"| memoryPlugins
-  end
-
-  backend["Patchouli 数据库后端<br/>patchouli-db"]
-  middleware -->|"JSON-RPC 请求：CRUD / 事务 / 订阅"| backend
-  backend -->|"JSON-RPC 结果 / 变更通知"| middleware
-```
-
-大框内是 DSH 插件，`patchouli-db` 独立运行。每个方向分别使用一条箭头表示调用、结果、回调或通知。
+文档源码位于 [`docs/`](docs/)，规范性的 JSON-RPC 契约位于
+[`packages/protocol/SPEC.md`](packages/protocol/SPEC.md)。
 
 ## 当前状态
 
-目前已经实现：
-
-- DSH Memory Service、Agent Loop 连接器、Artifact Ingestor 和 cursor store；
-- Knowledge、Relation 与 Artifact 类型化实体；
-- 事务、冲突处理、检索、订阅，以及本地/远程 Provider 路由；
-- daemon 生命周期、checkpoint、WAL 恢复和受管 Artifact 文件库。
-
-Session 与 Workspace Indexer 目前只完成包边界；通用 Knowledge 抽取与检索插件尚未提供。
-
-## 快速开始
-
-环境要求：Node.js `^22.19.0` 或 `>=24.0.0`、pnpm 11 和 Rust stable。
-
-```bash
-corepack enable
-pnpm install
-pnpm check
-cargo test --workspace
-```
-
-将当前 checkout 安装到本地 DSH profile：
-
-```bash
-pnpm pack
-dsh plugin --profile web add .
-dsh --profile web --dump-config
-```
-
-在 macOS 或 Linux 安装可选的 `patchouli-db` 后端：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.sh | sh
-```
-
-Windows PowerShell：
-
-```powershell
-irm https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.ps1 | iex
-```
-
-安装器会在不覆盖现有配置的前提下初始化 `~/.patchouli`，不会修改 DSH profile 或注册系统服务。
-
-## 详细文档
-
-- [架构](docs/architecture.md)
-- [知识模型](docs/knowledge-model.md)
-- [后端配置](docs/backend-configuration.md)
-- [后端安装](docs/installation.md)
-- [开发与 CI](docs/development.md)
-- [JSON-RPC 协议](packages/protocol/SPEC.md)
+Memory Service、Agent Loop 连接器、Artifact Ingestor、事务化 Rust 后端、
+SQLite 与远程 Provider、冲突处理、变更流和生命周期恢复均已实现。Session
+与 Workspace Indexer 当前只完成包边界，尚未提供通用 Knowledge 抽取插件。
 
 ## 许可
 

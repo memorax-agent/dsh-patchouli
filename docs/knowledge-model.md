@@ -9,7 +9,7 @@ Patchouli fact IR version 1 has three public record values:
 
 They use the existing generic entity CRUD methods. No knowledge-specific JSON-RPC
 method exists. The canonical schemas and examples live under
-[`packages/protocol/schemas`](../packages/protocol/schemas/).
+[`packages/protocol/schemas`](https://github.com/memorax-agent/dsh-patchouli/tree/docs/packages/protocol/schemas).
 
 ## Identity
 

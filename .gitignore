@@ -6,6 +6,8 @@ lib/
 target/
 artifacts/
 *.tgz
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 
 # Test output
 coverage/
