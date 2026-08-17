@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-repository="memorax-agent/dsh-patchouli"
+repository="memorax-ai/dsh-patchouli"
 version="${PATCHOULI_VERSION:-latest}"
 install_dir="${PATCHOULI_INSTALL_DIR:-${HOME:?HOME is required}/.local/bin}"
 patchouli_home="${PATCHOULI_HOME:-${HOME:?HOME is required}/.patchouli}"

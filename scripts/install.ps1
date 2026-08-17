@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$repository = 'memorax-agent/dsh-patchouli'
+$repository = 'memorax-ai/dsh-patchouli'
 $version = if ($env:PATCHOULI_VERSION) { $env:PATCHOULI_VERSION } else { 'latest' }
 $installDir = if ($env:PATCHOULI_INSTALL_DIR) {
     [IO.Path]::GetFullPath($env:PATCHOULI_INSTALL_DIR)
