@@ -15,13 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Verify (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  node:
+    name: Verify Node
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -37,16 +33,23 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Check project
         run: pnpm check
+
+  rust_lint:
+    name: Lint Rust
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
@@ -54,14 +57,25 @@ jobs:
       - name: Lint Rust backend
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+  rust_test:
+    name: Test Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Test Rust backend
         run: cargo test --locked --workspace
 
-      - name: Test third-party plugin database loop
-        run: pnpm test:e2e
-
       - name: Check Unix installer syntax
-        if: runner.os != 'Windows'
+        if: runner.os == 'Linux'
         run: bash -n scripts/install.sh
 
       - name: Check Windows installer syntax
@@ -81,6 +95,46 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: scripts/test-install.ps1
+
+  e2e:
+    name: Test database loop
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test third-party plugin database loop
+        run: pnpm test:e2e
+
+  verify:
+    name: Verify
+    if: always()
+    needs: [node, rust_lint, rust_test, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check verification jobs
+        run: |
+          test "${{ needs.node.result }}" = success
+          test "${{ needs.rust_lint.result }}" = success
+          test "${{ needs.rust_test.result }}" = success
+          test "${{ needs.e2e.result }}" = success
 
   package-plugin:
     name: Package DSH plugin
