@@ -10,11 +10,11 @@
 
   [English](README.md) · **简体中文**
 
-  [![Documentation](https://img.shields.io/badge/docs-read-75439a?logo=readthedocs&logoColor=white)](https://memorax-agent.github.io/dsh-patchouli/)
-  [![CI](https://github.com/memorax-agent/dsh-patchouli/actions/workflows/ci.yml/badge.svg)](https://github.com/memorax-agent/dsh-patchouli/actions/workflows/ci.yml)
+  [![Documentation](https://img.shields.io/badge/docs-read-75439a?logo=readthedocs&logoColor=white)](https://memorax-ai.github.io/dsh-patchouli/)
+  [![CI](https://github.com/memorax-ai/dsh-patchouli/actions/workflows/ci.yml/badge.svg)](https://github.com/memorax-ai/dsh-patchouli/actions/workflows/ci.yml)
   [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
-  [![Node.js](https://img.shields.io/badge/Node.js-%5E22.19.0%20%7C%7C%20%3E%3D24-2f6f4e?logo=nodedotjs&logoColor=white)](https://memorax-agent.github.io/dsh-patchouli/installation)
-  [![Rust](https://img.shields.io/badge/Rust-stable-b55b3d?logo=rust&logoColor=white)](https://memorax-agent.github.io/dsh-patchouli/installation)
+  [![Node.js](https://img.shields.io/badge/Node.js-%5E22.19.0%20%7C%7C%20%3E%3D24-2f6f4e?logo=nodedotjs&logoColor=white)](https://memorax-ai.github.io/dsh-patchouli/installation)
+  [![Rust](https://img.shields.io/badge/Rust-stable-b55b3d?logo=rust&logoColor=white)](https://memorax-ai.github.io/dsh-patchouli/installation)
 </div>
 
 ## 概述
@@ -40,7 +40,7 @@ DeepSeek Harness 是目前首个受支持的集成，数据库后端本身不依
 DeepSeek Harness。首个打包版本发布前，请从当前源码分支安装：
 
 ```bash
-git clone --branch main --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+git clone --branch main --single-branch https://github.com/memorax-ai/dsh-patchouli.git
 cd dsh-patchouli
 corepack enable
 pnpm install
@@ -66,7 +66,7 @@ Agent Step 前检索信息、在 Turn 完成后写入信息，并向模型提供
 自动安装对应依赖。
 
 配置和各平台的详细说明参见
-[快速开始](https://memorax-agent.github.io/dsh-patchouli/getting-started)。
+[快速开始](https://memorax-ai.github.io/dsh-patchouli/getting-started)。
 
 ## 这个插件的名字是什么意思？？？
 

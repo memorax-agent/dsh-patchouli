@@ -38,7 +38,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/memorax-agent/dsh-patchouli.git",
+    "url": "git+https://github.com/memorax-ai/dsh-patchouli.git",
     "directory": "packages/protocol"
   }
 }

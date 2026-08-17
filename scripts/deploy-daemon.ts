@@ -29,7 +29,7 @@ for (const path of [installDir, join(deployRoot, 'run'), join(deployRoot, 'data'
 
 if (!process.env.PATCHOULI_PROVIDERS && !existsSync(providers)) {
   writeFileSync(providers, `${JSON.stringify({
-    $schema: 'https://github.com/memorax-agent/dsh-patchouli/blob/main/config/providers.schema.json',
+    $schema: 'https://github.com/memorax-ai/dsh-patchouli/blob/main/config/providers.schema.json',
     version: 1,
     providers: { local: { kind: 'local', database: 'data/patchouli.db' } },
     routing: { default: 'local', rules: [] },
