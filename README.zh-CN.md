@@ -34,6 +34,25 @@ DeepSeek Harness 是目前首个受支持的集成，数据库后端本身不依
 - 将图片和工作区文件摄取为类型化 Artifact。
 - 提供持久化订阅，以及支持 SQLite 和远程 Provider 的事务化 Rust 后端。
 
+## 插件兼容情况
+
+`Official`（官方兼容）表示上游插件直接注册 `patchouli` service；`Patch`
+（补丁兼容）表示 GOOJFC 通过 dsh-harmony 适配一个精确版本。目前还没有
+官方兼容的插件，以下已验证集成均为补丁兼容。
+
+| 插件 | 已验证包 | 兼容方式 |
+| --- | --- | --- |
+| [OpenViking](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin) | `@openviking/dsh-memory-plugin@0.1.0` | Patch |
+| [Hindsight](https://github.com/vectorize-io/hindsight/tree/main/hindsight-integrations/coding-agents) | `@vectorize-io/hindsight-coding-agents@0.3.4` | Patch |
+| [MemOS](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) | `@memtensor/memos-local-plugin@2.0.16-beta.1` | Patch |
+| [Mneme](https://github.com/modusensus/dsh-mneme) | `@modusensus/dsh-mneme@0.3.7` | Patch |
+| [Mnemon](https://github.com/omdsh-dev/dsh-mnemon) | `dsh-mnemon@0.1.6` | Patch |
+| [Memory Gate](https://github.com/GIT121995/dsh-memory-gate) | `dsh-memory-gate@0.9.0` | Patch |
+| [灵枢记忆](https://github.com/FuRongJun-1999/dsh-memory) | `@furongjun1999/dsh-memory@0.2.8` | Patch |
+| [Graph Memory](https://github.com/adoresever/graph-memory) | `graph-memory@1.5.8` | Patch |
+| [Engramory](https://github.com/tinqiao-oss/engramory/tree/master/adapters/dsh/plugin) | `dsh-engramory@0.2.0` | Patch |
+| [Memory Evolve](https://github.com/csyangwen/dsh-memory-evolve) | `dsh-memory-evolve@0.1.0` | Patch |
+
 ## 安装与使用
 
 需要 Node.js `^22.19.0 || >=24`、pnpm 11，以及兼容 `0.1.0-rc.6` 的
