@@ -49,7 +49,24 @@ function attributesOf(request: MemoryUpdateRequest | MemoryRetrieveRequest): Jso
 async function mountConsumer(t: TestContext, config: agentLoop.Config = {}) {
   const ctx = new Context()
   const fibers: Fiber[] = []
+  const persisted = new Map<string, { meta: Session['header'], events: Session['events'] }>()
   fibers.push(await ctx.plugin(SessionStore))
+  const disposeFlush = ctx.on('session/flush', (session) => {
+    persisted.set(String(session.header.id), structuredClone({
+      meta: session.header,
+      events: session.events,
+    }))
+  })
+  const disposePersistence = ctx.provide('sessionPersistence', {
+    async readFrom(id: string, fromSeq: number) {
+      const inspection = persisted.get(String(id))
+      if (inspection === undefined) throw new Error(`session ${id} is not persisted`)
+      return structuredClone({
+        meta: inspection.meta,
+        events: inspection.events.filter(event => event.seq >= fromSeq),
+      })
+    },
+  })
   fibers.push(await ctx.plugin(AgentRegistry))
   fibers.push(await ctx.plugin(SystemPrompt))
   fibers.push(await ctx.plugin(ToolRuntime))
@@ -58,6 +75,8 @@ async function mountConsumer(t: TestContext, config: agentLoop.Config = {}) {
   fibers.push(consumer)
   t.after(async () => {
     for (const fiber of fibers.reverse()) await fiber.dispose()
+    await disposePersistence()
+    await disposeFlush()
   })
   return { ctx, consumer }
 }

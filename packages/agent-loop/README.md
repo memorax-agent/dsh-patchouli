@@ -36,13 +36,19 @@ modelTools:
 | update | `agent/disposed` | Per-Session update queue |
 | update | `agent/request-error` | Per-Session update queue, without changing retry policy |
 | update | `agent/error` | Per-Session update queue |
-| update | `session/turn-end` | Complete committed turn event slice; enabled by default |
+| update | `session/turn-end` | Complete durable turn event slice; enabled by default |
 | update | `tools/result` | Frozen final Tool execution and result |
 
 All calls use `{ meta, data }`. `meta.attributes.point` identifies the row,
 while `data` contains only facts visible at that point. Updates are serialized
 per Session, and the adapter extends `session/flush` to wait for admitted update
 work.
+
+`session/turn-end` is deferred until `ctx.sessions.flush(session)` completes,
+then read back through `ctx.sessionPersistence`. Both `data.session.events` and
+`data.events` therefore come from the durable Session Event Log rather than the
+live in-memory Session. The connector requires the official
+`sessionPersistence` service for this boundary.
 
 The `memory_update` Tool accepts optional `messages` and `resources`; at least
 one must be present. A resource is a JSON request for a workspace file, not its

@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { snapshotJsonValue, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import {
   defineTool,
   type PostToolDecision,
@@ -17,7 +18,13 @@ import type {
 
 export const name = 'dsh-patchouli-agent-loop'
 
-export const inject = ['agents', 'sessions', 'tools', 'patchouli'] as const
+export const inject = [
+  'agents',
+  'sessions',
+  'sessionPersistence',
+  'tools',
+  'patchouli',
+] as const
 
 export interface RetrieveHooksConfig {
   sessionStart?: boolean
@@ -164,6 +171,32 @@ function turnEvents(session: Session, turn: number, endSeq?: number): readonly S
   return session.events.slice(start).filter(event => endSeq === undefined || event.seq <= endSeq)
 }
 
+function persistedTurn(
+  inspection: SessionInspection,
+  turn: number,
+  endSeq: number,
+): { sessionEvents: readonly SessionEvent[], event: SessionEvent, events: readonly SessionEvent[] } {
+  const sessionEvents = inspection.events.filter(event => event.seq <= endSeq)
+  const endIndex = sessionEvents.findIndex(event => event.seq === endSeq)
+  const event = sessionEvents[endIndex]
+  if (event?.type !== 'turn/end' || event.data.turn !== turn) {
+    throw new Error(`persisted session has no matching turn/end at seq ${endSeq}`)
+  }
+  const startIndex = sessionEvents.findLastIndex((candidate, index) => (
+    index <= endIndex
+    && candidate.type === 'turn/start'
+    && candidate.data.turn === turn
+  ))
+  if (startIndex < 0) throw new Error(`persisted session has no matching turn/start for turn ${turn}`)
+  const events = sessionEvents.slice(startIndex, endIndex + 1)
+  for (let index = 1; index < events.length; index += 1) {
+    if (events[index]!.seq !== events[index - 1]!.seq + 1) {
+      throw new Error(`persisted turn ${turn} is not contiguous`)
+    }
+  }
+  return { sessionEvents, event, events }
+}
+
 function toolExecutionData(exec: ToolExecution): MemoryData {
   return snapshot({
     callId: exec.callId,
@@ -276,6 +309,7 @@ export function apply(ctx: Context, config: Config): void {
   }
   const lifetime = new AbortController()
   const updateChains = new Map<Session, Promise<void>>()
+  const turnCaptureChains = new Map<Session, Promise<void>>()
   const backgroundTasks = new Set<Promise<void>>()
 
   ctx.effect(() => async () => {
@@ -596,25 +630,48 @@ export function apply(ctx: Context, config: Config): void {
   if (store.turnEnd) {
     ctx.on('session/event', (session, event) => {
       if (event.type !== 'turn/end') return
-      const events = turnEvents(session, event.data.turn, event.seq)
-      const sessionEvents = session.events.filter(candidate => candidate.seq <= event.seq)
       const agent = ctx.agents.get(session.header.id)
-      enqueueUpdate(
-        session,
-        'session/turn-end',
-        snapshot({
-          agent: agent === undefined
-            ? { id: String(session.header.id), options: {} }
-            : agentData(agent),
-          session: { header: session.header, events: sessionEvents },
-          event,
-          events,
-        }),
-        {
-          turn: event.data.turn,
-          outcome: event.data.reason.kind,
-        },
-      )
+      const agentSnapshot = agent === undefined
+        ? { id: String(session.header.id), options: {} }
+        : agentData(agent)
+      const previous = turnCaptureChains.get(session) ?? Promise.resolve()
+      const capture = async (): Promise<void> => {
+        await ctx.sessions.flush(session)
+        lifetime.signal.throwIfAborted()
+        const inspection = await ctx.sessionPersistence.readFrom(
+          session.header.id,
+          0,
+          lifetime.signal,
+        )
+        lifetime.signal.throwIfAborted()
+        const persisted = persistedTurn(inspection, event.data.turn, event.seq)
+        enqueueUpdate(
+          session,
+          'session/turn-end',
+          snapshot({
+            agent: agentSnapshot,
+            session: {
+              header: inspection.meta,
+              events: persisted.sessionEvents,
+            },
+            event: persisted.event,
+            events: persisted.events,
+          }),
+          {
+            turn: event.data.turn,
+            outcome: event.data.reason.kind,
+          },
+        )
+      }
+      const task = previous.then(capture, capture).catch((error: unknown) => {
+        if (lifetime.signal.aborted) return
+        const message = error instanceof Error ? error.message : String(error)
+        ctx.logger.warn(`patchouli durable turn capture failed: ${message}`)
+      }).finally(() => {
+        if (turnCaptureChains.get(session) === task) turnCaptureChains.delete(session)
+      })
+      turnCaptureChains.set(session, task)
+      track(task)
     })
   }
 
