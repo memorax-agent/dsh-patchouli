@@ -40,11 +40,12 @@ remains harness-neutral.
 
 `Official` means the upstream plugin registers the `patchouli` service directly.
 `Patch` means GOOJFC adapts one exact plugin version through
-[dsh-harmony](https://github.com/CH4ACKO3/dsh-harmony). There are no official
-integrations yet; all currently tested integrations are patches.
+[dsh-harmony](https://github.com/CH4ACKO3/dsh-harmony). The table distinguishes
+upstream integrations from version-pinned patches.
 
 | Plugin | Tested package | Compatibility | Patchouli DB |
 | --- | --- | --- | --- |
+| [MemoraX Code](https://github.com/memorax-ai/memorax-code) | `@memorax-code/dsh-adapter@0.1.2` (source) | Official | No — plugin-managed |
 | [OpenViking](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin) | `@openviking/dsh-memory-plugin@0.1.0` | Patch | No — plugin-managed |
 | [Hindsight](https://github.com/vectorize-io/hindsight/tree/main/hindsight-integrations/coding-agents) | `@vectorize-io/hindsight-coding-agents@0.3.4` | Patch | No — plugin-managed |
 | [MemOS](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) | `@memtensor/memos-local-plugin@2.0.16-beta.1` | Patch | No — plugin-managed |

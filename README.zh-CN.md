@@ -39,10 +39,11 @@ DeepSeek Harness 是目前首个受支持的集成，数据库后端本身不依
 `Official`（官方兼容）表示上游插件直接注册 `patchouli` service；`Patch`
 （补丁兼容）表示 GOOJFC 通过
 [dsh-harmony](https://github.com/CH4ACKO3/dsh-harmony) 适配一个精确版本。
-目前还没有官方兼容的插件，以下已验证集成均为补丁兼容。
+下表区分上游直接集成与绑定特定版本的补丁兼容。
 
 | 插件 | 已验证包 | 兼容方式 | Patchouli DB |
 | --- | --- | --- | --- |
+| [MemoraX Code](https://github.com/memorax-ai/memorax-code) | `@memorax-code/dsh-adapter@0.1.2`（源码） | Official | 否（插件自管） |
 | [OpenViking](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin) | `@openviking/dsh-memory-plugin@0.1.0` | Patch | 否（插件自管） |
 | [Hindsight](https://github.com/vectorize-io/hindsight/tree/main/hindsight-integrations/coding-agents) | `@vectorize-io/hindsight-coding-agents@0.3.4` | Patch | 否（插件自管） |
 | [MemOS](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) | `@memtensor/memos-local-plugin@2.0.16-beta.1` | Patch | 否（插件自管） |
