@@ -91,7 +91,7 @@ export default defineConfig({
     hostname: 'https://memorax-agent.github.io/dsh-patchouli/',
   },
   head: [
-    ['meta', { name: 'theme-color', content: '#6d3f8c' }],
+    ['meta', { name: 'theme-color', content: '#75439a' }],
     ['meta', { name: 'color-scheme', content: 'light dark' }],
   ],
   markdown: {
