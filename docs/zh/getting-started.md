@@ -17,7 +17,7 @@ Patchouli 提供两个可以独立使用的部分：
 ## 从源码安装 DSH 插件
 
 ```bash
-git clone --branch main --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+git clone --branch main --single-branch https://github.com/memorax-ai/dsh-patchouli.git
 cd dsh-patchouli
 corepack enable
 pnpm install
@@ -34,11 +34,11 @@ Ingestor、Session/Workspace Indexer 边界以及持久化记忆游标服务。
 ::: code-group
 
 ```bash [macOS / Linux]
-curl -fsSL https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/install.sh | sh
 ```
 
 ```powershell [Windows PowerShell]
-irm https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/install.ps1 | iex
 ```
 
 :::
@@ -47,9 +47,10 @@ irm https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/i
 它不会修改 DSH Profile、注册系统服务或启动后台进程。各平台细节与源码构建
 方式参见[后端安装](./installation.md)。
 
-## 启用存储客户端
+## 配置存储客户端
 
-存储客户端不属于默认 Bundle。只有需要 Patchouli 守护进程的插件才应启用：
+默认 Bundle 已启用存储客户端。插件需要不同的 Daemon Endpoint 或自动启动行为时可
+调整其配置：
 
 ```yaml
 - id: patchouli-storage
@@ -58,7 +59,7 @@ irm https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/i
     autoStart: true
 ```
 
-客户端通过 `ctx.patchouli` 提供守护进程控制、通用实体 CRUD、检索、托管
+客户端通过 `ctx.patchouliStorage` 提供守护进程控制、通用实体 CRUD、检索、托管
 Artifact 传输和基于游标的变更订阅。
 
 ## 下一步

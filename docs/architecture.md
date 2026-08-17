@@ -18,8 +18,8 @@ Patchouli currently combines two implemented surfaces:
   package boundaries for Session and Workspace Indexers.
 
 Session and Workspace Indexer behavior and general Knowledge extraction/
-retrieval MemoryPlugins are not implemented yet. The optional TypeScript
-storage client exposes control, CRUD, entity retrieval, Artifact transfer,
+retrieval MemoryPlugins are not implemented yet. The bundled TypeScript storage
+client exposes control, CRUD, entity retrieval, Artifact transfer,
 structured RPC errors, and cursor-based change subscriptions from the backend
 protocol.
 
@@ -33,7 +33,7 @@ memory semantics, and storage mechanics independently replaceable.
   <template #fallback>Loading the architecture diagram…</template>
 </ClientOnly>
 
-`ctx.patchouliMemory` is an in-process DSH service. Patchouli does not expose
+`ctx.patchouli` is an in-process DSH service. Patchouli does not expose
 it through an external bridge; other Harnesses and external applications need
 their own adapters.
 
@@ -41,7 +41,7 @@ their own adapters.
 
 ### Common Memory Service
 
-The root `dsh-patchouli` plugin registers `ctx.patchouliMemory`. It owns the
+The root `dsh-patchouli` plugin registers `ctx.patchouli`. It owns the
 stable high-level `update` / `retrieve` / `subscribe` contract, MemoryPlugin
 registration, routing, and per-plugin provenance. It contains no storage,
 Agent, or prompt logic.
@@ -76,7 +76,7 @@ This keeps routing policy with the plugin that understands its own capability
 while allowing unfiltered third-party plugins to retain broadcast behavior.
 
 A MemoraX plugin may call the MemoraX API directly. A local plugin may instead
-consume the optional storage client. Storage CRUD types do not appear in the
+consume the storage client. Storage CRUD types do not appear in the
 common Memory Service contract.
 
 `@memorax-agent/dsh-patchouli-artifact-ingestor` is the narrow local exception:
@@ -86,15 +86,16 @@ session images the plugin resolves `ImageAttachmentRef` through
 `ctx.attachments`; for explicit `workspace-file` requests it resolves the path
 through `ctx.fs`, verifies canonical containment in the Session workspace, and
 applies a configured byte limit. It then transfers bytes through
-`ctx.patchouli.uploadArtifact`. The plugin remains pending unless all three DSH
-services and the optional storage client are present.
+`ctx.patchouliStorage.uploadArtifact`. The plugin remains pending unless the
+common service, storage client, Attachment service, and filesystem service are
+present.
 
 The private `@memorax-agent/dsh-patchouli-crud-test-plugin` package exercises
 that boundary without becoming a production memory implementation. It routes
 only calls from the `crud-test` source, selects one storage CRUD method from
-`meta.attributes.operation`, passes the call's `data` to `ctx.patchouli`
-unchanged, and returns the daemon JSON unchanged. It is excluded from the
-default DSH bundle.
+`meta.attributes.operation`, registers through `ctx.patchouli`, passes the
+call's `data` to `ctx.patchouliStorage` unchanged, and returns the daemon JSON
+unchanged. It is excluded from the default DSH bundle.
 
 For a subscription, a plugin receives the same call `meta` and the Consumer's
 last durable cursor as `afterCursor`. It returns a boundary
@@ -164,18 +165,18 @@ reference in Session events and is discovered from the committed turn.
 ### Indexer Packages
 
 `@memorax-agent/dsh-patchouli-session-indexer` depends on
-`ctx.patchouliMemory` and `ctx.sessionQuery`. It will own session scanning and
+`ctx.patchouli` and `ctx.sessionQuery`. It will own session scanning and
 incremental submission, but currently contains no indexing behavior.
 
 `@memorax-agent/dsh-patchouli-workspace-indexer` depends on
-`ctx.patchouliMemory`, `ctx.workspaceRegistry`, and `ctx.fs`. It will own
+`ctx.patchouli`, `ctx.workspaceRegistry`, and `ctx.fs`. It will own
 workspace crawling and change observation, but currently contains no indexing
 behavior. Missing DSH services leave the corresponding Cordis plugin pending;
 the packages do not substitute fallback data sources.
 
 ### Durable Consumer Cursors
 
-`dsh-patchouli/cursor-store` registers `ctx.patchouliMemoryCursors`. `bind`
+`dsh-patchouli/cursor-store` registers `ctx.patchouliCursors`. `bind`
 validates and binds `consumerId`, `subscriptionKey`, and the opaque scope; its
 returned `MemoryCursorStore` adds the plugin id, so records are isolated by the
 four-part identity. The service stores only an opaque cursor and deliberately
@@ -189,12 +190,12 @@ Service, Agent Loop Consumer, and update/retrieve paths remain available.
 Headless reactive Consumers can load the storage stack or provide another
 `MemoryCursorStore` directly.
 
-### Optional Storage Client
+### Storage Client
 
-`dsh-patchouli/storage` registers `ctx.patchouli`, connects to an existing
-daemon, and may start one when the configured endpoint is unavailable. It is
-not part of the default bundle, so remote-only MemoryPlugins do not require a
-local daemon.
+`dsh-patchouli/storage` registers `ctx.patchouliStorage`, connects to an existing
+daemon, and may start one when the configured endpoint is unavailable. The
+default bundle includes the client; deployments whose MemoryPlugins are all
+remote can disable that bundle entry.
 
 The client exposes status, checkpoint, generic entity create/read/retrieve/
 update/delete, managed Artifact upload/download, and cursor-based subscriptions.
@@ -304,7 +305,7 @@ Next:
 3. A local Knowledge extraction and retrieval MemoryPlugin.
 4. Operational memory surfaces such as inspection and rebuild.
 
-The [product source tree](https://github.com/memorax-agent/dsh-patchouli/tree/main)
+The [product source tree](https://github.com/memorax-ai/dsh-patchouli/tree/main)
 is maintained on `main`. Its root package is the DSH frontend bundle, Rust
 backend crates live under `crates/`, and `packages/protocol` is Harness-neutral;
 the other TypeScript packages are DSH adapters, plugins, and indexers.

@@ -5,7 +5,7 @@ Patchouli 的高层 API 是 DSH 进程内服务。外部应用和其他 Harness 
 
 ## 统一 Memory Service
 
-`ctx.patchouliMemory` 提供三种操作：
+`ctx.patchouli` 提供三种操作：
 
 - `update`：向注册插件提交待吸收的信息；
 - `retrieve`：向注册插件查询相关信息；
@@ -59,7 +59,7 @@ Hook 保留官方 Agent Loop 的同步语义。
 }
 ```
 
-Artifact Ingestor 在当前 Session 工作区内解析路径，并通过可选存储客户端上传
+Artifact Ingestor 在当前 Session 工作区内解析路径，并通过 `ctx.patchouliStorage` 上传
 字节；图片附件也经过同一条托管 Artifact 链路。
 
 ## 响应式 Consumer
@@ -68,13 +68,13 @@ Artifact Ingestor 在当前 Session 工作区内解析路径，并通过可选�
 
 ```ts
 const scope = '/workspace/example'
-const cursorStore = ctx.patchouliMemoryCursors.bind({
+const cursorStore = ctx.patchouliCursors.bind({
   consumerId: 'knowledge-index',
   subscriptionKey: 'live-memory',
   scope,
 })
 
-const subscription = await ctx.patchouliMemory.subscribe(
+const subscription = await ctx.patchouli.subscribe(
   {
     meta: {
       source: { type: 'consumer', id: 'knowledge-index' },

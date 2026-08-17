@@ -24,7 +24,7 @@ runtime so they do not depend on the host distribution's glibc version.
 macOS or Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/install.sh | sh
 ```
 
 The default binary location is `~/.local/bin/patchouli-db`. Add that directory to
@@ -33,7 +33,7 @@ The default binary location is `~/.local/bin/patchouli-db`. Add that directory t
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/install.ps1 | iex
 ```
 
 The default binary location is
@@ -64,7 +64,7 @@ the installed executable.
 Rust stable and a C toolchain are required:
 
 ```bash
-cargo install --locked --git https://github.com/memorax-agent/dsh-patchouli \
+cargo install --locked --git https://github.com/memorax-ai/dsh-patchouli \
   --package patchouli-server
 patchouli-db init --root "$HOME/.patchouli"
 ```

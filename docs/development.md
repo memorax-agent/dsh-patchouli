@@ -8,7 +8,7 @@ otherwise, commands on this page run from a product checkout of `main`.
 ## Product setup
 
 ```bash
-git clone --branch main --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+git clone --branch main --single-branch https://github.com/memorax-ai/dsh-patchouli.git
 cd dsh-patchouli
 corepack enable
 pnpm install
@@ -72,7 +72,7 @@ patchouli-db stop --endpoint $endpoint
 ```
 
 `serve` remains in the foreground for launchd, systemd, Windows Service
-wrappers, containers, and local development. The optional storage plugin starts
+wrappers, containers, and local development. The bundled storage plugin starts
 the same command as a detached process when `autoStart` is enabled. Policy
 validation and provider health checks finish before the daemon listens.
 
@@ -127,22 +127,24 @@ dsh --profile web --dump-config
 
 The default bundle contains:
 
-- `patchouli` → `dsh-patchouli`, registering `ctx.patchouliMemory`;
+- `patchouli` → `dsh-patchouli`, registering `ctx.patchouli`;
+- `patchouli-storage` → `dsh-patchouli/storage`, registering
+  `ctx.patchouliStorage` and connecting to the daemon;
 - `patchouli-agent-loop` → `@memorax-agent/dsh-patchouli-agent-loop`,
   registering individually configurable Agent/Session/Tool Hooks and the two
   optional model Tools;
 - `patchouli-artifact-ingestor` →
   `@memorax-agent/dsh-patchouli-artifact-ingestor`, reading DSH attachment and
-  workspace-file bytes when `ctx.patchouli`, `ctx.attachments`, and `ctx.fs` are
-  available;
+  workspace-file bytes when `ctx.patchouli`, `ctx.patchouliStorage`,
+  `ctx.attachments`, and `ctx.fs` are available;
 - `patchouli-session-indexer` →
   `@memorax-agent/dsh-patchouli-session-indexer`, currently declaring
-  `patchouliMemory + sessionQuery` only;
+  `patchouli + sessionQuery` only;
 - `patchouli-workspace-indexer` →
   `@memorax-agent/dsh-patchouli-workspace-indexer`, currently declaring
-  `patchouliMemory + workspaceRegistry + fs` only;
-- `patchouli-memory-cursors` → `dsh-patchouli/cursor-store`, registering
-  `ctx.patchouliMemoryCursors` when `storageDomain` is available.
+  `patchouli + workspaceRegistry + fs` only;
+- `patchouli-cursors` → `dsh-patchouli/cursor-store`, registering
+  `ctx.patchouliCursors` when `storageDomain` is available.
 
 The Web bundle supplies `storageDomain`, so the cursor service opens its
 `patchouli_memory` domain and persists progress through the configured DSH
@@ -150,18 +152,18 @@ storage backend. The standard Headless bundle has no storage stack: the
 cursor-service fiber remains pending on its injection, while the independent
 Memory Service, Agent Loop, Tools, and update/retrieve paths still load. Add the
 DSH storage stack for durable Headless subscriptions, or pass a custom
-`MemoryCursorStore` to `ctx.patchouliMemory.subscribe`.
+`MemoryCursorStore` to `ctx.patchouli.subscribe`.
 
 Bind one cursor store for each logical Consumer subscription:
 
 ```ts
-const cursorStore = ctx.patchouliMemoryCursors.bind({
+const cursorStore = ctx.patchouliCursors.bind({
   consumerId: 'example-consumer',
   subscriptionKey: 'memory-changes',
   scope,
 })
 
-const subscription = await ctx.patchouliMemory.subscribe(
+const subscription = await ctx.patchouli.subscribe(
   {
     meta: {
       source: { type: 'consumer', id: 'example-consumer' },
@@ -186,8 +188,8 @@ call `cursorStore.delete(pluginId)`, then create a replacement subscription.
 Explicit unsubscribe, the Consumer fiber lifecycle, and its AbortSignal all
 cancel retries, cancel provider handles, and drain admitted handlers.
 
-The storage daemon client is deliberately optional. Add it only for a local
-storage-backed MemoryPlugin:
+The default bundle enables the storage daemon client. Configure its endpoint or
+auto-start behavior when using a local storage-backed MemoryPlugin:
 
 ```yaml
 - id: patchouli-storage
@@ -215,9 +217,11 @@ The repository is public. Pull Request code runs only on GitHub-hosted
 infrastructure. The registered self-hosted runner is reserved for trusted
 `main` delivery jobs and explicit manual runs.
 
-The matrix job checks Node and Rust and builds Linux x86_64/aarch64, macOS
-x86_64/aarch64, and Windows x86_64 daemon binaries. Trusted `main` and manual
-runs also package the protocol and DSH plugin as artifacts. `v*` tags publish
+Node checks, Rust lint, the database-loop E2E test, and three-platform Rust
+tests run as independent verification jobs. After their aggregate gate passes,
+the release matrix builds Linux x86_64/aarch64, macOS x86_64/aarch64, and
+Windows x86_64 daemon binaries in parallel. Trusted `main` and manual runs also
+package the protocol and DSH plugin as artifacts. `v*` tags publish
 the daemon binaries and SHA-256 checksums to a GitHub Release. Trusted `main`
 and manual runs can install the daemon under `PATCHOULI_DEPLOY_ROOT` (default
 `~/.patchouli`), restart it, and verify `patchouli-db status`; a failed health
@@ -233,7 +237,7 @@ Use an independent checkout of the `docs` branch when editing this site:
 
 ```bash
 git clone --branch docs --single-branch \
-  https://github.com/memorax-agent/dsh-patchouli.git dsh-patchouli-docs
+  https://github.com/memorax-ai/dsh-patchouli.git dsh-patchouli-docs
 cd dsh-patchouli-docs
 corepack enable
 pnpm install

@@ -88,7 +88,7 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   sitemap: {
-    hostname: 'https://memorax-agent.github.io/dsh-patchouli/',
+    hostname: 'https://memorax-ai.github.io/dsh-patchouli/',
   },
   head: [
     ['meta', { name: 'theme-color', content: '#75439a' }],
@@ -197,10 +197,10 @@ export default defineConfig({
         ],
         search: { provider: 'local' },
         socialLinks: [
-          { icon: 'github', link: 'https://github.com/memorax-agent/dsh-patchouli' },
+          { icon: 'github', link: 'https://github.com/memorax-ai/dsh-patchouli' },
         ],
         editLink: {
-          pattern: 'https://github.com/memorax-agent/dsh-patchouli/edit/docs/docs/:path',
+          pattern: 'https://github.com/memorax-ai/dsh-patchouli/edit/docs/docs/:path',
           text: 'Edit this page on GitHub',
         },
         outline: {
@@ -283,10 +283,10 @@ export default defineConfig({
           },
         },
         socialLinks: [
-          { icon: 'github', link: 'https://github.com/memorax-agent/dsh-patchouli' },
+          { icon: 'github', link: 'https://github.com/memorax-ai/dsh-patchouli' },
         ],
         editLink: {
-          pattern: 'https://github.com/memorax-agent/dsh-patchouli/edit/docs/docs/:path',
+          pattern: 'https://github.com/memorax-ai/dsh-patchouli/edit/docs/docs/:path',
           text: '在 GitHub 上编辑此页',
         },
         outline: {

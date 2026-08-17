@@ -11,7 +11,7 @@ Patchouli Fact IR v1 包含三种公开记录值：
 - `knowledge_relation`，由 `urn:patchouli:schema:knowledge-relation:1` 验证。
 
 三者复用通用实体 CRUD，不增加 Knowledge 专用 JSON-RPC。规范 Schema 与示例位于
-产品分支的 [`packages/protocol/schemas`](https://github.com/memorax-agent/dsh-patchouli/tree/main/packages/protocol/schemas)。
+产品分支的 [`packages/protocol/schemas`](https://github.com/memorax-ai/dsh-patchouli/tree/main/packages/protocol/schemas)。
 
 ## 身份
 

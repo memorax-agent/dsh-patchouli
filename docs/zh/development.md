@@ -6,7 +6,7 @@
 ## 产品环境
 
 ```bash
-git clone --branch main --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+git clone --branch main --single-branch https://github.com/memorax-ai/dsh-patchouli.git
 cd dsh-patchouli
 corepack enable
 pnpm install
@@ -101,26 +101,27 @@ dsh --profile web --dump-config
 
 默认 Bundle 包含：
 
-- `patchouli`：注册 `ctx.patchouliMemory`；
+- `patchouli`：注册 `ctx.patchouli`；
+- `patchouli-storage`：注册 `ctx.patchouliStorage` 并连接 Daemon；
 - `patchouli-agent-loop`：注册可配置 Hook 和两个模型 Tool；
 - `patchouli-artifact-ingestor`：在存储、Attachment 与 FS 服务可用时摄取资源；
-- `patchouli-session-indexer`：当前只声明 `patchouliMemory + sessionQuery`；
+- `patchouli-session-indexer`：当前只声明 `patchouli + sessionQuery`；
 - `patchouli-workspace-indexer`：当前只声明
-  `patchouliMemory + workspaceRegistry + fs`；
-- `patchouli-memory-cursors`：`storageDomain` 可用时注册持久化 Cursor Service。
+  `patchouli + workspaceRegistry + fs`；
+- `patchouli-cursors`：`storageDomain` 可用时注册 `ctx.patchouliCursors`。
 
 Web Bundle 提供 `storageDomain`；Headless 默认不含存储栈，因此 Cursor Fiber Pending，
 但 Memory Service、Agent Loop、Tool 和 Update/Retrieve 仍可加载。Headless Consumer
 可加载 DSH 存储栈或传入自定义 `MemoryCursorStore`。
 
 ```ts
-const cursorStore = ctx.patchouliMemoryCursors.bind({
+const cursorStore = ctx.patchouliCursors.bind({
   consumerId: 'example-consumer',
   subscriptionKey: 'memory-changes',
   scope,
 })
 
-const subscription = await ctx.patchouliMemory.subscribe(
+const subscription = await ctx.patchouli.subscribe(
   {
     meta: {
       source: { type: 'consumer', id: 'example-consumer' },
@@ -138,7 +139,7 @@ Retryable 的 `MemorySubscriptionError` 会重连；Fatal、未知错误和 `res
 停止对应 Worker。Unsubscribe、Cordis Fiber 生命周期和 AbortSignal 都会取消重试并
 排空已接收 Handler。
 
-本地存储型 MemoryPlugin 可显式启用：
+默认 Bundle 已启用存储客户端；本地存储型 MemoryPlugin 可配置 Endpoint 与自动启动：
 
 ```yaml
 - id: patchouli-storage
@@ -154,8 +155,9 @@ Retryable 的 `MemorySubscriptionError` 会重连；Fatal、未知错误和 `res
 ## CI 策略
 
 公开仓库的 PR 只在 GitHub-hosted Runner 上运行。Self-hosted Runner 仅用于可信
-`main` Delivery 和手动运行。Matrix 检查 Node 与 Rust，并构建 Linux x86_64/aarch64、
-macOS x86_64/aarch64 和 Windows x86_64 Daemon。`v*` Tag 发布带 SHA-256 的 Release。
+`main` Delivery 和手动运行。Node 检查、Rust Lint、数据库 E2E 与三平台 Rust 测试
+并行运行，汇总 Gate 通过后再并行构建 Linux x86_64/aarch64、macOS x86_64/aarch64
+和 Windows x86_64 Daemon。`v*` Tag 发布带 SHA-256 的 Release。
 受信任务可以在 `PATCHOULI_DEPLOY_ROOT` 下部署、重启并验证 Daemon，失败时恢复旧版本；
 工作流不会安装或修改 DSH Profile。
 
@@ -165,7 +167,7 @@ macOS x86_64/aarch64 和 Windows x86_64 Daemon。`v*` Tag 发布带 SHA-256 的 
 
 ```bash
 git clone --branch docs --single-branch \
-  https://github.com/memorax-agent/dsh-patchouli.git dsh-patchouli-docs
+  https://github.com/memorax-ai/dsh-patchouli.git dsh-patchouli-docs
 cd dsh-patchouli-docs
 corepack enable
 pnpm install

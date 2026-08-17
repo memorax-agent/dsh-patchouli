@@ -6,7 +6,7 @@ Memory Service over an external bridge.
 
 ## Common Memory Service
 
-`ctx.patchouliMemory` exposes three operations:
+`ctx.patchouli` exposes three operations:
 
 - `update` submits information for registered plugins to absorb;
 - `retrieve` asks registered plugins for relevant information;
@@ -65,7 +65,7 @@ call:
 ```
 
 The Artifact Ingestor resolves the path inside the active Session workspace and
-uploads the bytes through the optional storage client. Image attachments follow
+uploads the bytes through `ctx.patchouliStorage`. Image attachments follow
 the same managed Artifact path.
 
 ## Reactive consumers
@@ -74,13 +74,13 @@ Bind a durable cursor namespace before subscribing:
 
 ```ts
 const scope = '/workspace/example'
-const cursorStore = ctx.patchouliMemoryCursors.bind({
+const cursorStore = ctx.patchouliCursors.bind({
   consumerId: 'knowledge-index',
   subscriptionKey: 'live-memory',
   scope,
 })
 
-const subscription = await ctx.patchouliMemory.subscribe(
+const subscription = await ctx.patchouli.subscribe(
   {
     meta: {
       source: { type: 'consumer', id: 'knowledge-index' },

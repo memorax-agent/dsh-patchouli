@@ -8,7 +8,7 @@ import PatchouliConceptFlow from '../components/PatchouliConceptFlow.vue'
 `{ meta, data }`：`data` 保存方法业务字段，后端通过命名配置字段解释 `meta`。
 
 策略文件不选择物理数据库。Adapter 和 Scope 路由使用独立的
-[`config/providers.schema.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/providers.schema.json)。
+[`config/providers.schema.json`](https://github.com/memorax-ai/dsh-patchouli/blob/main/config/providers.schema.json)。
 唯一内置 SQLite Adapter 名为 `local`；远程条目包含 HTTPS Endpoint 和保存 Bearer
 Token 的环境变量名。路由规则按顺序部分匹配规范 Scope，命中第一条，否则使用显式
 Default；失败后不会回退到其他数据库。
@@ -21,9 +21,9 @@ Default；失败后不会回退到其他数据库。
   <template #fallback>正在加载后端请求路径……</template>
 </ClientOnly>
 
-规范配置由 [`config/patchouli.schema.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.schema.json)
-定义。单节点默认策略见 [`config/patchouli.default.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.default.json)，
-共享事务示例见 [`config/patchouli.example.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.example.json)。
+规范配置由 [`config/patchouli.schema.json`](https://github.com/memorax-ai/dsh-patchouli/blob/main/config/patchouli.schema.json)
+定义。单节点默认策略见 [`config/patchouli.default.json`](https://github.com/memorax-ai/dsh-patchouli/blob/main/config/patchouli.default.json)，
+共享事务示例见 [`config/patchouli.example.json`](https://github.com/memorax-ai/dsh-patchouli/blob/main/config/patchouli.example.json)。
 
 `retention.idempotency_seconds` 和 `retention.changes_seconds` 决定 Handshake
 声明的持久重试与 Replay 保证。SQLite 在正常访问时清理过期记录。
@@ -113,7 +113,7 @@ Provider 必须声明计划所需的 Authority/Replica、Snapshot、Frontier、A
 
 ### 默认单节点 SQLite
 
-[`config/patchouli.default.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.default.json)
+[`config/patchouli.default.json`](https://github.com/memorax-ai/dsh-patchouli/blob/main/config/patchouli.default.json)
 使用 Authority Snapshot、`workspace_id + user_id` Scope、线性化读取、Scope 内串行
 Commit 和 Immediate Publication。Knowledge 默认在 `/content` 使用 Automerge，其他
 字段使用 MVCC；KnowledgeRelation 默认使用 MVCC。它不启用 Session、Batch、Replica
@@ -121,27 +121,27 @@ Commit 和 Immediate Publication。Knowledge 默认在 `/content` 使用 Automer
 
 ### 最终一致多源读取
 
-[`config/patterns/eventual.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patterns/eventual.json)
+[`config/patterns/eventual.json`](https://github.com/memorax-ai/dsh-patchouli/blob/main/config/patterns/eventual.json)
 允许 Authority 或 Replica Snapshot，不要求 Freshness、Session 或 Commit Ordering，
 并使用 MVCC 暴露并发候选。
 
 ### 因果插件会话
 
-[`config/patterns/causal_session.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patterns/causal_session.json)
+[`config/patterns/causal_session.json`](https://github.com/memorax-ai/dsh-patchouli/blob/main/config/patterns/causal_session.json)
 把可选 Opaque Causal Token 与持久化 `monotonic_reads`、`read_your_writes` 合并，
 并在 Scope 内串行 Commit。Participant 必填，Token 可选。当前 SQLite 以 Authority
 Frontier 执行；未来 Replica Provider 必须声明对应能力。
 
 ### 共享事务批次
 
-[`config/patterns/shared_transaction.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patterns/shared_transaction.json)
+[`config/patterns/shared_transaction.json`](https://github.com/memorax-ai/dsh-patchouli/blob/main/config/patterns/shared_transaction.json)
 用同一 Transaction Identity 绑定共享 Snapshot 与 Publication Key。首次请求记录全局
 Change Cursor；后续首次访问的实体也按该 Cursor 重建基线。Mutation 持久化 Staging，
 仅同一 Key 可见；Marker 在一个 SQLite 事务中发布全部实体和 Change Record。
 
 首个请求固定事务级策略描述，后续请求必须选择相同 Snapshot、Publication、TTL 和
 Ordering。示例使用过期丢弃且关闭幂等；完整选择规则见
-[`config/patchouli.example.json`](https://github.com/memorax-agent/dsh-patchouli/blob/main/config/patchouli.example.json)。
+[`config/patchouli.example.json`](https://github.com/memorax-ai/dsh-patchouli/blob/main/config/patchouli.example.json)。
 
 ## 事务边界
 

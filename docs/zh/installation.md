@@ -22,7 +22,7 @@ Linux 产物使用静态 musl 运行时，不依赖宿主发行版的 glibc 版�
 macOS 或 Linux：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/install.sh | sh
 ```
 
 默认安装到 `~/.local/bin/patchouli-db`，必要时请将该目录加入 `PATH`。
@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/sc
 Windows PowerShell：
 
 ```powershell
-irm https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/install.ps1 | iex
 ```
 
 默认安装到 `%LOCALAPPDATA%\Patchouli\bin\patchouli-db.exe`，必要时加入 `PATH`。
@@ -50,7 +50,7 @@ Unix 新建目录使用 `0700`，配置和数据库文件使用 `0600`；如果�
 需要 Rust stable 和 C 工具链：
 
 ```bash
-cargo install --locked --git https://github.com/memorax-agent/dsh-patchouli \
+cargo install --locked --git https://github.com/memorax-ai/dsh-patchouli \
   --package patchouli-server
 patchouli-db init --root "$HOME/.patchouli"
 ```

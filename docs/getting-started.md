@@ -18,7 +18,7 @@ its own external service.
 ## Install the DSH plugin from a checkout
 
 ```bash
-git clone --branch main --single-branch https://github.com/memorax-agent/dsh-patchouli.git
+git clone --branch main --single-branch https://github.com/memorax-ai/dsh-patchouli.git
 cd dsh-patchouli
 corepack enable
 pnpm install
@@ -36,11 +36,11 @@ cursor service.
 ::: code-group
 
 ```bash [macOS / Linux]
-curl -fsSL https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/install.sh | sh
 ```
 
 ```powershell [Windows PowerShell]
-irm https://raw.githubusercontent.com/memorax-agent/dsh-patchouli/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/install.ps1 | iex
 ```
 
 :::
@@ -50,10 +50,10 @@ overwriting existing configuration. It does not modify a DSH profile, register a
 system service, or start a background process. See [Backend
 installation](./installation.md) for platform details and source builds.
 
-## Enable the storage client
+## Configure the storage client
 
-The storage client is intentionally excluded from the default bundle. Enable it
-only for plugins that need the Patchouli daemon:
+The default bundle enables the storage client. Configure it when plugins need a
+different daemon endpoint or auto-start behavior:
 
 ```yaml
 - id: patchouli-storage
@@ -64,7 +64,7 @@ only for plugins that need the Patchouli daemon:
 
 The client exposes daemon control, generic entity CRUD, retrieval, managed
 Artifact transfer, and cursor-based change subscriptions through
-`ctx.patchouli`.
+`ctx.patchouliStorage`.
 
 ## Next steps
 
