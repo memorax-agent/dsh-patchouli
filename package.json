@@ -98,10 +98,15 @@
   },
   "keywords": [
     "deepseek-harness",
+    "deepseek-harness-plugin",
     "dsh",
     "dsh-plugin",
     "cordis",
+    "memory",
     "knowledge",
+    "knowledge-management",
+    "local-first",
+    "plugin",
     "context"
   ],
   "license": "MIT",
