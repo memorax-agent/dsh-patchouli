@@ -45,3 +45,5 @@ try {
     Remove-Item Env:PATCHOULI_VERSION -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+$global:LASTEXITCODE = 0
