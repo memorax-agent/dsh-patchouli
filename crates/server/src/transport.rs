@@ -129,7 +129,7 @@ mod platform {
 
     pub struct Listener {
         endpoint: String,
-        next: Option<NamedPipeServer>,
+        next: NamedPipeServer,
     }
 
     impl Listener {
@@ -141,18 +141,16 @@ mod platform {
                 .create(endpoint)?;
             Ok(Self {
                 endpoint: endpoint.to_owned(),
-                next: Some(next),
+                next,
             })
         }
 
         pub async fn accept(&mut self) -> io::Result<Stream> {
-            let connected = self.next.take().expect("listener must own a pipe instance");
-            connected.connect().await?;
-            self.next = Some(
-                NamedPipeOptions::new()
-                    .reject_remote_clients(true)
-                    .create(&self.endpoint)?,
-            );
+            self.next.connect().await?;
+            let next = NamedPipeOptions::new()
+                .reject_remote_clients(true)
+                .create(&self.endpoint)?;
+            let connected = std::mem::replace(&mut self.next, next);
             Ok(Box::new(connected))
         }
     }
