@@ -11,7 +11,7 @@ import type {} from 'dsh-patchouli/storage'
 
 export const name = 'dsh-patchouli-crud-test-plugin'
 
-export const inject = ['patchouliMemory', 'patchouli'] as const
+export const inject = ['patchouli', 'patchouliStorage'] as const
 
 export type CrudTestOperation = 'create' | 'read' | 'retrieve' | 'update' | 'delete'
 
@@ -44,31 +44,31 @@ export function apply(ctx: Context): () => void {
     async update(request) {
       switch (operation(request.meta)) {
         case 'create':
-          return result(await ctx.patchouli.create(params<CreateEntityParams>(request.data)))
+          return result(await ctx.patchouliStorage.create(params<CreateEntityParams>(request.data)))
         case 'update':
-          return result(await ctx.patchouli.update(params<UpdateEntityParams>(request.data)))
+          return result(await ctx.patchouliStorage.update(params<UpdateEntityParams>(request.data)))
         case 'delete':
-          return result(await ctx.patchouli.delete(params<DeleteEntityParams>(request.data)))
+          return result(await ctx.patchouliStorage.delete(params<DeleteEntityParams>(request.data)))
         case 'read':
         case 'retrieve':
-          throw new Error('crud-test read operations must use patchouliMemory.retrieve')
+          throw new Error('crud-test read operations must use patchouli.retrieve')
       }
     },
     async retrieve(request) {
       switch (operation(request.meta)) {
         case 'read':
-          return result(await ctx.patchouli.read(params<ReadEntityParams>(request.data)))
+          return result(await ctx.patchouliStorage.read(params<ReadEntityParams>(request.data)))
         case 'retrieve':
-          return result(await ctx.patchouli.retrieve(params<RetrieveEntitiesParams>(request.data)))
+          return result(await ctx.patchouliStorage.retrieve(params<RetrieveEntitiesParams>(request.data)))
         case 'create':
         case 'update':
         case 'delete':
-          throw new Error('crud-test mutations must use patchouliMemory.update')
+          throw new Error('crud-test mutations must use patchouli.update')
       }
     },
   }
 
-  return ctx.patchouliMemory.register(plugin, {
+  return ctx.patchouli.register(plugin, {
     filter: call => call.meta.source.type === sourceType,
   })
 }

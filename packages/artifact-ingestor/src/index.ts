@@ -19,8 +19,8 @@ import type {} from 'dsh-patchouli/storage'
 export const name = 'dsh-patchouli-artifact-ingestor'
 
 export const inject = [
-  'patchouliMemory',
   'patchouli',
+  'patchouliStorage',
   'attachments',
   'fs',
 ] as const
@@ -223,7 +223,7 @@ function displayName(path: string): string | null {
 }
 
 function receipt(
-  result: Awaited<ReturnType<Context['patchouli']['uploadArtifact']>>,
+  result: Awaited<ReturnType<Context['patchouliStorage']['uploadArtifact']>>,
   role: 'source' | 'attachment',
   source: ArtifactReceipt['source'],
 ): ArtifactReceipt {
@@ -254,7 +254,7 @@ export function apply(ctx: Context, config: Config): () => void {
       throw new Error(`image attachment exceeds the ${maxFileBytes} byte limit: ${String(ref.attachmentId)}`)
     }
     const stored = await ctx.attachments.readImage(ref, signal)
-    const result = await ctx.patchouli.uploadArtifact({
+    const result = await ctx.patchouliStorage.uploadArtifact({
       meta: databaseMeta(meta, config),
       data: {
         media_type: stored.ref.mediaType,
@@ -305,7 +305,7 @@ export function apply(ctx: Context, config: Config): () => void {
     }
     const bytes = await ctx.fs.readBytes(target, signal, maxFileBytes)
     const role = resource.role ?? 'attachment'
-    const result = await ctx.patchouli.uploadArtifact({
+    const result = await ctx.patchouliStorage.uploadArtifact({
       meta: databaseMeta(meta, config),
       data: {
         media_type: resource.mediaType ?? 'application/octet-stream',
@@ -353,7 +353,7 @@ export function apply(ctx: Context, config: Config): () => void {
     },
   }
 
-  return ctx.patchouliMemory.register(plugin, {
+  return ctx.patchouli.register(plugin, {
     filter: call => {
       if (call.operation !== 'update' || call.meta.source.type !== agentLoopSource) return false
       const point = stringAttribute(call.meta, 'point')

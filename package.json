@@ -17,10 +17,19 @@
     "./cursor-store": {
       "types": "./lib/cursor-store.d.ts",
       "import": "./lib/cursor-store.js"
+    },
+    "./goojfc": {
+      "types": "./lib/goojfc/index.d.ts",
+      "import": "./lib/goojfc/index.js"
+    },
+    "./goojfc/graph-memory": {
+      "types": "./lib/goojfc/graph-memory.d.ts",
+      "import": "./lib/goojfc/graph-memory.js"
     }
   },
   "files": [
     "lib",
+    "patches",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -40,11 +49,30 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "harmony": {
+      "patches": [
+        "./patches/openviking.patch.cjs",
+        "./patches/hindsight.patch.cjs",
+        "./patches/memos.patch.cjs",
+        "./patches/mneme-inject.patch.cjs",
+        "./patches/mneme-service.patch.cjs",
+        "./patches/mneme-passive.patch.cjs",
+        "./patches/mnemon-inject.patch.cjs",
+        "./patches/mnemon-service.patch.cjs",
+        "./patches/mnemon-passive.patch.cjs",
+        "./patches/memory-gate.patch.cjs",
+        "./patches/lingshu.patch.cjs",
+        "./patches/graph-memory.patch.cjs",
+        "./patches/engramory.patch.cjs",
+        "./patches/memory-evolve.patch.cjs"
+      ]
     }
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-storage-domain": ">=0.1.0-rc.5 <0.2.0"
+    "@deepseek-ai/dsh-storage-domain": ">=0.1.0-rc.5 <0.2.0",
+    "dsh-harmony": "^0.3.2"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",

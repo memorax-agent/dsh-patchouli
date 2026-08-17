@@ -70,22 +70,22 @@ test('persists isolated cursors with the storage domain service', async () => {
   assert.equal(harness.openedSpec().name, 'patchouli_memory')
   assert.deepEqual(Object.keys(harness.openedSpec().tables), ['cursors'])
 
-  const main = ctx.patchouliMemoryCursors.bind({
+  const main = ctx.patchouliCursors.bind({
     consumerId: 'agent-loop',
     subscriptionKey: 'memory-changes',
     scope: 'repo:a',
   })
-  const otherScope = ctx.patchouliMemoryCursors.bind({
+  const otherScope = ctx.patchouliCursors.bind({
     consumerId: 'agent-loop',
     subscriptionKey: 'memory-changes',
     scope: 'repo:b',
   })
-  const otherSubscription = ctx.patchouliMemoryCursors.bind({
+  const otherSubscription = ctx.patchouliCursors.bind({
     consumerId: 'agent-loop',
     subscriptionKey: 'other-changes',
     scope: 'repo:a',
   })
-  const rawScope = ctx.patchouliMemoryCursors.bind({
+  const rawScope = ctx.patchouliCursors.bind({
     consumerId: 'agent-loop',
     subscriptionKey: 'memory-changes',
     scope: ' repo:a ',
@@ -128,7 +128,7 @@ test('rejects blank cursor binding identities', async (t) => {
       [field]: ' \t ',
     }
     assert.throws(
-      () => ctx.patchouliMemoryCursors.bind(binding),
+      () => ctx.patchouliCursors.bind(binding),
       new RegExp(`memory cursor ${field} must be a non-empty string`),
     )
   }

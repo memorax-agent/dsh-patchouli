@@ -5,11 +5,11 @@ import process from 'node:process'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 
-import { PatchouliService } from './service.js'
+import { PatchouliStorageService } from './service.js'
 
 export {
   PatchouliRpcError,
-  PatchouliService,
+  PatchouliStorageService,
   type ChangeHandler,
   type ChangeSubscriptionClose,
   type ChangeSubscriptionHandle,
@@ -54,9 +54,9 @@ export const Config: z<Config> = z.object({
   startupTimeoutMs: z.natural().min(1).default(5_000),
 })
 
-/** Register a lifecycle-managed daemon client on `ctx.patchouli`. */
+/** Register a lifecycle-managed daemon client on `ctx.patchouliStorage`. */
 export async function apply(ctx: Context, config: Config): Promise<() => void> {
-  const service = new PatchouliService(ctx, config)
+  const service = new PatchouliStorageService(ctx, config)
   await service.start()
   return () => service.close()
 }

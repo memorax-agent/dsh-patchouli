@@ -1,5 +1,6 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { JsonObject, JsonValue } from '@memorax-agent/patchouli-protocol'
+import { isDeepStrictEqual } from 'node:util'
 
 export type MemoryMetadata = JsonObject
 export type MemoryData = JsonValue
@@ -111,14 +112,37 @@ export interface MemoryRouteCall {
   readonly meta: MemoryCallMeta
 }
 
+export type MemoryRouteFilter = (call: MemoryRouteCall) => boolean
+
+/** User allow-list for one plugin. Omitted or empty selector lists match all. */
+export interface MemoryRoutePolicy {
+  enabled?: boolean
+  operations?: MemoryOperation[]
+  sourceTypes?: string[]
+  sourceIds?: string[]
+  scopes?: string[]
+  attributes?: JsonObject
+  /** Override the independent retrieval deadline for this provider. */
+  retrieveTimeoutMs?: number
+}
+
+export type MemoryRoutingConfig = Readonly<Record<string, MemoryRoutePolicy>>
+
+export interface MemoryServiceConfig {
+  readonly routing?: MemoryRoutingConfig
+  readonly retrieveTimeoutMs?: number
+}
+
 export interface MemoryPluginRegistrationOptions {
   /** A synchronous, side-effect-free predicate. Omit it to receive every call. */
-  readonly filter?: (call: MemoryRouteCall) => boolean
+  readonly filter?: MemoryRouteFilter
 }
 
 /** A concrete memory implementation registered with the common frontend. */
 export interface MemoryPlugin {
   readonly id: string
+  /** Provider-owned routing constraint, combined with registration and user filters. */
+  readonly filter?: MemoryRouteFilter
   update(
     request: MemoryUpdateRequest,
     context: MemoryPluginContext,
@@ -148,21 +172,28 @@ export type MemoryPluginOutcome<T> =
 
 interface RegisteredMemoryPlugin {
   readonly plugin: MemoryPlugin
-  readonly filter?: MemoryPluginRegistrationOptions['filter']
+  readonly filters: readonly MemoryRouteFilter[]
 }
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    patchouliMemory: MemoryService
+    patchouli: PatchouliService
   }
 }
 
-/** Cordis service that registers, routes to, and aggregates memory plugins. */
-export class MemoryService extends Service {
+/** Cordis service that registers, routes to, and dispatches memory plugins. */
+export class PatchouliService extends Service {
   private readonly plugins = new Map<string, RegisteredMemoryPlugin>()
+  private readonly routing: MemoryRoutingConfig
+  private readonly retrieveTimeoutMs: number
 
-  constructor(ctx: Context) {
-    super(ctx, 'patchouliMemory')
+  constructor(
+    ctx: Context,
+    config: MemoryServiceConfig = {},
+  ) {
+    super(ctx, 'patchouli')
+    this.routing = config.routing ?? {}
+    this.retrieveTimeoutMs = positiveTimeout(config.retrieveTimeoutMs, 30_000)
   }
 
   register(
@@ -176,7 +207,12 @@ export class MemoryService extends Service {
       throw new Error(`memory plugin "${plugin.id}" is already registered`)
     }
 
-    const registration = { plugin, filter: options.filter }
+    const registration = {
+      plugin,
+      filters: [plugin.filter, options.filter].filter(
+        (filter): filter is MemoryRouteFilter => filter !== undefined,
+      ),
+    }
     const dispose = this.ctx.effect(() => {
       this.plugins.set(plugin.id, registration)
       return () => {
@@ -184,7 +220,7 @@ export class MemoryService extends Service {
           this.plugins.delete(plugin.id)
         }
       }
-    }, `patchouliMemory.register(${JSON.stringify(plugin.id)})`)
+    }, `patchouli.register(${JSON.stringify(plugin.id)})`)
 
     return () => void dispose()
   }
@@ -219,11 +255,12 @@ export class MemoryService extends Service {
     options.signal?.throwIfAborted()
     const call: MemoryRouteCall = { operation: 'subscribe', meta: request.meta }
     const plugins: Array<MemoryPlugin & Required<Pick<MemoryPlugin, 'subscribe'>>> = []
-    for (const { plugin, filter } of this.plugins.values()) {
+    for (const registration of this.plugins.values()) {
+      const { plugin } = registration
       if (plugin.subscribe === undefined) continue
       const subscribingPlugin = plugin as MemoryPlugin & Required<Pick<MemoryPlugin, 'subscribe'>>
       try {
-        if (filter?.(call) ?? true) plugins.push(subscribingPlugin)
+        if (this.shouldRoute(registration, call)) plugins.push(subscribingPlugin)
       } catch (error: unknown) {
         notifySubscriptionError(options.onError, {
           pluginId: plugin.id,
@@ -258,7 +295,7 @@ export class MemoryService extends Service {
 
     const dispose = this.ctx.effect(
       () => shutdown,
-      `patchouliMemory.subscribe(${JSON.stringify(pluginIds)})`,
+      `patchouli.subscribe(${JSON.stringify(pluginIds)})`,
     )
     onAbort = () => void dispose()
     options.signal?.addEventListener('abort', onAbort, { once: true })
@@ -296,14 +333,26 @@ export class MemoryService extends Service {
     signal?.throwIfAborted()
     const registrations = [...this.plugins.values()]
     const outcomes = await Promise.all(registrations.map(async (
-      { plugin, filter },
+      registration,
     ): Promise<MemoryPluginOutcome<T> | undefined> => {
+      const { plugin } = registration
       try {
-        if (!(filter?.(call) ?? true)) return undefined
+        if (!this.shouldRoute(registration, call)) return undefined
+        const timeoutMs = call.operation === 'retrieve'
+          ? positiveTimeout(
+              this.routing[plugin.id]?.retrieveTimeoutMs,
+              this.retrieveTimeoutMs,
+            )
+          : undefined
         return {
           pluginId: plugin.id,
           ok: true,
-          value: await invoke(plugin),
+          value: await waitForProvider(
+            invoke(plugin),
+            signal,
+            timeoutMs,
+            `${plugin.id} ${call.operation}`,
+          ),
         }
       } catch (error) {
         return {
@@ -315,6 +364,15 @@ export class MemoryService extends Service {
     }))
     signal?.throwIfAborted()
     return outcomes.filter((outcome): outcome is MemoryPluginOutcome<T> => outcome !== undefined)
+  }
+
+  private shouldRoute(
+    registration: RegisteredMemoryPlugin,
+    call: MemoryRouteCall,
+  ): boolean {
+    const policy = this.routing[registration.plugin.id]
+    if (policy !== undefined && !matchesRoutePolicy(policy, call)) return false
+    return registration.filters.every(filter => filter(call))
   }
 
   private async runSubscriptionWorker(
@@ -462,6 +520,56 @@ export class MemoryService extends Service {
 
     if (attemptError !== noSubscriptionError) throw attemptError
   }
+}
+
+async function waitForProvider<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+  label: string,
+): Promise<T> {
+  signal?.throwIfAborted()
+  if (signal === undefined && timeoutMs === undefined) return operation
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
+  const boundary = new Promise<never>((_resolve, reject) => {
+    if (signal !== undefined) {
+      onAbort = () => reject(signal.reason ?? new Error('memory operation aborted'))
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        reject(new Error(`memory provider ${JSON.stringify(label)} timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      timer.unref?.()
+    }
+  })
+
+  try {
+    return await Promise.race([operation, boundary])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort)
+  }
+}
+
+function positiveTimeout(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && value !== undefined && value > 0 ? value : fallback
+}
+
+function matchesRoutePolicy(policy: MemoryRoutePolicy, call: MemoryRouteCall): boolean {
+  if (policy.enabled === false) return false
+  if (policy.operations?.length && !policy.operations.includes(call.operation)) return false
+  if (policy.sourceTypes?.length && !policy.sourceTypes.includes(call.meta.source.type)) return false
+  if (policy.sourceIds?.length && !policy.sourceIds.includes(call.meta.source.id)) return false
+  if (policy.scopes?.length && !policy.scopes.includes(call.meta.scope)) return false
+  if (policy.attributes !== undefined) {
+    for (const [key, value] of Object.entries(policy.attributes)) {
+      if (!isDeepStrictEqual(call.meta.attributes?.[key], value)) return false
+    }
+  }
+  return true
 }
 
 const noSubscriptionError = Symbol('no subscription error')

@@ -45,7 +45,7 @@ import type { Config } from './storage.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    patchouli: PatchouliService
+    patchouliStorage: PatchouliStorageService
   }
 }
 
@@ -103,7 +103,7 @@ export class PatchouliRpcError extends Error {
 const subscriptionsCapability = 'subscriptions'
 const artifactsCapability = 'artifacts'
 
-export class PatchouliService extends Service {
+export class PatchouliStorageService extends Service {
   private socket?: Socket
   private buffer = ''
   private nextId = 1
@@ -113,7 +113,7 @@ export class PatchouliService extends Service {
   private closing = false
 
   constructor(ctx: Context, private readonly config: Config) {
-    super(ctx, 'patchouli')
+    super(ctx, 'patchouliStorage')
   }
 
   get server(): HandshakeResult | undefined {

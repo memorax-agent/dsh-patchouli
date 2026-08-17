@@ -215,24 +215,24 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   const relation = structuredClone(knowledgeRelation)
   relation.from = [workKnowledgeRef]
   relation.to = [{ type: 'knowledge', id: 'work-source-1' }]
-  await ctx.patchouli.runWorkUnit(
+  await ctx.patchouliStorage.runWorkUnit(
     { ...databaseMeta, transaction_id: 'work-unit-e2e-1' },
     { transaction_state: 'commit' },
     [
-      meta => ctx.patchouli.create({
+      meta => ctx.patchouliStorage.create({
         meta,
         data: { ...workKnowledgeRef, value: workKnowledge },
       }),
       async (meta) => {
         await assert.rejects(
-          ctx.patchouli.read({ meta: databaseMeta, data: { ref: workKnowledgeRef } }),
+          ctx.patchouliStorage.read({ meta: databaseMeta, data: { ref: workKnowledgeRef } }),
           (error) => {
             assert.ok(error instanceof storage.PatchouliRpcError)
             assert.equal(error.reason, 'NOT_FOUND')
             return true
           },
         )
-        return ctx.patchouli.create({
+        return ctx.patchouliStorage.create({
           meta,
           data: { ...workRelationRef, value: relation },
         })
@@ -240,8 +240,8 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     ],
   )
   const [publishedKnowledge, publishedRelation] = await Promise.all([
-    ctx.patchouli.read({ meta: databaseMeta, data: { ref: workKnowledgeRef } }),
-    ctx.patchouli.read({ meta: databaseMeta, data: { ref: workRelationRef } }),
+    ctx.patchouliStorage.read({ meta: databaseMeta, data: { ref: workKnowledgeRef } }),
+    ctx.patchouliStorage.read({ meta: databaseMeta, data: { ref: workRelationRef } }),
   ])
   assert.equal(publishedKnowledge.data.state, 'active')
   assert.equal(publishedRelation.data.state, 'active')
@@ -252,7 +252,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     { length: 600_000 },
     (_, index) => index % 251,
   )
-  const uploadedArtifact = await ctx.patchouli.uploadArtifact({
+  const uploadedArtifact = await ctx.patchouliStorage.uploadArtifact({
     meta: databaseMeta,
     data: {
       id: 'artifact-e2e-1',
@@ -267,7 +267,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   assert.equal(uploadedArtifact.data.entity.ref.id, 'artifact-e2e-1')
   if (uploadedArtifact.data.entity.state !== 'active') assert.fail('uploaded artifact is deleted')
   assert.equal(uploadedArtifact.data.entity.value.placement.kind, 'managed')
-  const downloadedArtifact = await ctx.patchouli.downloadArtifact(databaseMeta, 'artifact-e2e-1')
+  const downloadedArtifact = await ctx.patchouliStorage.downloadArtifact(databaseMeta, 'artifact-e2e-1')
   assert.equal(downloadedArtifact.byteLength, artifactBytes.byteLength)
   assert.equal(Buffer.compare(Buffer.from(downloadedArtifact), Buffer.from(artifactBytes)), 0)
 
@@ -280,7 +280,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
       workspaceRoot,
     },
   }
-  const ingestedFile = await ctx.patchouliMemory.update({
+  const ingestedFile = await ctx.patchouli.update({
     meta: ingestorCallMeta,
     data: {
       resources: [{
@@ -305,10 +305,10 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     channel_id: 'session-file-e2e',
   }
   const fileArtifactId = fileArtifact.ref.id
-  const downloadedFile = await ctx.patchouli.downloadArtifact(ingestorDatabaseMeta, fileArtifactId)
+  const downloadedFile = await ctx.patchouliStorage.downloadArtifact(ingestorDatabaseMeta, fileArtifactId)
   assert.equal(Buffer.compare(Buffer.from(downloadedFile), Buffer.from(workspaceBytes)), 0)
 
-  const rejectedFile = await ctx.patchouliMemory.update({
+  const rejectedFile = await ctx.patchouli.update({
     meta: ingestorCallMeta,
     data: {
       resources: [{ kind: 'workspace-file', path: '/outside/secret.bin' }],
@@ -328,7 +328,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
     height: 2,
     name: 'image.png',
   }
-  const ingestedImage = await ctx.patchouliMemory.update({
+  const ingestedImage = await ctx.patchouli.update({
     meta: {
       ...ingestorCallMeta,
       attributes: {
@@ -350,10 +350,10 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   const imageArtifact = ingestedImageValue.artifacts[0]
   assert.ok(imageArtifact)
   const imageArtifactId = imageArtifact.ref.id
-  const downloadedImage = await ctx.patchouli.downloadArtifact(ingestorDatabaseMeta, imageArtifactId)
+  const downloadedImage = await ctx.patchouliStorage.downloadArtifact(ingestorDatabaseMeta, imageArtifactId)
   assert.equal(Buffer.compare(Buffer.from(downloadedImage), Buffer.from(imageBytes)), 0)
 
-  const created = valueOf(await ctx.patchouliMemory.update({
+  const created = valueOf(await ctx.patchouli.update({
     meta: callMeta('create'),
     data: {
       meta: databaseMeta,
@@ -363,14 +363,14 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   assert.equal(created.data.entity.state, 'active')
   assert.deepEqual(created.data.entity.value, knowledge)
 
-  const read = valueOf(await ctx.patchouliMemory.retrieve({
+  const read = valueOf(await ctx.patchouli.retrieve({
     meta: callMeta('read'),
     data: { meta: databaseMeta, data: { ref } },
   }))
   assert.equal(read.data.state, 'active')
   assert.deepEqual(read.data.variants[0].value, knowledge)
 
-  const retrieved = valueOf(await ctx.patchouliMemory.retrieve({
+  const retrieved = valueOf(await ctx.patchouli.retrieve({
     meta: callMeta('retrieve'),
     data: {
       meta: databaseMeta,
@@ -382,7 +382,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
 
   const updatedKnowledge = structuredClone(knowledge)
   updatedKnowledge.content.text = '用户偏好直接、简洁的代码审查意见'
-  const updated = valueOf(await ctx.patchouliMemory.update({
+  const updated = valueOf(await ctx.patchouli.update({
     meta: callMeta('update'),
     data: {
       meta: { ...databaseMeta, base_versions: [created.data.entity.version] },
@@ -392,7 +392,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   assert.equal(updated.data.entity.state, 'active')
   assert.deepEqual(updated.data.entity.value, updatedKnowledge)
 
-  const deleted = valueOf(await ctx.patchouliMemory.update({
+  const deleted = valueOf(await ctx.patchouli.update({
     meta: callMeta('delete'),
     data: {
       meta: { ...databaseMeta, base_versions: [updated.data.entity.version] },
@@ -401,7 +401,7 @@ test('third-party plugin passes CRUD through the core service to SQLite', async 
   }))
   assert.equal(deleted.data.entity.state, 'deleted')
 
-  const readDeleted = valueOf(await ctx.patchouliMemory.retrieve({
+  const readDeleted = valueOf(await ctx.patchouli.retrieve({
     meta: callMeta('read'),
     data: { meta: databaseMeta, data: { ref } },
   }))

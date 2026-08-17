@@ -28,7 +28,7 @@ export const memoryCursorDomainSpec = defineDomain({
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    patchouliMemoryCursors: MemoryCursorStoreService
+    patchouliCursors: MemoryCursorStoreService
   }
 }
 
@@ -39,12 +39,12 @@ export class MemoryCursorStoreService extends Service {
   private table?: KvTable<string, CursorRecord>
 
   constructor(ctx: Context) {
-    super(ctx, 'patchouliMemoryCursors')
+    super(ctx, 'patchouliCursors')
   }
 
   protected async [Service.init](): Promise<void> {
     const domain = await this.ctx.storageDomain.open(memoryCursorDomainSpec)
-    this.ctx.effect(() => () => domain.close(), 'patchouliMemoryCursors.domainClose')
+    this.ctx.effect(() => () => domain.close(), 'patchouliCursors.domainClose')
     this.table = domain.table('cursors')
   }
 

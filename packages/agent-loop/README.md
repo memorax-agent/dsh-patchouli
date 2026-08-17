@@ -1,7 +1,7 @@
 # @memorax-agent/dsh-patchouli-agent-loop
 
 Cordis plugin adapting the official DeepSeek Harness Agent Loop to the
-in-process `ctx.patchouliMemory` service. It owns the model tools and Agent Loop
+in-process `ctx.patchouli` service. It owns the model tools and Agent Loop
 hooks; it does not implement memory storage, indexing, extraction, or prompt
 generation. Hook payloads are lossless JSON snapshots interpreted by registered
 MemoryPlugins.

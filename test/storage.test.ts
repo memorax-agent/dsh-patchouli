@@ -215,16 +215,16 @@ test('bridges storage requests and change notifications', async (t) => {
     startupTimeoutMs: 100,
   })
 
-  assert.equal(ctx.patchouli.server?.server.node_id, 'test')
+  assert.equal(ctx.patchouliStorage.server?.server.node_id, 'test')
   assert.deepEqual(handshakeCapabilities, ['artifacts', 'subscriptions'])
-  const status = await ctx.patchouli.status()
+  const status = await ctx.patchouliStorage.status()
   assert.equal(status.data.ready, true)
   assert.equal(status.data.provider, 'sqlite')
   assert.equal(status.data.generation, 4)
   assert.equal(status.data.recovered_after_unclean_shutdown, false)
   assert.equal(status.data.pid, process.pid)
-  assert.equal((await ctx.patchouli.checkpoint()).data.completed, true)
-  const retrieval = await ctx.patchouli.retrieve({
+  assert.equal((await ctx.patchouliStorage.checkpoint()).data.completed, true)
+  const retrieval = await ctx.patchouliStorage.retrieve({
     meta: { workspace: 'test' },
     data: { query: JSON.stringify({ text: 'hello' }), types: ['event'], limit: 1 },
   })
@@ -236,7 +236,7 @@ test('bridges storage requests and change notifications', async (t) => {
   assert.ok(variant)
   assert.equal(variant.ref.id, 'event-1')
 
-  await ctx.patchouli.query(
+  await ctx.patchouliStorage.query(
     { workspace: 'test' },
     { text: 'hello', where: { '/payload': 'hello' } },
     { types: ['event'], limit: 1 },
@@ -247,7 +247,7 @@ test('bridges storage requests and change notifications', async (t) => {
   )
 
   const pageIds: string[] = []
-  for await (const page of ctx.patchouli.queryPages(
+  for await (const page of ctx.patchouliStorage.queryPages(
     { workspace: 'test' },
     { order: 'id_asc' },
     { types: ['event'], limit: 1 },
@@ -260,7 +260,7 @@ test('bridges storage requests and change notifications', async (t) => {
     { order: 'id_asc', cursor: 'cursor-page-1' },
   )
 
-  await ctx.patchouli.retrieveByIds(
+  await ctx.patchouliStorage.retrieveByIds(
     { workspace: 'test' },
     ['event-1', 'event-2'],
     { types: ['event'], limit: 2 },
@@ -270,15 +270,15 @@ test('bridges storage requests and change notifications', async (t) => {
     { ids: ['event-1', 'event-2'] },
   )
 
-  const workUnit = await ctx.patchouli.runWorkUnit(
+  const workUnit = await ctx.patchouliStorage.runWorkUnit(
     { workspace: 'test', work_id: 'work-1', fixture_success: true },
     { work_state: 'commit' },
     [
-      meta => ctx.patchouli.create({
+      meta => ctx.patchouliStorage.create({
         meta,
         data: { type: 'event', id: 'work-event-1', value: { payload: 'first' } },
       }),
-      meta => ctx.patchouli.create({
+      meta => ctx.patchouliStorage.create({
         meta,
         data: { type: 'event', id: 'work-event-2', value: { payload: 'second' } },
       }),
@@ -297,11 +297,11 @@ test('bridges storage requests and change notifications', async (t) => {
     work_state: 'commit',
   })
   await assert.rejects(
-    ctx.patchouli.runWorkUnit({}, {}, []),
+    ctx.patchouliStorage.runWorkUnit({}, {}, []),
     /requires at least one mutation/,
   )
   await assert.rejects(
-    ctx.patchouli.runWorkUnit(
+    ctx.patchouliStorage.runWorkUnit(
       { work_id: 'one' },
       { work_id: 'two' },
       [async () => undefined],
@@ -310,7 +310,7 @@ test('bridges storage requests and change notifications', async (t) => {
   )
 
   const events: ChangesEventParams[] = []
-  const subscription = await ctx.patchouli.subscribe({
+  const subscription = await ctx.patchouliStorage.subscribe({
     meta: { workspace: 'test' },
     data: { filter: { types: ['event'] } },
   }, event => {
@@ -324,7 +324,7 @@ test('bridges storage requests and change notifications', async (t) => {
   assert.equal(firstEvent.meta.transaction_id, 'transaction-1')
   assert.equal(firstEvent.data.change.cursor, 'cursor-1')
 
-  const unsubscribe = await ctx.patchouli.unsubscribe({
+  const unsubscribe = await ctx.patchouliStorage.unsubscribe({
     meta: {},
     data: { subscription_id: subscription.data.subscription_id },
   })
@@ -333,7 +333,7 @@ test('bridges storage requests and change notifications', async (t) => {
   assert.equal(events.length, 1)
 
   await assert.rejects(
-    ctx.patchouli.create({
+    ctx.patchouliStorage.create({
       meta: {},
       data: { type: 'event', id: 'event-1', value: { payload: 'hello' } },
     }),
@@ -347,7 +347,7 @@ test('bridges storage requests and change notifications', async (t) => {
     },
   )
 
-  const handledSubscription = await ctx.patchouli.subscribe({
+  const handledSubscription = await ctx.patchouliStorage.subscribe({
     meta: { workspace: 'test' },
     data: {},
   }, () => {})
@@ -357,7 +357,7 @@ test('bridges storage requests and change notifications', async (t) => {
   assert.deepEqual(await handledSubscription.closed, { kind: 'unsubscribed' })
   assert.equal(unsubscribeRequests, 2)
 
-  const disconnectedSubscription = await ctx.patchouli.subscribe({
+  const disconnectedSubscription = await ctx.patchouliStorage.subscribe({
     meta: { workspace: 'test' },
     data: {},
   }, () => {})

@@ -17,7 +17,7 @@ import type {
 
 export const name = 'dsh-patchouli-agent-loop'
 
-export const inject = ['agents', 'sessions', 'tools', 'patchouliMemory'] as const
+export const inject = ['agents', 'sessions', 'tools', 'patchouli'] as const
 
 export interface RetrieveHooksConfig {
   sessionStart?: boolean
@@ -48,26 +48,26 @@ export interface Config {
 
 export const Config: z<Config> = z.object({
   retrieve: z.object({
-    sessionStart: z.boolean().default(false),
+    sessionStart: z.boolean().default(true),
     preStep: z.boolean().default(true),
     turnStopping: z.boolean().default(false),
     toolPostExecute: z.boolean().default(false),
   }).default({
-    sessionStart: false,
+    sessionStart: true,
     preStep: true,
     turnStopping: false,
     toolPostExecute: false,
   }),
   store: z.object({
     agentCreated: z.boolean().default(false),
-    agentDisposed: z.boolean().default(false),
+    agentDisposed: z.boolean().default(true),
     requestError: z.boolean().default(false),
     agentError: z.boolean().default(false),
     turnEnd: z.boolean().default(true),
     toolResult: z.boolean().default(false),
   }).default({
     agentCreated: false,
-    agentDisposed: false,
+    agentDisposed: true,
     requestError: false,
     agentError: false,
     turnEnd: true,
@@ -137,17 +137,21 @@ function observation(
   events: readonly SessionEvent[] = agent.session.events,
 ): MemoryData {
   return snapshot({
-    agent: {
-      id: String(agent.id),
-      status: agent.status,
-      options: agent.options,
-    },
+    agent: agentData(agent),
     session: {
       header: agent.session.header,
       events,
     },
     ...data,
   })
+}
+
+function agentData(agent: Agent): Record<string, unknown> {
+  return {
+    id: String(agent.id),
+    status: agent.status,
+    options: agent.options,
+  }
 }
 
 function turnEvents(session: Session, turn: number, endSeq?: number): readonly SessionEvent[] {
@@ -183,24 +187,45 @@ function errorData(error: unknown): MemoryData {
   return String(error)
 }
 
-function retrievedMessages(
+function aggregateForContext(
   point: AgentLoopDataPoint,
   outcomes: readonly MemoryPluginOutcome<MemoryData>[],
-): UserMessage[] {
-  return outcomes.flatMap((outcome): UserMessage[] => {
+): UserMessage | undefined {
+  const results = outcomes.flatMap((outcome) => {
     if (!outcome.ok) return []
-    return [createUserMessage({
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          point,
-          pluginId: outcome.pluginId,
-          data: outcome.value,
-        }),
-      }],
-      source: { kind: 'plugin', plugin: name, form: 'recall' },
-    })]
+    if (isSemanticallyEmpty(outcome.value)) return []
+    return [{ pluginId: outcome.pluginId, data: outcome.value }]
   })
+  if (results.length === 0) return undefined
+  return createUserMessage({
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        kind: 'patchouli-memory-results',
+        point,
+        results,
+      }),
+    }],
+    source: { kind: 'plugin', plugin: name, form: 'recall' },
+  })
+}
+
+const emptyResultMetadata = new Set([
+  'count',
+  'hasMore',
+  'length',
+  'size',
+  'total',
+  'truncated',
+])
+
+function isSemanticallyEmpty(value: MemoryData, field?: string): boolean {
+  if (value === null) return true
+  if (typeof value === 'string') return value.trim() === ''
+  if (typeof value === 'number') return value === 0 && emptyResultMetadata.has(field ?? '')
+  if (typeof value === 'boolean') return !value && emptyResultMetadata.has(field ?? '')
+  if (Array.isArray(value)) return value.every(item => isSemanticallyEmpty(item))
+  return Object.entries(value).every(([key, item]) => isSemanticallyEmpty(item, key))
 }
 
 function outcomeJson<T>(outcomes: readonly MemoryPluginOutcome<T>[]): string {
@@ -232,14 +257,14 @@ function mergeAdditionalContexts(
 
 export function apply(ctx: Context, config: Config): void {
   const retrieve = {
-    sessionStart: config.retrieve?.sessionStart ?? false,
+    sessionStart: config.retrieve?.sessionStart ?? true,
     preStep: config.retrieve?.preStep ?? true,
     turnStopping: config.retrieve?.turnStopping ?? false,
     toolPostExecute: config.retrieve?.toolPostExecute ?? false,
   }
   const store = {
     agentCreated: config.store?.agentCreated ?? false,
-    agentDisposed: config.store?.agentDisposed ?? false,
+    agentDisposed: config.store?.agentDisposed ?? true,
     requestError: config.store?.requestError ?? false,
     agentError: config.store?.agentError ?? false,
     turnEnd: config.store?.turnEnd ?? true,
@@ -276,7 +301,7 @@ export function apply(ctx: Context, config: Config): void {
     const run = async (): Promise<void> => {
       if (lifetime.signal.aborted) return
       try {
-        const outcomes = await ctx.patchouliMemory.update({
+        const outcomes = await ctx.patchouli.update({
           meta: callMeta(session, point, attributes),
           data,
         }, lifetime.signal)
@@ -303,13 +328,14 @@ export function apply(ctx: Context, config: Config): void {
     attributes: Record<string, string | number> = {},
   ): Promise<UserMessage[]> {
     try {
-      const outcomes = await ctx.patchouliMemory.retrieve({
+      const outcomes = await ctx.patchouli.retrieve({
         meta: callMeta(session, point, attributes),
         data,
       }, signal)
       signal.throwIfAborted()
       warnFailures(ctx, 'retrieve', outcomes)
-      return retrievedMessages(point, outcomes)
+      const message = aggregateForContext(point, outcomes)
+      return message === undefined ? [] : [message]
     } catch (error: unknown) {
       signal.throwIfAborted()
       const message = error instanceof Error ? error.message : String(error)
@@ -345,7 +371,7 @@ export function apply(ctx: Context, config: Config): void {
           throw new Error('memory_retrieve limit must be a positive safe integer')
         }
 
-        const outcomes = await ctx.patchouliMemory.retrieve({
+        const outcomes = await ctx.patchouli.retrieve({
           meta: callMeta(exec.agent.session, 'tool/memory-retrieve'),
           data: snapshot({
             query,
@@ -447,7 +473,7 @@ export function apply(ctx: Context, config: Config): void {
           throw new Error('memory_update requires at least one message or resource')
         }
 
-        const outcomes = await ctx.patchouliMemory.update({
+        const outcomes = await ctx.patchouli.update({
           meta: callMeta(exec.agent.session, 'tool/memory-update'),
           data: snapshot({
             ...messages.length === 0 ? {} : { messages },
@@ -571,11 +597,16 @@ export function apply(ctx: Context, config: Config): void {
     ctx.on('session/event', (session, event) => {
       if (event.type !== 'turn/end') return
       const events = turnEvents(session, event.data.turn, event.seq)
+      const sessionEvents = session.events.filter(candidate => candidate.seq <= event.seq)
+      const agent = ctx.agents.get(session.header.id)
       enqueueUpdate(
         session,
         'session/turn-end',
         snapshot({
-          session: { header: session.header },
+          agent: agent === undefined
+            ? { id: String(session.header.id), options: {} }
+            : agentData(agent),
+          session: { header: session.header, events: sessionEvents },
           event,
           events,
         }),

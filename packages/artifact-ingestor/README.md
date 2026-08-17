@@ -4,7 +4,7 @@ Storage-backed MemoryPlugin that turns DSH image attachment references and
 explicit Agent Loop `workspace-file` resources into managed Patchouli Artifact
 entities.
 
-The plugin keeps bytes outside `ctx.patchouliMemory`: it resolves trusted DSH
+The plugin keeps bytes outside `ctx.patchouli`: it resolves trusted DSH
 references through `ctx.attachments` or `ctx.fs`, checks workspace containment,
 then uploads verified bytes through `ctx.patchouli`. It requires the Patchouli
 storage client, which the bundled DSH profile enables by default.

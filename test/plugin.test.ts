@@ -4,8 +4,9 @@ import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import {
   apply,
+  type Config as PatchouliConfig,
   inject,
-  MemoryService,
+  PatchouliService,
   MemorySubscriptionError,
   name,
   type MemoryChangeHandler,
@@ -18,10 +19,10 @@ import {
   type MemorySubscriptionFailure,
 } from '../lib/index.js'
 
-async function mountPatchouli() {
+async function mountPatchouli(config: PatchouliConfig = {}) {
   const ctx = new Context()
-  const fiber = await ctx.plugin({ name, inject, apply })
-  return { ctx, fiber, memory: ctx.patchouliMemory }
+  const fiber = await ctx.plugin({ name, inject, apply }, config)
+  return { ctx, fiber, memory: ctx.patchouli }
 }
 
 test('mounts the common memory service', async (t) => {
@@ -30,7 +31,7 @@ test('mounts the common memory service', async (t) => {
 
   assert.equal(name, 'dsh-patchouli')
   assert.deepEqual(inject, [])
-  assert.ok(ctx.patchouliMemory instanceof MemoryService)
+  assert.ok(ctx.patchouli instanceof PatchouliService)
 })
 
 test('routes update and retrieve to registered plugins and aggregates outcomes', async (t) => {
@@ -113,6 +114,56 @@ test('routes update and retrieve to registered plugins and aggregates outcomes',
   ])
 })
 
+test('times out one retrieval provider without blocking successful peers', async (t) => {
+  const { fiber, memory } = await mountPatchouli({
+    retrieveTimeoutMs: 1_000,
+    routing: { slow: { retrieveTimeoutMs: 20 } },
+  })
+  t.after(() => fiber.dispose())
+  const never = new Promise<never>(() => {})
+  memory.register({
+    id: 'slow',
+    async update() { return null },
+    async retrieve() { return never },
+  })
+  memory.register({
+    id: 'fast',
+    async update() { return null },
+    async retrieve() { return { items: ['ready'] } },
+  })
+
+  const outcomes = await memory.retrieve({
+    meta: { source: { type: 'test', id: 'deadline' }, scope: 'test' },
+    data: { query: 'ready' },
+  })
+  assert.deepEqual(outcomes, [
+    {
+      pluginId: 'slow',
+      ok: false,
+      error: 'memory provider "slow retrieve" timed out after 20ms',
+    },
+    { pluginId: 'fast', ok: true, value: { items: ['ready'] } },
+  ])
+})
+
+test('caller abort releases a retrieval blocked by a provider', async (t) => {
+  const { fiber, memory } = await mountPatchouli({ retrieveTimeoutMs: 30_000 })
+  t.after(() => fiber.dispose())
+  memory.register({
+    id: 'blocked',
+    async update() { return null },
+    async retrieve() { return new Promise<never>(() => {}) },
+  })
+  const controller = new AbortController()
+  const retrieval = memory.retrieve({
+    meta: { source: { type: 'test', id: 'abort' }, scope: 'test' },
+    data: { query: 'blocked' },
+  }, controller.signal)
+  controller.abort(new Error('caller stopped retrieval'))
+
+  await assert.rejects(retrieval, /caller stopped retrieval/)
+})
+
 test('routes calls through registration filters without exposing plugin selection to callers', async (t) => {
   const { fiber, memory } = await mountPatchouli()
   t.after(() => fiber.dispose())
@@ -192,6 +243,77 @@ test('routes calls through registration filters without exposing plugin selectio
     ['skipped', { operation: 'update', meta }],
     ['broken', { operation: 'update', meta }],
   ])
+})
+
+test('combines provider, registration, and user-configured route filters', async (t) => {
+  const { fiber, memory } = await mountPatchouli({
+    routing: {
+      selected: {
+        operations: ['retrieve'],
+        sourceTypes: ['agent-loop'],
+        scopes: ['workspace-a'],
+        attributes: { point: 'agent/pre-step' },
+      },
+      disabled: { enabled: false },
+    },
+  })
+  t.after(() => fiber.dispose())
+
+  const filters: string[] = []
+  const calls: string[] = []
+  const disposeSelected = memory.register({
+    id: 'selected',
+    filter(call) {
+      filters.push('provider')
+      return call.meta.source.id === 'consumer-a'
+    },
+    async update() {
+      calls.push('update')
+      return null
+    },
+    async retrieve() {
+      calls.push('retrieve')
+      return { items: ['selected'] }
+    },
+  }, {
+    filter(call) {
+      filters.push('registration')
+      return call.meta.attributes?.tenant === 'tenant-a'
+    },
+  })
+  const disposeDisabled = memory.register({
+    id: 'disabled',
+    filter() {
+      throw new Error('disabled plugin filter must not run')
+    },
+    async update() { return null },
+    async retrieve() { return null },
+  })
+  t.after(() => {
+    disposeDisabled()
+    disposeSelected()
+  })
+
+  const meta = {
+    source: { type: 'agent-loop', id: 'consumer-a' },
+    scope: 'workspace-a',
+    attributes: { point: 'agent/pre-step', tenant: 'tenant-a' },
+  }
+  assert.deepEqual(await memory.retrieve({ meta, data: { query: 'route' } }), [{
+    pluginId: 'selected',
+    ok: true,
+    value: { items: ['selected'] },
+  }])
+  assert.deepEqual(filters, ['provider', 'registration'])
+  assert.deepEqual(calls, ['retrieve'])
+
+  assert.deepEqual(await memory.update({ meta, data: null }), [])
+  assert.deepEqual(await memory.retrieve({
+    meta: { ...meta, attributes: { ...meta.attributes, point: 'tools/post-execute' } },
+    data: { query: 'route' },
+  }), [])
+  assert.deepEqual(filters, ['provider', 'registration'])
+  assert.deepEqual(calls, ['retrieve'])
 })
 
 test('filters subscriptions and reports filter failures to the consumer', async (t) => {
@@ -289,9 +411,9 @@ test('removes a memory plugin with its registering Cordis fiber', async (t) => {
 
   const pluginFiber = await ctx.plugin({
     name: 'temporary-memory-plugin',
-    inject: ['patchouliMemory'],
+    inject: ['patchouli'],
     apply(pluginCtx) {
-      pluginCtx.patchouliMemory.register({
+      pluginCtx.patchouli.register({
         id: 'temporary',
         async update() {
           return { status: 'applied' }
@@ -675,9 +797,9 @@ test('disposes and drains a subscription with its consuming Cordis fiber', async
   let subscription: MemorySubscription | undefined
   const consumerFiber = await ctx.plugin({
     name: 'memory-change-consumer',
-    inject: ['patchouliMemory'],
+    inject: ['patchouli'],
     async apply(pluginCtx) {
-      subscription = await pluginCtx.patchouliMemory.subscribe(
+      subscription = await pluginCtx.patchouli.subscribe(
         { meta: { source: { type: 'test', id: 'plugin-test' }, scope: 'test' } },
         async () => {},
         {
