@@ -39,21 +39,26 @@ remains harness-neutral.
 ## Plugin compatibility
 
 `Official` means the upstream plugin registers the `patchouli` service directly.
-`Patch` means GOOJFC adapts one exact plugin version through dsh-harmony. There
-are no official integrations yet; all currently tested integrations are patches.
+`Patch` means GOOJFC adapts one exact plugin version through
+[dsh-harmony](https://github.com/CH4ACKO3/dsh-harmony). There are no official
+integrations yet; all currently tested integrations are patches.
 
-| Plugin | Tested package | Compatibility |
-| --- | --- | --- |
-| [OpenViking](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin) | `@openviking/dsh-memory-plugin@0.1.0` | Patch |
-| [Hindsight](https://github.com/vectorize-io/hindsight/tree/main/hindsight-integrations/coding-agents) | `@vectorize-io/hindsight-coding-agents@0.3.4` | Patch |
-| [MemOS](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) | `@memtensor/memos-local-plugin@2.0.16-beta.1` | Patch |
-| [Mneme](https://github.com/modusensus/dsh-mneme) | `@modusensus/dsh-mneme@0.3.7` | Patch |
-| [Mnemon](https://github.com/omdsh-dev/dsh-mnemon) | `dsh-mnemon@0.1.6` | Patch |
-| [Memory Gate](https://github.com/GIT121995/dsh-memory-gate) | `dsh-memory-gate@0.9.0` | Patch |
-| [Lingshu Memory](https://github.com/FuRongJun-1999/dsh-memory) | `@furongjun1999/dsh-memory@0.2.8` | Patch |
-| [Graph Memory](https://github.com/adoresever/graph-memory) | `graph-memory@1.5.8` | Patch |
-| [Engramory](https://github.com/tinqiao-oss/engramory/tree/master/adapters/dsh/plugin) | `dsh-engramory@0.2.0` | Patch |
-| [Memory Evolve](https://github.com/csyangwen/dsh-memory-evolve) | `dsh-memory-evolve@0.1.0` | Patch |
+| Plugin | Tested package | Compatibility | Patchouli DB |
+| --- | --- | --- | --- |
+| [OpenViking](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin) | `@openviking/dsh-memory-plugin@0.1.0` | Patch | No — plugin-managed |
+| [Hindsight](https://github.com/vectorize-io/hindsight/tree/main/hindsight-integrations/coding-agents) | `@vectorize-io/hindsight-coding-agents@0.3.4` | Patch | No — plugin-managed |
+| [MemOS](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) | `@memtensor/memos-local-plugin@2.0.16-beta.1` | Patch | No — plugin-managed |
+| [Mneme](https://github.com/modusensus/dsh-mneme) | `@modusensus/dsh-mneme@0.3.7` | Patch | No — plugin-managed |
+| [Mnemon](https://github.com/omdsh-dev/dsh-mnemon) | `dsh-mnemon@0.1.6` | Patch | No — plugin-managed |
+| [Memory Gate](https://github.com/GIT121995/dsh-memory-gate) | `dsh-memory-gate@0.9.0` | Patch | No — plugin-managed |
+| [Lingshu Memory](https://github.com/FuRongJun-1999/dsh-memory) | `@furongjun1999/dsh-memory@0.2.8` | Patch | No — plugin-managed |
+| [Graph Memory](https://github.com/adoresever/graph-memory) | `graph-memory@1.5.8` | Patch | No — plugin-managed |
+| [Engramory](https://github.com/tinqiao-oss/engramory/tree/master/adapters/dsh/plugin) | `dsh-engramory@0.2.0` | Patch | No — plugin-managed |
+| [Memory Evolve](https://github.com/csyangwen/dsh-memory-evolve) | `dsh-memory-evolve@0.1.0` | Patch | No — plugin-managed |
+
+> Building a DSH plugin or exploring compatibility with an existing one? Try
+> [dsh-harmony](https://github.com/CH4ACKO3/dsh-harmony) to inspect and adapt
+> plugin behavior without maintaining an upstream fork.
 
 ## Install and use
 

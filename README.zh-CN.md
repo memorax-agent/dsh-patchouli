@@ -37,21 +37,26 @@ DeepSeek Harness 是目前首个受支持的集成，数据库后端本身不依
 ## 插件兼容情况
 
 `Official`（官方兼容）表示上游插件直接注册 `patchouli` service；`Patch`
-（补丁兼容）表示 GOOJFC 通过 dsh-harmony 适配一个精确版本。目前还没有
-官方兼容的插件，以下已验证集成均为补丁兼容。
+（补丁兼容）表示 GOOJFC 通过
+[dsh-harmony](https://github.com/CH4ACKO3/dsh-harmony) 适配一个精确版本。
+目前还没有官方兼容的插件，以下已验证集成均为补丁兼容。
 
-| 插件 | 已验证包 | 兼容方式 |
-| --- | --- | --- |
-| [OpenViking](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin) | `@openviking/dsh-memory-plugin@0.1.0` | Patch |
-| [Hindsight](https://github.com/vectorize-io/hindsight/tree/main/hindsight-integrations/coding-agents) | `@vectorize-io/hindsight-coding-agents@0.3.4` | Patch |
-| [MemOS](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) | `@memtensor/memos-local-plugin@2.0.16-beta.1` | Patch |
-| [Mneme](https://github.com/modusensus/dsh-mneme) | `@modusensus/dsh-mneme@0.3.7` | Patch |
-| [Mnemon](https://github.com/omdsh-dev/dsh-mnemon) | `dsh-mnemon@0.1.6` | Patch |
-| [Memory Gate](https://github.com/GIT121995/dsh-memory-gate) | `dsh-memory-gate@0.9.0` | Patch |
-| [灵枢记忆](https://github.com/FuRongJun-1999/dsh-memory) | `@furongjun1999/dsh-memory@0.2.8` | Patch |
-| [Graph Memory](https://github.com/adoresever/graph-memory) | `graph-memory@1.5.8` | Patch |
-| [Engramory](https://github.com/tinqiao-oss/engramory/tree/master/adapters/dsh/plugin) | `dsh-engramory@0.2.0` | Patch |
-| [Memory Evolve](https://github.com/csyangwen/dsh-memory-evolve) | `dsh-memory-evolve@0.1.0` | Patch |
+| 插件 | 已验证包 | 兼容方式 | Patchouli DB |
+| --- | --- | --- | --- |
+| [OpenViking](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin) | `@openviking/dsh-memory-plugin@0.1.0` | Patch | 否（插件自管） |
+| [Hindsight](https://github.com/vectorize-io/hindsight/tree/main/hindsight-integrations/coding-agents) | `@vectorize-io/hindsight-coding-agents@0.3.4` | Patch | 否（插件自管） |
+| [MemOS](https://github.com/MemTensor/MemOS/tree/main/apps/memos-local-plugin) | `@memtensor/memos-local-plugin@2.0.16-beta.1` | Patch | 否（插件自管） |
+| [Mneme](https://github.com/modusensus/dsh-mneme) | `@modusensus/dsh-mneme@0.3.7` | Patch | 否（插件自管） |
+| [Mnemon](https://github.com/omdsh-dev/dsh-mnemon) | `dsh-mnemon@0.1.6` | Patch | 否（插件自管） |
+| [Memory Gate](https://github.com/GIT121995/dsh-memory-gate) | `dsh-memory-gate@0.9.0` | Patch | 否（插件自管） |
+| [灵枢记忆](https://github.com/FuRongJun-1999/dsh-memory) | `@furongjun1999/dsh-memory@0.2.8` | Patch | 否（插件自管） |
+| [Graph Memory](https://github.com/adoresever/graph-memory) | `graph-memory@1.5.8` | Patch | 否（插件自管） |
+| [Engramory](https://github.com/tinqiao-oss/engramory/tree/master/adapters/dsh/plugin) | `dsh-engramory@0.2.0` | Patch | 否（插件自管） |
+| [Memory Evolve](https://github.com/csyangwen/dsh-memory-evolve) | `dsh-memory-evolve@0.1.0` | Patch | 否（插件自管） |
+
+> 正在开发 DSH 插件，或想探索现有插件的兼容方式？欢迎尝试
+> [dsh-harmony](https://github.com/CH4ACKO3/dsh-harmony)，无需长期维护上游
+> fork，也能检查并适配插件行为。
 
 ## 安装与使用
 
