@@ -3,6 +3,7 @@ packages:
   - packages/*
 
 allowBuilds:
+  dsh-harmony: true
   esbuild: true
 
 minimumReleaseAgeExclude:
