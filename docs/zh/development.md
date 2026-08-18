@@ -152,14 +152,12 @@ Retryable 的 `MemorySubscriptionError` 会重连；Fatal、未知错误和 `res
 保留 Method、Code、Data 与 Reason。它不会等待或序列化 Handler；存储型 MemoryPlugin
 负责映射连接丢失与 `CURSOR_EXPIRED`，高层服务负责 Cursor、去重、重试和生命周期。
 
-## CI 策略
+## CI 与发布
 
-公开仓库的 PR 只在 GitHub-hosted Runner 上运行。Self-hosted Runner 仅用于可信
-`main` Delivery 和手动运行。Node 检查、Rust Lint、数据库 E2E 与三平台 Rust 测试
-并行运行，汇总 Gate 通过后再并行构建 Linux x86_64/aarch64、macOS x86_64/aarch64
-和 Windows x86_64 Daemon。`v*` Tag 发布带 SHA-256 的 Release。
-受信任务可以在 `PATCHOULI_DEPLOY_ROOT` 下部署、重启并验证 Daemon，失败时恢复旧版本；
-工作流不会安装或修改 DSH Profile。
+CI 和发布都使用 GitHub-hosted Runner。Node 检查、Rust Lint、数据库 E2E 与三平台
+Rust 测试会并行运行；汇总检查通过后，再并行构建 Linux x86_64/aarch64、macOS
+x86_64/aarch64 和 Windows x86_64 的 Daemon。推送 `v*` Tag 会发布带 SHA-256 校验文件的
+GitHub Release 和 npm 包。工作流不会安装或修改 DSH Profile，也不会部署到本地服务器。
 
 ## 文档站
 

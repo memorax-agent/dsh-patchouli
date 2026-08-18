@@ -1,7 +1,7 @@
 # DeepSeek Harness 集成
 
-Patchouli 的高层 API 是 DSH 进程内服务。外部应用和其他 Harness 需要单独的
-适配器；Patchouli 不通过外部 Bridge 暴露 Memory Service。
+Patchouli 的高层 API 只在 DSH 进程内提供。外部应用和其他 Harness 需要各自的适配器；
+Patchouli 不通过外部 Bridge 暴露 Memory Service。
 
 ## 统一 Memory Service
 
@@ -11,13 +11,13 @@ Patchouli 的高层 API 是 DSH 进程内服务。外部应用和其他 Harness 
 - `retrieve`：向注册插件查询相关信息；
 - `subscribe`：将插件拥有的变更推送给响应式 Consumer。
 
-每次调用包含 `meta` 和由插件定义的 JSON `data`。服务根据插件注册时提供的
-过滤器路由调用，并为每个匹配插件返回独立结果。调用方不能直接选择内部插件。
+每次调用都有 `meta` 和插件定义的 JSON `data`。服务按插件注册的过滤器分发调用，
+每个匹配插件各自返回结果。调用方不能直接点名内部插件。
 
 ## Agent Loop 适配器
 
-官方适配器会发送每个已启用 Hook 点位能够观察到的完整数据。它不会添加检索
-提示词、总结事件或决定插件应如何形成记忆。
+官方适配器会发送每个启用 Hook 点能看到的完整数据。它不添加检索提示词，不总结事件，
+也不替插件决定如何形成记忆。
 
 ```yaml
 - id: patchouli-agent-loop
@@ -41,8 +41,8 @@ Patchouli 的高层 API 是 DSH 进程内服务。外部应用和其他 Harness 
 
 默认策略在每个 Agent Step 前检索、保存每个已提交 Turn，并向模型暴露
 `memory_retrieve` 和 `memory_update`。其他 Hook 点位需显式开启。
-`agent/session-start` 是非等待通知，因此该点的检索采用尽力而为；其他等待型
-Hook 保留官方 Agent Loop 的同步语义。
+`agent/session-start` 是非等待通知，所以这里的检索采用尽力而为；其他等待型 Hook
+仍按官方 Agent Loop 的方式同步等待。
 
 `memory_update` 可以提交工作区文件，而不必先把文件字节读入模型调用：
 

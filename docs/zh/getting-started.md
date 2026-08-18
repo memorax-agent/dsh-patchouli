@@ -1,6 +1,6 @@
 # 快速开始
 
-Patchouli 提供两个可以独立使用的部分：
+Patchouli 的两个部分既可单独使用，也可一起使用：
 
 - DeepSeek Harness 插件 Bundle，对外提供统一 Memory Service；
 - 可选的 `patchouli-db` 守护进程，提供本地或远程事务存储。
@@ -26,8 +26,8 @@ dsh plugin --profile web add .
 dsh --profile web --dump-config
 ```
 
-Web Profile 中应出现核心 `patchouli` 插件、Agent Loop 适配器、Artifact
-Ingestor、Session/Workspace Indexer 边界以及持久化记忆游标服务。
+Web Profile 中会列出 `patchouli`、Agent Loop 适配器、Artifact Ingestor、
+Session/Workspace Indexer 和记忆游标服务。
 
 ## 安装可选后端
 
@@ -49,8 +49,8 @@ irm https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/inst
 
 ## 配置存储客户端
 
-默认 Bundle 已启用存储客户端。插件需要不同的 Daemon Endpoint 或自动启动行为时可
-调整其配置：
+默认 Bundle 会启用存储客户端。需要使用其他 Daemon 地址，或调整自动启动时，再改
+它的配置：
 
 ```yaml
 - id: patchouli-storage
@@ -59,12 +59,12 @@ irm https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/inst
     autoStart: true
 ```
 
-客户端通过 `ctx.patchouliStorage` 提供守护进程控制、通用实体 CRUD、检索、托管
-Artifact 传输和基于游标的变更订阅。
+`ctx.patchouliStorage` 提供守护进程控制、通用实体 CRUD、检索、Artifact 上传下载
+和按游标读取变更。
 
 ## 下一步
 
 - 在 [DSH 集成](./dsh-integration.md)中配置 Agent Loop Hook 与 Consumer。
-- 阅读[架构](./architecture.md)，了解进程和插件边界。
+- 阅读[架构](./architecture.md)，了解各进程和插件如何配合。
 - 在[后端配置](./backend-configuration.md)中选择身份与一致性规则。
 - 通过[知识模型](./knowledge-model.md)建模文件、知识与关系。

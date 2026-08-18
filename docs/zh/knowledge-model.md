@@ -22,33 +22,33 @@ Patchouli Fact IR v1 包含三种公开记录值：
   <template #fallback>正在加载实体身份关系图……</template>
 </ClientOnly>
 
-通用实体 Envelope 是实体 ID 与存储版本的唯一权威，因此 Fact 值不会在
-`metadata` 中重复 `id` 或 `revision`。请求 `meta` 经过配置生成 `scope_json`，
-它属于每个数据库键，也是授权和存储边界。`metadata.core.scope` 只描述语义上的
-租户、工作区、用户和 Session；它是不可信输入，不能扩大配置规定的存储 Scope。
+通用实体 Envelope 保存实体 ID 和存储版本，Fact 值不会在 `metadata` 中重复
+`id` 或 `revision`。请求 `meta` 经配置生成 `scope_json`，每个数据库键都会带上它，
+用来确定访问范围和存放位置。`metadata.core.scope` 只描述租户、工作区、用户和
+Session；它来自不可信输入，不能扩大配置指定的 Scope。
 
 ## Artifact
 
-文件、向量和其他非 JSON 资源是一等 `artifact` 实体。Knowledge 不嵌入字节，
-也不复制存储细节。每个 Artifact 包含媒体类型、可选名称、可选长度和摘要、语义
-元数据，以及唯一一种 Placement：
+文件、向量和其他非 JSON 资源都是一等 `artifact` 实体。Knowledge 不嵌入字节，也不
+复制它们的存放信息。每个 Artifact 包含媒体类型、可选名称、可选长度和摘要、描述性
+元数据，以及一种 Placement：
 
 ```text
 managed  Patchouli 在 provider + key 处拥有字节
 indexed  外部 Provider 在 provider + locator + revision 处拥有字节
 ```
 
-本地路径和远程对象 ID 使用相同的 `indexed` 结构。Provider 解释不透明 Locator，
+本地文件和远程对象 ID 都使用相同的 `indexed` 写法。Provider 解释不透明 Locator，
 通用 CRUD 与 Knowledge Consumer 不区分本地或远程。Locator 和 Key 不得包含凭据。
 
 `managed` Artifact 必须同时具有 `byte_length` 和 `digest`；`indexed` Artifact
 在外部 Provider 只暴露 Revision 时可以缺少两者。修改外部 Revision 或将其提升为
 托管存储都会创建正常的新实体版本。
 
-托管字节通过 Artifact Upload RPC 进入后端。Commit 会验证长度和 SHA-256、对相同
-内容去重，并通过正常的 Scope、事务、一致性、冲突和变更发布链路创建实体。下载
-先解析有 Scope 的实体，客户端永远不会获得后端文件路径。Placement Provider 是
-拥有字节的 Daemon Node ID，其他节点可以拒绝误发的请求。
+托管字节通过 Artifact Upload RPC 进入后端。Commit 会验证长度和 SHA-256、对相同内容
+去重，再按 Scope、事务、一致性和冲突规则创建实体并发布变更。下载先查带 Scope 的
+实体，客户端不会获得后端文件路径。Placement Provider 是保存字节的 Daemon Node ID，
+其他节点可以拒绝发错目标的请求。
 
 `indexed` Artifact 使用通用 CRUD，由 Placement 指定的 Provider 解释 Locator。
 删除或替换实体不会立刻删除托管字节，因为内容寻址对象可能被共享。未完成上传在
@@ -56,7 +56,7 @@ indexed  外部 Provider 在 provider + locator + revision 处拥有字节
 
 Knowledge 通过 `{ type: "artifact", id, role }` 引用 Artifact。`role` 可为
 `source`、`attachment` 或 `embedding`；媒体类型、摘要、Placement 与 Provenance
-只在 Artifact 实体中维护一份权威数据。
+只保存在 Artifact 实体中。
 
 ## Knowledge
 
@@ -66,20 +66,20 @@ Knowledge 通过 `{ type: "artifact", id, role }` 引用 Artifact。`role` 可�
 content   文本或结构化 JSON
 metadata  固定 Core 与带命名空间的扩展
 artifact  零个或多个带类型的 Artifact 引用
-profile   七个行为维度
+profile   七组描述字段
 ```
 
 `content` 是 `{ kind: "text", text }` 或 `{ kind: "structured", value }`。
 二进制和向量不会嵌入 Content。
 
-`metadata.core` 固定 Schema 身份、语义 Scope、来源、时间戳、生命周期与 Provenance。
+`metadata.core` 固定 Schema 身份、Scope、来源、时间戳、生命周期与 Provenance。
 所有可空 Core 字段都显式保留为 `null`，避免将省略误解为未知。扩展键至少包含一个
 命名空间分隔符，例如 `local.session`。Embedding 模型和维度等表示层信息属于
 Artifact Metadata 扩展，不复制到每个引用。
 
-Profile 维度如下：
+Profile 包含以下字段：
 
-| 维度 | 取值 |
+| 字段 | 取值 |
 | --- | --- |
 | epistemic | `unknown`、`observation`、`hypothesis`、`belief`、`knowledge`、`derived` |
 | temporal | `unknown`、`timeless`、`instant`、`interval`、`sequence` |
@@ -108,14 +108,14 @@ Schema 身份的同构 Metadata。每个集合内的引用必须唯一。v1 类�
 
 所有端点都在 Relation 实体的配置存储 Scope 中解析；v1 不支持跨 Scope Relation。
 更新可以同时替换 `type`、`from`、`to` 和 `metadata`，并创建新的不透明版本。
-两个集合可以重叠，因此自关系和环都是合法记录；后端不施加图拓扑约束。
+两个集合可以重叠，因此自关系和环都是合法记录；后端不限制图的拓扑。
 
 JSON Schema 验证本地结构。Controller 还会检查端点存在性、共同 Scope、Tombstone
 和通用版本/冲突策略，但不会检查环，也不会强制保留旧 Relation 的类型或端点。
 
 ## SQLite 条目
 
-SQLite Schema v11 定义两个权威表：
+SQLite Schema v11 定义两个主要表：
 
 - `patchouli_entity_version`：按规范化
   `scope_json + entity_type + entity_id + version` 保存不可变活动值与 Tombstone；
@@ -131,5 +131,5 @@ Head 和类型化 View。
 
 活动行必须包含有效 JSON，Tombstone 的值必须为 `null`。值只存储一次；
 `patchouli_artifact`、`patchouli_knowledge` 和 `patchouli_knowledge_relation`
-是活动 Head 上的只读 View，不会成为第二语义权威。旧存储 Schema 会被明确拒绝，
-当前阶段不提供迁移或兼容路径。
+是活动 Head 上的只读 View，不会成为第二份数据来源。旧存储 Schema 会被明确拒绝，
+当前不提供迁移或兼容方案。
