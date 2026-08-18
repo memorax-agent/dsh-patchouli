@@ -5,8 +5,8 @@ hero:
   name: Patchouli
   text: Knowledge that outlives the harness.
   tagline: |-
-    把 DeepSeek Harness 的记忆、知识组件接到同一个入口，
-    并用独立数据库保存它们需要的数据。
+    协调你的 DeepSeek Harness 记忆、知识插件
+    并提供统一、持久的数据库
   image:
     src: /patchouli-icon-color.png
     alt: 带有黄色新月的紫色等轴测书架
