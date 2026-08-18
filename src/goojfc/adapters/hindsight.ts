@@ -1,4 +1,4 @@
-import type { JsonValue } from '@memorax-agent/patchouli-protocol'
+import type { JsonValue } from 'dsh-patchouli-protocol'
 import { createHash } from 'node:crypto'
 
 import type {

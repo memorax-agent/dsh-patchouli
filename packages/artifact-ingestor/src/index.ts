@@ -7,7 +7,7 @@ import z from '@deepseek-ai/schemastery'
 import type {
   FactMetadata,
   JsonObject,
-} from '@memorax-agent/patchouli-protocol'
+} from 'dsh-patchouli-protocol'
 import type {
   MemoryCallMeta,
   MemoryData,

@@ -40,7 +40,7 @@ remains harness-neutral.
 
 `Official` means the upstream plugin registers the `patchouli` service directly.
 `Patch` means GOOJFC adapts one exact plugin version through
-[dsh-harmony](https://github.com/CH4ACKO3/dsh-harmony). The table distinguishes
+[dsh-harmony](https://github.com/memorax-ai/dsh-harmony). The table distinguishes
 upstream integrations from version-pinned patches.
 
 | Plugin | Tested package | Compatibility | Patchouli DB |
@@ -58,42 +58,26 @@ upstream integrations from version-pinned patches.
 | [Memory Evolve](https://github.com/csyangwen/dsh-memory-evolve) | `dsh-memory-evolve@0.1.0` | Patch | No — plugin-managed |
 
 > Building a DSH plugin or exploring compatibility with an existing one? Try
-> [dsh-harmony](https://github.com/CH4ACKO3/dsh-harmony) to inspect and adapt
+> [dsh-harmony](https://github.com/memorax-ai/dsh-harmony) to inspect and adapt
 > plugin behavior without maintaining an upstream fork.
 
 ## Install and use
 
 Requires Node.js `^22.19.0 || >=24`, pnpm 11, and a DeepSeek Harness runtime
-compatible with `0.1.0-rc.6`. Until the first packaged release, install the
-current source branch:
+compatible with `0.1.0-rc.6`. Install the database daemon first:
 
 ```bash
-git clone --branch main --single-branch https://github.com/memorax-ai/dsh-patchouli.git
-cd dsh-patchouli
-corepack enable
-pnpm install
-cargo install --locked --path crates/server
-patchouli-db init --root "$HOME/.patchouli"
-dsh plugin --profile web add \
-  . \
-  ./packages/agent-loop \
-  ./packages/artifact-ingestor \
-  ./packages/session-indexer \
-  ./packages/workspace-indexer
+curl -fsSL https://raw.githubusercontent.com/memorax-ai/dsh-patchouli/main/scripts/install.sh | sh
+dsh plugin --profile web add dsh-patchouli
 dsh --profile web --dump-config
 ```
 
-Rust stable and a C toolchain are required to build the transactional database
-backend. The bundled DSH profile enables its storage client by default; it
-connects to the local daemon and starts it when needed. The last command should
-list `patchouli`, `patchouli-storage`, and the connector plugins. Register at
-least one compatible memory or knowledge plugin to handle routed `update`,
-`retrieve`, and `subscribe` calls. By default, the Agent Loop connector
-retrieves before each agent step, stores completed turns, and exposes memory
-update and retrieval tools to the model.
-
-The workspace package paths are required only for a source `link:` install;
-published releases install these dependencies with the root package.
+The installer downloads a checksum-verified daemon binary from the latest
+GitHub release. The bundled DSH profile enables its storage client by default;
+it connects to the local daemon and starts it when needed. The last command
+should list `patchouli`, `patchouli-storage`, and the connector plugins.
+Register at least one compatible memory or knowledge plugin to handle routed
+`update`, `retrieve`, and `subscribe` calls.
 
 See the [Getting started guide](https://memorax-ai.github.io/dsh-patchouli/getting-started)
 for configuration and platform-specific details.

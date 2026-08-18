@@ -1,5 +1,5 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
-import type { JsonObject, JsonValue } from '@memorax-agent/patchouli-protocol'
+import type { JsonObject, JsonValue } from 'dsh-patchouli-protocol'
 import { isDeepStrictEqual } from 'node:util'
 
 export type MemoryMetadata = JsonObject

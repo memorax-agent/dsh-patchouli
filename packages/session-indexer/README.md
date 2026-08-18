@@ -1,4 +1,4 @@
-# @memorax-agent/dsh-patchouli-session-indexer
+# dsh-patchouli-session-indexer
 
 Cordis plugin boundary for indexing DeepSeek Harness sessions through
 `ctx.sessionQuery` into the in-process `ctx.patchouli` service.

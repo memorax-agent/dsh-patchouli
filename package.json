@@ -1,7 +1,15 @@
 {
   "name": "dsh-patchouli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Native knowledge context for DeepSeek Harness",
+  "homepage": "https://github.com/memorax-ai/dsh-patchouli#readme",
+  "bugs": {
+    "url": "https://github.com/memorax-ai/dsh-patchouli/issues"
+  },
+  "author": {
+    "name": "CH4ACKO3",
+    "url": "https://github.com/CH4ACKO3"
+  },
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -32,11 +40,12 @@
     "patches",
     "cordis.patch.yml",
     "README.md",
+    "README.zh-CN.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p packages/protocol/tsconfig.json && tsc -p tsconfig.json && pnpm --filter @memorax-agent/dsh-patchouli-agent-loop build && pnpm --filter @memorax-agent/dsh-patchouli-artifact-ingestor build && pnpm --filter @memorax-agent/dsh-patchouli-crud-test-plugin build && pnpm --filter @memorax-agent/dsh-patchouli-session-indexer build && pnpm --filter @memorax-agent/dsh-patchouli-workspace-indexer build",
-    "typecheck": "tsc -p packages/protocol/tsconfig.json && tsc -p tsconfig.json && tsc -p tsconfig.tooling.json && pnpm --filter @memorax-agent/dsh-patchouli-agent-loop typecheck && pnpm --filter @memorax-agent/dsh-patchouli-artifact-ingestor typecheck && pnpm --filter @memorax-agent/dsh-patchouli-crud-test-plugin typecheck && pnpm --filter @memorax-agent/dsh-patchouli-session-indexer typecheck && pnpm --filter @memorax-agent/dsh-patchouli-workspace-indexer typecheck",
+    "build": "tsc -p packages/protocol/tsconfig.json && tsc -p tsconfig.json && pnpm --filter dsh-patchouli-agent-loop build && pnpm --filter dsh-patchouli-artifact-ingestor build && pnpm --filter dsh-patchouli-crud-test-plugin build && pnpm --filter dsh-patchouli-session-indexer build && pnpm --filter dsh-patchouli-workspace-indexer build",
+    "typecheck": "tsc -p packages/protocol/tsconfig.json && tsc -p tsconfig.json && tsc -p tsconfig.tooling.json && pnpm --filter dsh-patchouli-agent-loop typecheck && pnpm --filter dsh-patchouli-artifact-ingestor typecheck && pnpm --filter dsh-patchouli-crud-test-plugin typecheck && pnpm --filter dsh-patchouli-session-indexer typecheck && pnpm --filter dsh-patchouli-workspace-indexer typecheck",
     "test": "pnpm run build && node --test 'test/*.test.ts' 'packages/protocol/test/*.test.ts'",
     "test:e2e": "pnpm run build && cargo build --locked -p patchouli-server --bin patchouli-db && node --test integration/crud-plugin.ts",
     "check": "pnpm run typecheck && pnpm run test",
@@ -76,11 +85,11 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@memorax-agent/dsh-patchouli-agent-loop": "workspace:*",
-    "@memorax-agent/dsh-patchouli-artifact-ingestor": "workspace:*",
-    "@memorax-agent/dsh-patchouli-session-indexer": "workspace:*",
-    "@memorax-agent/dsh-patchouli-workspace-indexer": "workspace:*",
-    "@memorax-agent/patchouli-protocol": "workspace:*",
+    "dsh-patchouli-agent-loop": "workspace:*",
+    "dsh-patchouli-artifact-ingestor": "workspace:*",
+    "dsh-patchouli-session-indexer": "workspace:*",
+    "dsh-patchouli-workspace-indexer": "workspace:*",
+    "dsh-patchouli-protocol": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-# @memorax-agent/dsh-patchouli-artifact-ingestor
+# dsh-patchouli-artifact-ingestor
 
 Storage-backed MemoryPlugin that turns DSH image attachment references and
 explicit Agent Loop `workspace-file` resources into managed Patchouli Artifact

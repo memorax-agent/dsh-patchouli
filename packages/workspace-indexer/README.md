@@ -1,4 +1,4 @@
-# @memorax-agent/dsh-patchouli-workspace-indexer
+# dsh-patchouli-workspace-indexer
 
 Cordis plugin boundary for indexing DeepSeek Harness workspaces through
 `ctx.workspaceRegistry` and `ctx.fs` into the in-process

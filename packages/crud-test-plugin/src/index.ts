@@ -5,7 +5,7 @@ import type {
   ReadEntityParams,
   RetrieveEntitiesParams,
   UpdateEntityParams,
-} from '@memorax-agent/patchouli-protocol'
+} from 'dsh-patchouli-protocol'
 import type { MemoryCallMeta, MemoryData, MemoryPlugin } from 'dsh-patchouli'
 import type {} from 'dsh-patchouli/storage'
 

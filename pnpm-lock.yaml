@@ -11,24 +11,24 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.1
-      '@memorax-agent/dsh-patchouli-agent-loop':
-        specifier: workspace:*
-        version: link:packages/agent-loop
-      '@memorax-agent/dsh-patchouli-artifact-ingestor':
-        specifier: workspace:*
-        version: link:packages/artifact-ingestor
-      '@memorax-agent/dsh-patchouli-session-indexer':
-        specifier: workspace:*
-        version: link:packages/session-indexer
-      '@memorax-agent/dsh-patchouli-workspace-indexer':
-        specifier: workspace:*
-        version: link:packages/workspace-indexer
-      '@memorax-agent/patchouli-protocol':
-        specifier: workspace:*
-        version: link:packages/protocol
       dsh-harmony:
         specifier: ^0.3.2
         version: 0.3.2
+      dsh-patchouli-agent-loop:
+        specifier: workspace:*
+        version: link:packages/agent-loop
+      dsh-patchouli-artifact-ingestor:
+        specifier: workspace:*
+        version: link:packages/artifact-ingestor
+      dsh-patchouli-protocol:
+        specifier: workspace:*
+        version: link:packages/protocol
+      dsh-patchouli-session-indexer:
+        specifier: workspace:*
+        version: link:packages/session-indexer
+      dsh-patchouli-workspace-indexer:
+        specifier: workspace:*
+        version: link:packages/workspace-indexer
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -109,7 +109,7 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.1
-      '@memorax-agent/patchouli-protocol':
+      dsh-patchouli-protocol:
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
@@ -122,7 +122,7 @@ importers:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
         version: 4.0.1
-      '@memorax-agent/patchouli-protocol':
+      dsh-patchouli-protocol:
         specifier: workspace:*
         version: link:../protocol
     devDependencies:

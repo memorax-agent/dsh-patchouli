@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { Context } from '@deepseek-ai/cordis'
-import type { ChangesEventParams } from '@memorax-agent/patchouli-protocol'
+import type { ChangesEventParams } from 'dsh-patchouli-protocol'
 
 import * as storage from '../lib/storage.js'
 

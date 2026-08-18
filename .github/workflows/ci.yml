@@ -141,6 +141,7 @@ jobs:
     needs: verify
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -161,17 +162,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build npm packages
+        run: pnpm build
+
       - name: Create artifact directory
         run: >-
           node --eval "require('node:fs').mkdirSync('artifacts', { recursive: true })"
 
       - name: Pack protocol and plugins
         run: |
-          pnpm --filter @memorax-agent/patchouli-protocol pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
-          pnpm --filter @memorax-agent/dsh-patchouli-agent-loop pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
-          pnpm --filter @memorax-agent/dsh-patchouli-artifact-ingestor pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
-          pnpm --filter @memorax-agent/dsh-patchouli-session-indexer pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
-          pnpm --filter @memorax-agent/dsh-patchouli-workspace-indexer pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter dsh-patchouli-protocol pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter dsh-patchouli-agent-loop pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter dsh-patchouli-artifact-ingestor pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter dsh-patchouli-session-indexer pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter dsh-patchouli-workspace-indexer pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
           pnpm pack --pack-destination artifacts
 
       - name: Upload plugin packages
@@ -181,6 +185,55 @@ jobs:
           path: artifacts/*.tgz
           if-no-files-found: error
           retention-days: 14
+
+  publish-npm:
+    name: Publish npm packages
+    needs: package-plugin
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.11.1
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Validate release tag
+        run: node scripts/validate-release-tag.ts
+
+      - name: Download npm packages
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-patchouli-${{ github.sha }}
+          path: artifacts
+
+      - name: Publish unpublished package versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          packages=(
+            dsh-patchouli-protocol
+            dsh-patchouli-agent-loop
+            dsh-patchouli-artifact-ingestor
+            dsh-patchouli-session-indexer
+            dsh-patchouli-workspace-indexer
+            dsh-patchouli
+          )
+          for package in "${packages[@]}"; do
+            if npm view "${package}@${version}" version >/dev/null 2>&1; then
+              echo "${package}@${version} is already published"
+              continue
+            fi
+            npm publish "artifacts/${package}-${version}.tgz" --access public
+          done
 
   package-daemon:
     name: Package daemon (${{ matrix.artifact }})
@@ -267,7 +320,7 @@ jobs:
 
   release-daemon:
     name: Publish daemon release
-    needs: package-daemon
+    needs: [package-daemon, publish-npm]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

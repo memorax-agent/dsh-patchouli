@@ -1,6 +1,6 @@
 {
-  "name": "@memorax-agent/patchouli-protocol",
-  "version": "0.1.0",
+  "name": "dsh-patchouli-protocol",
+  "version": "0.1.1",
   "description": "Harness-neutral JSON-RPC contracts for Patchouli storage",
   "type": "module",
   "main": "./lib/index.js",

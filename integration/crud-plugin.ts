@@ -17,7 +17,7 @@ import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type { FsInfo, FsTarget } from '@deepseek-ai/dsh-fs'
-import type { JsonObject, JsonValue } from '@memorax-agent/patchouli-protocol'
+import type { JsonObject, JsonValue } from 'dsh-patchouli-protocol'
 
 import * as artifactIngestor from '../packages/artifact-ingestor/lib/index.js'
 import * as crudTestPlugin from '../packages/crud-test-plugin/lib/index.js'

@@ -1,4 +1,4 @@
-# @memorax-agent/dsh-patchouli-agent-loop
+# dsh-patchouli-agent-loop
 
 Cordis plugin adapting the official DeepSeek Harness Agent Loop to the
 in-process `ctx.patchouli` service. It owns the model tools and Agent Loop

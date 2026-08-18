@@ -15,7 +15,7 @@ import {
 import SessionStore, { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
-import type { JsonObject, JsonValue } from '@memorax-agent/patchouli-protocol'
+import type { JsonObject, JsonValue } from 'dsh-patchouli-protocol'
 import * as agentLoop from '../packages/agent-loop/lib/index.js'
 import * as patchouli from '../lib/index.js'
 import type {

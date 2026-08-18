@@ -39,7 +39,7 @@ import {
   type UnsubscribeChangesParams,
   type UnsubscribeChangesResult,
   type UpdateEntityParams,
-} from '@memorax-agent/patchouli-protocol'
+} from 'dsh-patchouli-protocol'
 
 import type { Config } from './storage.js'
 
@@ -427,7 +427,7 @@ export class PatchouliStorageService extends Service {
       this.handshake = await this.call<HandshakeResult>(methods.handshake, {
         client: {
           name: 'dsh-patchouli',
-          version: '0.1.0',
+          version: '0.1.1',
           instance_id: randomUUID(),
         },
         protocol_versions: [protocolVersion],

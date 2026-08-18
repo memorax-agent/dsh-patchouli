@@ -1,4 +1,4 @@
-# @memorax-agent/dsh-patchouli-crud-test-plugin
+# dsh-patchouli-crud-test-plugin
 
 Test-only third-party MemoryPlugin used to verify the complete Patchouli path:
 

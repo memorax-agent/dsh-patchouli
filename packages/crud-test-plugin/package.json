@@ -1,6 +1,6 @@
 {
-  "name": "@memorax-agent/dsh-patchouli-crud-test-plugin",
-  "version": "0.1.0",
+  "name": "dsh-patchouli-crud-test-plugin",
+  "version": "0.1.1",
   "description": "Test-only passthrough CRUD MemoryPlugin for Patchouli",
   "private": true,
   "type": "module",
@@ -21,10 +21,10 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "dsh-patchouli": "0.1.0"
+    "dsh-patchouli": "0.1.1"
   },
   "dependencies": {
-    "@memorax-agent/patchouli-protocol": "workspace:*"
+    "dsh-patchouli-protocol": "workspace:*"
   },
   "devDependencies": {
     "dsh-patchouli": "workspace:*"
