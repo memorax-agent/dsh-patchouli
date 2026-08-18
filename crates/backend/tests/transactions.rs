@@ -93,6 +93,57 @@ async fn sqlite_replays_idempotent_mutations_and_retrieves_and_streams_changes()
 }
 
 #[tokio::test]
+async fn idempotency_replay_still_enforces_the_selected_consistency_frontier() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("patchouli.db");
+    let mut config: Value = serde_json::from_str(CAUSAL_SESSION).unwrap();
+    config["meta_fields"]["request_id"] = json!({
+        "pointer": "/request_id",
+        "schema": { "type": "string", "minLength": 1 }
+    });
+    config["entity_types"]["knowledge"]["fallback"]["idempotency"] =
+        json!({ "mode": "keyed", "key_by": ["request_id"] });
+    let engine = start_engine_with(&path, &config.to_string()).await;
+    let data = CreateEntityData {
+        entity_type: "knowledge".to_owned(),
+        id: Some("consistent-replay".to_owned()),
+        value: knowledge("consistent replay", "idempotency"),
+    };
+    let request_meta = meta([
+        ("plugin_route_id", json!("participant-1")),
+        ("request_id", json!("consistent-request")),
+    ]);
+    let first = engine
+        .create(RpcParams {
+            meta: request_meta.clone(),
+            data: data.clone(),
+        })
+        .await
+        .unwrap();
+    let unavailable = engine
+        .create(RpcParams {
+            meta: {
+                let mut value = request_meta.clone();
+                value.insert("causal_token".to_owned(), json!("unknown-frontier"));
+                value
+            },
+            data: data.clone(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(unavailable.reason, BackendErrorReason::Overloaded);
+    let replay = engine
+        .create(RpcParams {
+            meta: request_meta,
+            data,
+        })
+        .await
+        .unwrap();
+    assert_eq!(replay, first);
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn default_retrieval_across_all_entity_types_does_not_reacquire_the_same_lock() {
     let directory = tempfile::tempdir().unwrap();
     let engine = start_engine(&directory.path().join("patchouli.db")).await;
@@ -358,10 +409,7 @@ async fn causal_and_session_frontiers_survive_restart() {
         })
         .await
         .unwrap_err();
-    assert_eq!(
-        unavailable.reason,
-        BackendErrorReason::UnsupportedCapability
-    );
+    assert_eq!(unavailable.reason, BackendErrorReason::Overloaded);
     restarted.shutdown().await.unwrap();
 }
 
@@ -724,6 +772,68 @@ async fn request_reject_strategy_reports_current_heads_for_a_stale_update() {
         .unwrap_err();
     assert_eq!(error.reason, BackendErrorReason::VersionConflict);
     assert_eq!(error.current_versions.len(), 1);
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn request_reject_strategy_requires_the_exact_current_head_set() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = start_engine(&directory.path().join("patchouli.db")).await;
+    let entity_ref = EntityRef {
+        entity_type: "knowledge".to_owned(),
+        id: "knowledge-reject-exact".to_owned(),
+    };
+    let created = engine
+        .create(RpcParams {
+            meta: meta([]),
+            data: CreateEntityData {
+                entity_type: entity_ref.entity_type.clone(),
+                id: Some(entity_ref.id.clone()),
+                value: knowledge("base", "base"),
+            },
+        })
+        .await
+        .unwrap();
+    let old = version(&created.data.entity);
+    let current = engine
+        .update(RpcParams {
+            meta: meta([("base_versions", json!([old]))]),
+            data: UpdateEntityData {
+                entity_ref: entity_ref.clone(),
+                value: knowledge("current", "current"),
+            },
+        })
+        .await
+        .unwrap();
+    let current = version(&current.data.entity);
+    let non_exact = json!([old, current]);
+
+    let update = engine
+        .update(RpcParams {
+            meta: meta([
+                ("base_versions", non_exact.clone()),
+                ("conflict_strategy", json!("reject")),
+            ]),
+            data: UpdateEntityData {
+                entity_ref: entity_ref.clone(),
+                value: knowledge("must reject", "update"),
+            },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(update.reason, BackendErrorReason::VersionConflict);
+
+    let delete = engine
+        .delete(RpcParams {
+            meta: meta([
+                ("base_versions", non_exact),
+                ("conflict_strategy", json!("reject")),
+            ]),
+            data: DeleteEntityData { entity_ref },
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(delete.reason, BackendErrorReason::VersionConflict);
     engine.shutdown().await.unwrap();
 }
 
@@ -1274,6 +1384,119 @@ async fn work_unit_uses_one_global_baseline_for_entities_first_read_later() {
         .await
         .unwrap();
     assert_eq!(version(&visible.data.variants[0]), outside_version);
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn work_unit_retrieval_uses_the_shared_baseline_and_staged_overlay() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = start_engine(&directory.path().join("patchouli.db")).await;
+    let staged_ref = EntityRef {
+        entity_type: "knowledge".to_owned(),
+        id: "retrieval-a-staged".to_owned(),
+    };
+    let outside_ref = EntityRef {
+        entity_type: "knowledge".to_owned(),
+        id: "retrieval-b-outside".to_owned(),
+    };
+    let staged_base = engine
+        .create(RpcParams {
+            meta: meta([]),
+            data: CreateEntityData {
+                entity_type: staged_ref.entity_type.clone(),
+                id: Some(staged_ref.id.clone()),
+                value: knowledge("staged base", "staged-base"),
+            },
+        })
+        .await
+        .unwrap();
+    let outside_base = engine
+        .create(RpcParams {
+            meta: meta([]),
+            data: CreateEntityData {
+                entity_type: outside_ref.entity_type.clone(),
+                id: Some(outside_ref.id.clone()),
+                value: knowledge("outside base", "outside-base"),
+            },
+        })
+        .await
+        .unwrap();
+    let staged_base = version(&staged_base.data.entity);
+    let outside_base = version(&outside_base.data.entity);
+
+    engine
+        .read(RpcParams {
+            meta: work_unit_meta("retrieval-view", false, []),
+            data: ReadEntityData {
+                entity_ref: staged_ref.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    engine
+        .update(RpcParams {
+            meta: work_unit_meta(
+                "retrieval-view",
+                false,
+                [("base_versions", json!([staged_base]))],
+            ),
+            data: UpdateEntityData {
+                entity_ref: staged_ref.clone(),
+                value: knowledge("staged overlay", "staged-overlay"),
+            },
+        })
+        .await
+        .unwrap();
+    engine
+        .update(RpcParams {
+            meta: meta([("base_versions", json!([outside_base]))]),
+            data: UpdateEntityData {
+                entity_ref: outside_ref.clone(),
+                value: knowledge("outside current", "outside-current"),
+            },
+        })
+        .await
+        .unwrap();
+
+    let retrieved = engine
+        .retrieve(RpcParams {
+            meta: work_unit_meta("retrieval-view", false, []),
+            data: RetrieveEntitiesData {
+                query: json!({
+                    "ids": [staged_ref.id, outside_ref.id],
+                    "order": "id_asc"
+                })
+                .to_string(),
+                types: Some(vec!["knowledge".to_owned()]),
+                limit: 10,
+            },
+        })
+        .await
+        .unwrap();
+    let values = retrieved
+        .data
+        .hits
+        .iter()
+        .map(|hit| match &hit.variants[0] {
+            EntityVersion::Active {
+                entity_ref, value, ..
+            } => (
+                entity_ref.id.as_str(),
+                value
+                    .pointer("/content/text")
+                    .and_then(Value::as_str)
+                    .unwrap(),
+            ),
+            EntityVersion::Deleted { .. } => unreachable!(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        [
+            ("retrieval-a-staged", "staged overlay"),
+            ("retrieval-b-outside", "outside base"),
+        ]
+    );
     engine.shutdown().await.unwrap();
 }
 

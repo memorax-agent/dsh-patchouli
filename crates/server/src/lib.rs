@@ -35,7 +35,8 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::{
     io::{
-        AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, Lines, ReadHalf, WriteHalf, split,
+        AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, Lines, ReadHalf,
+        WriteHalf, split,
     },
     sync::{Mutex, watch},
     task::{JoinError, JoinHandle, JoinSet},
@@ -235,7 +236,7 @@ impl ConnectionState {
         let _connection_guard = ConnectionGuard(Arc::clone(&self.active_connections));
         let (read_half, write_half) = split(stream);
         let writer = Arc::new(Mutex::new(write_half));
-        let mut lines = BufReader::new(read_half).lines();
+        let mut reader = BufReader::new(read_half);
         let mut handshaken = false;
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let mut subscriptions = BTreeMap::<String, JoinHandle<()>>::new();
@@ -245,8 +246,8 @@ impl ConnectionState {
             if *shutdown_rx.borrow() {
                 break;
             }
-            let line = tokio::select! {
-                line = lines.next_line() => line?,
+            let frame = tokio::select! {
+                frame = read_request_frame(&mut reader) => frame?,
                 changed = shutdown_rx.changed() => {
                     if changed.is_err() || *shutdown_rx.borrow() {
                         break;
@@ -254,8 +255,27 @@ impl ConnectionState {
                     continue;
                 }
             };
-            let Some(line) = line else {
+            let Some(frame) = frame else {
                 break;
+            };
+            let line = match frame {
+                RequestFrame::Line(line) => line,
+                RequestFrame::InvalidUtf8 => {
+                    write_json_line(
+                        &mut *writer.lock().await,
+                        &rpc_error(Value::Null, -32700, "parse error"),
+                    )
+                    .await?;
+                    continue;
+                }
+                RequestFrame::TooLarge => {
+                    write_json_line(
+                        &mut *writer.lock().await,
+                        &rpc_error(Value::Null, -32600, "request exceeds server limit"),
+                    )
+                    .await?;
+                    continue;
+                }
             };
             if handshaken
                 && self
@@ -405,13 +425,6 @@ impl ConnectionState {
     }
 
     async fn dispatch(&self, line: &str, handshaken: &mut bool) -> (Value, bool) {
-        if line.len() > MAX_REQUEST_BYTES {
-            return (
-                rpc_error(Value::Null, -32600, "request exceeds server limit"),
-                false,
-            );
-        }
-
         let request: Value = match serde_json::from_str(line) {
             Ok(request) => request,
             Err(_) => return (rpc_error(Value::Null, -32700, "parse error"), false),
@@ -821,6 +834,58 @@ impl ConnectionState {
     }
 }
 
+enum RequestFrame {
+    Line(String),
+    InvalidUtf8,
+    TooLarge,
+}
+
+async fn read_request_frame(
+    reader: &mut (impl AsyncBufRead + Unpin),
+) -> Result<Option<RequestFrame>, std::io::Error> {
+    let mut frame = Vec::new();
+    let mut too_large = false;
+
+    loop {
+        let buffer = reader.fill_buf().await?;
+        if buffer.is_empty() {
+            return if frame.is_empty() && !too_large {
+                Ok(None)
+            } else if too_large {
+                Ok(Some(RequestFrame::TooLarge))
+            } else {
+                Ok(Some(frame_from_bytes(frame)))
+            };
+        }
+
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let chunk_len = newline.unwrap_or(buffer.len());
+        if !too_large && frame.len().saturating_add(chunk_len) <= MAX_REQUEST_BYTES {
+            frame.extend_from_slice(&buffer[..chunk_len]);
+        } else {
+            too_large = true;
+            frame.clear();
+        }
+        let consumed = chunk_len + usize::from(newline.is_some());
+        reader.consume(consumed);
+
+        if newline.is_some() {
+            return if too_large {
+                Ok(Some(RequestFrame::TooLarge))
+            } else {
+                Ok(Some(frame_from_bytes(frame)))
+            };
+        }
+    }
+}
+
+fn frame_from_bytes(frame: Vec<u8>) -> RequestFrame {
+    match String::from_utf8(frame) {
+        Ok(line) => RequestFrame::Line(line),
+        Err(_) => RequestFrame::InvalidUtf8,
+    }
+}
+
 #[derive(Debug)]
 enum ArtifactDownloadError {
     Backend(BackendError),
@@ -1195,5 +1260,40 @@ struct ConnectionGuard(Arc<AtomicU64>);
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use std::io::Cursor;
+
+    use tokio::io::BufReader;
+
+    use super::{MAX_REQUEST_BYTES, RequestFrame, read_request_frame};
+
+    #[tokio::test]
+    async fn rejects_oversized_regular_request_before_dispatch() {
+        assert_oversized_frame_is_discarded("patchouli.entity.create@1").await;
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_subscription_request_before_dispatch() {
+        assert_oversized_frame_is_discarded("patchouli.changes.subscribe@1").await;
+    }
+
+    async fn assert_oversized_frame_is_discarded(method: &str) {
+        let mut input = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}"}}"#).into_bytes();
+        input.resize(MAX_REQUEST_BYTES + 1, b' ');
+        input.extend_from_slice(b"\n{}\n");
+        let mut reader = BufReader::new(Cursor::new(input));
+
+        assert!(matches!(
+            read_request_frame(&mut reader).await.unwrap(),
+            Some(RequestFrame::TooLarge)
+        ));
+        assert!(matches!(
+            read_request_frame(&mut reader).await.unwrap(),
+            Some(RequestFrame::Line(line)) if line == "{}"
+        ));
     }
 }

@@ -8,9 +8,9 @@ use patchouli_backend::{
     BackendConfig, BackendEngine, BackendErrorReason, BackendService, CreateEntityData, RpcParams,
 };
 use patchouli_provider::{
-    EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot, Provider, ProviderCapabilities,
-    ProviderError, ProviderRecovery, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome,
-    WorkUnitPublish, WorkUnitReadOutcome,
+    ConsistentRead, EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot, Provider,
+    ProviderCapabilities, ProviderError, ProviderRecovery, ReadConsistency, WorkUnit,
+    WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitPublish, WorkUnitReadOutcome,
 };
 
 const EXAMPLE: &str = include_str!(concat!(
@@ -22,7 +22,7 @@ const KNOWLEDGE: &str = include_str!(concat!(
     "/../../packages/protocol/schemas/examples/knowledge@1.json"
 ));
 
-struct HealthyProvider;
+struct HealthyProvider(bool);
 struct UnhealthyProvider;
 struct FailedHealthProvider(Arc<AtomicBool>);
 
@@ -40,7 +40,10 @@ impl Provider for HealthyProvider {
             retrieval: true,
             idempotency: true,
             work_units: true,
-            causal_sessions: true,
+            causal_reads: true,
+            monotonic_reads: true,
+            read_your_writes: true,
+            linearizable_reads: self.0,
         }
     }
 
@@ -55,7 +58,11 @@ impl Provider for HealthyProvider {
         Ok(())
     }
 
-    async fn read_entity(&self, _key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+    async fn read_entity(
+        &self,
+        _key: &EntityKey,
+        _consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError> {
         Err(ProviderError::new("test provider has no storage"))
     }
 
@@ -70,6 +77,7 @@ impl Provider for HealthyProvider {
         &self,
         _work_unit: &WorkUnit,
         _key: &EntityKey,
+        _consistency: ReadConsistency,
     ) -> Result<WorkUnitReadOutcome, ProviderError> {
         Err(ProviderError::new("test provider has no storage"))
     }
@@ -104,7 +112,7 @@ impl Provider for UnhealthyProvider {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
-        HealthyProvider.capabilities()
+        HealthyProvider(true).capabilities()
     }
 
     async fn initialize(&self) -> Result<ProviderRecovery, ProviderError> {
@@ -115,7 +123,11 @@ impl Provider for UnhealthyProvider {
         Ok(())
     }
 
-    async fn read_entity(&self, _key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+    async fn read_entity(
+        &self,
+        _key: &EntityKey,
+        _consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError> {
         Err(ProviderError::new("test provider has no storage"))
     }
 
@@ -130,6 +142,7 @@ impl Provider for UnhealthyProvider {
         &self,
         _work_unit: &WorkUnit,
         _key: &EntityKey,
+        _consistency: ReadConsistency,
     ) -> Result<WorkUnitReadOutcome, ProviderError> {
         Err(ProviderError::new("test provider has no storage"))
     }
@@ -164,7 +177,7 @@ impl Provider for FailedHealthProvider {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
-        HealthyProvider.capabilities()
+        HealthyProvider(true).capabilities()
     }
 
     async fn initialize(&self) -> Result<ProviderRecovery, ProviderError> {
@@ -178,7 +191,11 @@ impl Provider for FailedHealthProvider {
         Err(ProviderError::new("unhealthy after initialization"))
     }
 
-    async fn read_entity(&self, _key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+    async fn read_entity(
+        &self,
+        _key: &EntityKey,
+        _consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError> {
         Err(ProviderError::new("test provider has no storage"))
     }
 
@@ -193,6 +210,7 @@ impl Provider for FailedHealthProvider {
         &self,
         _work_unit: &WorkUnit,
         _key: &EntityKey,
+        _consistency: ReadConsistency,
     ) -> Result<WorkUnitReadOutcome, ProviderError> {
         Err(ProviderError::new("test provider has no storage"))
     }
@@ -225,7 +243,7 @@ impl Provider for FailedHealthProvider {
 async fn engine_starts_with_validated_config_and_routes_to_provider() {
     let engine = BackendEngine::start(
         BackendConfig::from_json(EXAMPLE).expect("valid config"),
-        Arc::new(HealthyProvider),
+        Arc::new(HealthyProvider(true)),
     )
     .await
     .expect("start engine");
@@ -264,6 +282,20 @@ async fn engine_does_not_start_with_an_unhealthy_provider() {
     .await;
 
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn engine_rejects_a_provider_without_effective_linearizable_read_support() {
+    let error = match BackendEngine::start(
+        BackendConfig::from_json(EXAMPLE).expect("valid config"),
+        Arc::new(HealthyProvider(false)),
+    )
+    .await
+    {
+        Ok(_) => panic!("linearizable configuration must require provider support"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("requires linearizable reads"));
 }
 
 #[tokio::test]

@@ -4,7 +4,7 @@ use patchouli_backend::{
     BackendConfig, BackendEngine, BackendService, CreateEntityData, EntityVersion,
     RetrieveEntitiesData, RpcParams,
 };
-use patchouli_provider::{EntityKey, Provider};
+use patchouli_provider::{ConsistentRead, EntityKey, Provider, ReadConsistency};
 use patchouli_provider_remote::{RemoteProvider, remote_provider_router};
 use patchouli_provider_router::{RoutingProvider, ScopeRoute};
 use patchouli_provider_sqlite::SqliteProvider;
@@ -28,6 +28,7 @@ async fn backend_routes_one_scope_to_a_remote_storage_node() {
         Arc::clone(&remote_storage),
         "routing-secret".to_owned(),
         recovery,
+        3_600,
         shutdown_rx,
     )
     .unwrap();
@@ -99,8 +100,20 @@ async fn backend_routes_one_scope_to_a_remote_storage_node() {
         entity_type: "knowledge".to_owned(),
         entity_id: "remote-knowledge".to_owned(),
     };
-    assert!(remote_storage.read_entity(&key).await.unwrap().is_some());
-    assert!(local.read_entity(&key).await.unwrap().is_none());
+    assert!(matches!(
+        remote_storage
+            .read_entity(&key, ReadConsistency::authority())
+            .await
+            .unwrap(),
+        ConsistentRead::Read { value: Some(_), .. }
+    ));
+    assert!(matches!(
+        local
+            .read_entity(&key, ReadConsistency::authority())
+            .await
+            .unwrap(),
+        ConsistentRead::Read { value: None, .. }
+    ));
 
     let first_page = engine
         .retrieve(RpcParams {
@@ -139,6 +152,23 @@ async fn backend_routes_one_scope_to_a_remote_storage_node() {
         &second_page.data.hits[0].variants[0],
         EntityVersion::Active { entity_ref, .. } if entity_ref.id == "remote-knowledge-2"
     ));
+
+    let transaction_page = engine
+        .retrieve(RpcParams {
+            meta: BTreeMap::from([
+                ("workspace_id".to_owned(), json!("shared")),
+                ("user_id".to_owned(), json!("user-1")),
+                ("transaction_id".to_owned(), json!("remote-retrieval")),
+            ]),
+            data: RetrieveEntitiesData {
+                query: json!({ "order": "id_asc" }).to_string(),
+                types: Some(vec!["knowledge".to_owned()]),
+                limit: 10,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(transaction_page.data.hits.len(), 2);
 
     engine.shutdown().await.unwrap();
     server.abort();

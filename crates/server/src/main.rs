@@ -62,6 +62,9 @@ enum Command {
         /// Environment variable containing the bearer token.
         #[arg(long)]
         token_env: String,
+        /// Change-log retention owned by this storage authority.
+        #[arg(long, default_value_t = 604_800)]
+        change_retention_seconds: u64,
     },
     /// Report daemon readiness and process identity.
     Status {
@@ -141,10 +144,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             listen,
             database,
             token_env,
+            change_retention_seconds,
         } => {
             let token = std::env::var(&token_env)
                 .map_err(|_| format!("environment variable {token_env:?} is not set"))?;
-            serve_provider(listen, database, token).await?;
+            serve_provider(listen, database, token, change_retention_seconds).await?;
         }
         Command::Status { endpoint } => {
             let mut client =
@@ -231,13 +235,20 @@ async fn serve_provider(
     listen: SocketAddr,
     database: PathBuf,
     token: String,
+    change_retention_seconds: u64,
 ) -> Result<(), Box<dyn Error>> {
     let provider: Arc<dyn Provider> = Arc::new(SqliteProvider::open(database).await?);
     let result: Result<(), Box<dyn Error>> = async {
         let recovery = provider.initialize().await?;
         provider.health_check().await?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let app = remote_provider_router(Arc::clone(&provider), token, recovery, shutdown_rx)?;
+        let app = remote_provider_router(
+            Arc::clone(&provider),
+            token,
+            recovery,
+            change_retention_seconds,
+            shutdown_rx,
+        )?;
         let listener = tokio::net::TcpListener::bind(listen).await?;
         let bound_address = listener.local_addr()?;
         eprintln!("Patchouli remote provider listening on {bound_address}");

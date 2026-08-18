@@ -1,8 +1,8 @@
 use patchouli_provider::{
-    ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit, EntityCommitOutcome,
-    EntityKey, Provider, ProviderErrorReason, StoredChangeKind, StoredCrdtChange, StoredCrdtField,
-    StoredEntityVersion, StoredVersionState, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome,
-    WorkUnitExpiryAction, WorkUnitReadOutcome,
+    ChangeQuery, ConsistencySource, ConsistentRead, EntityCommit, EntityCommitOutcome, EntityKey,
+    Provider, ProviderErrorReason, ReadConsistency, SessionConsistency, StoredChangeKind,
+    StoredCrdtChange, StoredCrdtField, StoredEntityVersion, StoredVersionState, WorkUnit,
+    WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitExpiryAction, WorkUnitReadOutcome,
 };
 use patchouli_provider_sqlite::SqliteProvider;
 use tokio_rusqlite::rusqlite::{Connection, params};
@@ -221,7 +221,8 @@ async fn change_reads_prune_records_outside_configured_retention() {
             change_kind: StoredChangeKind::Created,
             causal_token: "retention-token".to_owned(),
             event_meta_json: "{}".to_owned(),
-            session_keys: vec![],
+            write_session_keys: vec![],
+            ordering_key_json: None,
             recorded_at_unix_ms: 10,
             deadline_unix_ms: None,
         })
@@ -241,19 +242,30 @@ async fn change_reads_prune_records_outside_configured_retention() {
     assert!(page.changes.is_empty());
     assert_eq!(page.oldest_cursor, Some(2));
     assert_eq!(page.current_cursor, 1);
-    assert_eq!(
+    assert!(matches!(
         provider
-            .acquire_consistency(ConsistencyQuery {
-                scope_json: r#"{"workspace_id":"workspace-1"}"#.to_owned(),
-                minimum_tokens: vec!["retention-token".to_owned()],
-                session_keys: vec![r#"{"session":"one"}"#.to_owned()],
-            })
+            .read_entity(
+                &EntityKey {
+                    scope_json: r#"{"workspace_id":"workspace-1"}"#.to_owned(),
+                    entity_type: "knowledge".to_owned(),
+                    entity_id: "retained".to_owned(),
+                },
+                ReadConsistency {
+                    allowed_sources: vec![ConsistencySource::Authority],
+                    minimum_tokens: vec!["retention-token".to_owned()],
+                    sessions: vec![SessionConsistency {
+                        key_json: r#"{"session":"one"}"#.to_owned(),
+                        monotonic_reads: true,
+                        read_your_writes: false,
+                    }],
+                    linearization_keys: Vec::new(),
+                    deadline_unix_ms: None,
+                },
+            )
             .await
-            .expect("acquire retained causal frontier"),
-        ConsistencyAcquireOutcome::Acquired {
-            causal_token: Some("retention-token".to_owned()),
-        }
-    );
+            .expect("read at retained causal frontier"),
+        ConsistentRead::Read { .. }
+    ));
     provider.shutdown().await.expect("shutdown SQLite");
 }
 
@@ -503,7 +515,8 @@ async fn entity_commit_compares_heads_and_rolls_back_on_conflict() {
         change_kind: StoredChangeKind::Created,
         causal_token: "causal-v1".to_owned(),
         event_meta_json: "{}".to_owned(),
-        session_keys: vec![],
+        write_session_keys: vec![],
+        ordering_key_json: None,
         recorded_at_unix_ms: 1,
         deadline_unix_ms: None,
     };
@@ -558,14 +571,28 @@ async fn expired_deadline_rolls_back_provider_commit() {
             change_kind: StoredChangeKind::Created,
             causal_token: "expired-token".to_owned(),
             event_meta_json: "{}".to_owned(),
-            session_keys: vec![],
+            write_session_keys: vec![],
+            ordering_key_json: None,
             recorded_at_unix_ms: 1,
             deadline_unix_ms: Some(0),
         })
         .await
         .unwrap_err();
     assert_eq!(error.reason(), ProviderErrorReason::DeadlineExceeded);
-    assert_eq!(provider.read_entity(&key).await.unwrap(), None);
+    assert_eq!(
+        provider
+            .read_entity(&key, ReadConsistency::authority())
+            .await
+            .unwrap(),
+        ConsistentRead::Read {
+            value: None,
+            observation: patchouli_provider::ReadObservation {
+                source: ConsistencySource::Authority,
+                frontier: 0,
+                causal_token: None,
+            },
+        }
+    );
     provider.shutdown().await.expect("shutdown SQLite");
 }
 
@@ -597,10 +624,17 @@ async fn expired_work_unit_discards_staged_versions_without_publication() {
     };
     assert_eq!(
         provider
-            .read_entity_in_work_unit(&work_unit, &key)
+            .read_entity_in_work_unit(&work_unit, &key, ReadConsistency::authority())
             .await
             .unwrap(),
-        WorkUnitReadOutcome::Open(None)
+        WorkUnitReadOutcome::Open(ConsistentRead::Read {
+            value: None,
+            observation: patchouli_provider::ReadObservation {
+                source: ConsistencySource::Authority,
+                frontier: 0,
+                causal_token: None,
+            },
+        })
     );
     assert_eq!(
         provider
@@ -627,7 +661,8 @@ async fn expired_work_unit_discards_staged_versions_without_publication() {
                     change_kind: StoredChangeKind::Created,
                     causal_token: "causal-staged-v1".to_owned(),
                     event_meta_json: "{}".to_owned(),
-                    session_keys: vec![],
+                    write_session_keys: vec![],
+                    ordering_key_json: None,
                     recorded_at_unix_ms: now,
                     deadline_unix_ms: None,
                 },
@@ -647,7 +682,13 @@ async fn expired_work_unit_discards_staged_versions_without_publication() {
             params![now - 2, now - 1],
         )
         .unwrap();
-    assert_eq!(provider.read_entity(&key).await.unwrap(), None);
+    assert!(matches!(
+        provider
+            .read_entity(&key, ReadConsistency::authority())
+            .await
+            .unwrap(),
+        ConsistentRead::Read { value: None, .. }
+    ));
     assert_eq!(
         provider
             .read_entity_in_work_unit(
@@ -657,6 +698,7 @@ async fn expired_work_unit_discards_staged_versions_without_publication() {
                     ..work_unit
                 },
                 &key,
+                ReadConsistency::authority(),
             )
             .await
             .unwrap(),
@@ -708,10 +750,17 @@ async fn work_unit_identity_is_bound_to_its_opening_policy() {
     };
     assert_eq!(
         provider
-            .read_entity_in_work_unit(&work_unit, &key)
+            .read_entity_in_work_unit(&work_unit, &key, ReadConsistency::authority())
             .await
             .unwrap(),
-        WorkUnitReadOutcome::Open(None)
+        WorkUnitReadOutcome::Open(ConsistentRead::Read {
+            value: None,
+            observation: patchouli_provider::ReadObservation {
+                source: ConsistencySource::Authority,
+                frontier: 0,
+                causal_token: None,
+            },
+        })
     );
     assert_eq!(
         provider
@@ -721,12 +770,260 @@ async fn work_unit_identity_is_bound_to_its_opening_policy() {
                     ..work_unit
                 },
                 &key,
+                ReadConsistency::authority(),
             )
             .await
             .unwrap(),
         WorkUnitReadOutcome::PolicyMismatch
     );
     provider.shutdown().await.expect("shut down SQLite");
+}
+
+#[tokio::test]
+async fn session_read_and_write_frontiers_follow_their_configured_guarantees() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("patchouli.db");
+    let provider = SqliteProvider::open(&path).await.expect("open SQLite");
+    provider.initialize().await.expect("initialize SQLite");
+    let key = EntityKey {
+        scope_json: r#"{"workspace_id":"sessions"}"#.to_owned(),
+        entity_type: "knowledge".to_owned(),
+        entity_id: "frontiers".to_owned(),
+    };
+    provider
+        .commit_entity(EntityCommit {
+            key: key.clone(),
+            expected_heads: Vec::new(),
+            new_versions: vec![StoredEntityVersion {
+                version: "v1".to_owned(),
+                state: StoredVersionState::Active,
+                value_json: Some(KNOWLEDGE.to_owned()),
+                crdt_fields: Vec::new(),
+            }],
+            head_versions: vec!["v1".to_owned()],
+            change_kind: StoredChangeKind::Created,
+            causal_token: "session-v1".to_owned(),
+            event_meta_json: "{}".to_owned(),
+            write_session_keys: vec![
+                r#"{"session":"rw"}"#.to_owned(),
+                r#"{"session":"both"}"#.to_owned(),
+            ],
+            ordering_key_json: None,
+            recorded_at_unix_ms: 1,
+            deadline_unix_ms: None,
+        })
+        .await
+        .expect("commit session write");
+
+    for consistency in [
+        ReadConsistency {
+            allowed_sources: vec![ConsistencySource::Authority],
+            minimum_tokens: Vec::new(),
+            sessions: vec![SessionConsistency {
+                key_json: r#"{"session":"rw"}"#.to_owned(),
+                monotonic_reads: false,
+                read_your_writes: true,
+            }],
+            linearization_keys: Vec::new(),
+            deadline_unix_ms: None,
+        },
+        ReadConsistency {
+            allowed_sources: vec![ConsistencySource::Authority],
+            minimum_tokens: Vec::new(),
+            sessions: vec![SessionConsistency {
+                key_json: r#"{"session":"mr"}"#.to_owned(),
+                monotonic_reads: true,
+                read_your_writes: false,
+            }],
+            linearization_keys: Vec::new(),
+            deadline_unix_ms: None,
+        },
+        ReadConsistency {
+            allowed_sources: vec![ConsistencySource::Authority],
+            minimum_tokens: Vec::new(),
+            sessions: vec![SessionConsistency {
+                key_json: r#"{"session":"both"}"#.to_owned(),
+                monotonic_reads: true,
+                read_your_writes: true,
+            }],
+            linearization_keys: Vec::new(),
+            deadline_unix_ms: None,
+        },
+    ] {
+        assert!(matches!(
+            provider.read_entity(&key, consistency).await.unwrap(),
+            ConsistentRead::Read { value: Some(_), .. }
+        ));
+    }
+    assert_eq!(
+        provider
+            .read_entity(
+                &key,
+                ReadConsistency {
+                    allowed_sources: vec![ConsistencySource::Replica],
+                    ..ReadConsistency::authority()
+                },
+            )
+            .await
+            .unwrap(),
+        ConsistentRead::Unavailable
+    );
+    let error = provider
+        .read_entity(
+            &key,
+            ReadConsistency {
+                allowed_sources: vec![ConsistencySource::Replica],
+                deadline_unix_ms: Some(0),
+                ..ReadConsistency::authority()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason(), ProviderErrorReason::DeadlineExceeded);
+    provider.shutdown().await.expect("shutdown SQLite");
+
+    let connection = Connection::open(path).expect("inspect session frontiers");
+    let rw: (u64, u64) = connection
+        .query_row(
+            "SELECT read_cursor, write_cursor FROM patchouli_session_frontier
+             WHERE scope_json = ?1 AND session_key_json = ?2",
+            (&key.scope_json, r#"{"session":"rw"}"#),
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let mr: (u64, u64) = connection
+        .query_row(
+            "SELECT read_cursor, write_cursor FROM patchouli_session_frontier
+             WHERE scope_json = ?1 AND session_key_json = ?2",
+            (&key.scope_json, r#"{"session":"mr"}"#),
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let both: (u64, u64) = connection
+        .query_row(
+            "SELECT read_cursor, write_cursor FROM patchouli_session_frontier
+             WHERE scope_json = ?1 AND session_key_json = ?2",
+            (&key.scope_json, r#"{"session":"both"}"#),
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(rw, (0, 1));
+    assert_eq!(mr, (1, 0));
+    assert_eq!(both, (1, 1));
+}
+
+#[tokio::test]
+async fn fixed_work_unit_baselines_reject_later_causal_and_session_frontiers() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let provider = SqliteProvider::open(directory.path().join("patchouli.db"))
+        .await
+        .expect("open SQLite");
+    provider.initialize().await.expect("initialize SQLite");
+    let scope = r#"{"workspace_id":"baseline"}"#.to_owned();
+    let key = EntityKey {
+        scope_json: scope.clone(),
+        entity_type: "knowledge".to_owned(),
+        entity_id: "one".to_owned(),
+    };
+    provider
+        .commit_entity(EntityCommit {
+            key: key.clone(),
+            expected_heads: Vec::new(),
+            new_versions: vec![StoredEntityVersion {
+                version: "v1".to_owned(),
+                state: StoredVersionState::Active,
+                value_json: Some(KNOWLEDGE.to_owned()),
+                crdt_fields: Vec::new(),
+            }],
+            head_versions: vec!["v1".to_owned()],
+            change_kind: StoredChangeKind::Created,
+            causal_token: "baseline-v1".to_owned(),
+            event_meta_json: "{}".to_owned(),
+            write_session_keys: Vec::new(),
+            ordering_key_json: None,
+            recorded_at_unix_ms: 1,
+            deadline_unix_ms: None,
+        })
+        .await
+        .unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let work_unit = WorkUnit {
+        identity_json: r#"{"transaction":"baseline"}"#.to_owned(),
+        scope_json: scope.clone(),
+        policy_json: r#"{"snapshot":"shared"}"#.to_owned(),
+        expiry_action: WorkUnitExpiryAction::Discard,
+        now_unix_ms: now,
+        expires_at_unix_ms: now + 60_000,
+        deadline_unix_ms: None,
+    };
+    assert!(matches!(
+        provider
+            .read_entity_in_work_unit(&work_unit, &key, ReadConsistency::authority())
+            .await
+            .unwrap(),
+        WorkUnitReadOutcome::Open(ConsistentRead::Read {
+            observation: patchouli_provider::ReadObservation { frontier: 1, .. },
+            ..
+        })
+    ));
+    provider
+        .commit_entity(EntityCommit {
+            key: EntityKey {
+                scope_json: scope,
+                entity_type: "knowledge".to_owned(),
+                entity_id: "two".to_owned(),
+            },
+            expected_heads: Vec::new(),
+            new_versions: vec![StoredEntityVersion {
+                version: "v2".to_owned(),
+                state: StoredVersionState::Active,
+                value_json: Some(KNOWLEDGE.to_owned()),
+                crdt_fields: Vec::new(),
+            }],
+            head_versions: vec!["v2".to_owned()],
+            change_kind: StoredChangeKind::Created,
+            causal_token: "baseline-v2".to_owned(),
+            event_meta_json: "{}".to_owned(),
+            write_session_keys: vec![r#"{"session":"writer"}"#.to_owned()],
+            ordering_key_json: None,
+            recorded_at_unix_ms: 2,
+            deadline_unix_ms: None,
+        })
+        .await
+        .unwrap();
+
+    for consistency in [
+        ReadConsistency {
+            allowed_sources: vec![ConsistencySource::Authority],
+            minimum_tokens: vec!["baseline-v2".to_owned()],
+            sessions: Vec::new(),
+            linearization_keys: vec!["ignored-after-baseline".to_owned()],
+            deadline_unix_ms: None,
+        },
+        ReadConsistency {
+            allowed_sources: vec![ConsistencySource::Authority],
+            minimum_tokens: vec!["baseline-v1".to_owned()],
+            sessions: vec![SessionConsistency {
+                key_json: r#"{"session":"writer"}"#.to_owned(),
+                monotonic_reads: false,
+                read_your_writes: true,
+            }],
+            linearization_keys: Vec::new(),
+            deadline_unix_ms: None,
+        },
+    ] {
+        assert_eq!(
+            provider
+                .read_entity_in_work_unit(&work_unit, &key, consistency)
+                .await
+                .unwrap(),
+            WorkUnitReadOutcome::Open(ConsistentRead::Unavailable)
+        );
+    }
+    provider.shutdown().await.expect("shutdown SQLite");
 }
 
 fn insert_active_version(

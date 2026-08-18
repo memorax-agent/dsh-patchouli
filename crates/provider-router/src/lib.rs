@@ -2,11 +2,11 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use patchouli_provider::{
-    ChangePage, ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit,
-    EntityCommitOutcome, EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord,
-    IdempotentCommitOutcome, Provider, ProviderCapabilities, ProviderError, ProviderRecovery,
-    RetrieveQuery, RetrievedPage, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitPublish,
-    WorkUnitReadOutcome,
+    ChangePage, ChangeQuery, ConsistentRead, EntityCommit, EntityCommitOutcome, EntityKey,
+    EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord, IdempotentCommitOutcome, Provider,
+    ProviderCapabilities, ProviderError, ProviderRecovery, ReadConsistency, RetrieveQuery,
+    RetrievedPage, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitPublish,
+    WorkUnitReadOutcome, WorkUnitRetrieveOutcome,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -125,7 +125,10 @@ fn intersect_capabilities(
         result.retrieval &= next.retrieval;
         result.idempotency &= next.idempotency;
         result.work_units &= next.work_units;
-        result.causal_sessions &= next.causal_sessions;
+        result.causal_reads &= next.causal_reads;
+        result.monotonic_reads &= next.monotonic_reads;
+        result.read_your_writes &= next.read_your_writes;
+        result.linearizable_reads &= next.linearizable_reads;
     }
     result
 }
@@ -186,16 +189,13 @@ impl Provider for RoutingProvider {
         Ok(())
     }
 
-    async fn read_entity(&self, key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
-        self.route_scope(&key.scope_json)?.read_entity(key).await
-    }
-
-    async fn acquire_consistency(
+    async fn read_entity(
         &self,
-        query: ConsistencyQuery,
-    ) -> Result<ConsistencyAcquireOutcome, ProviderError> {
-        self.route_scope(&query.scope_json)?
-            .acquire_consistency(query)
+        key: &EntityKey,
+        consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError> {
+        self.route_scope(&key.scope_json)?
+            .read_entity(key, consistency)
             .await
     }
 
@@ -218,9 +218,10 @@ impl Provider for RoutingProvider {
     async fn retrieve_entities(
         &self,
         query: RetrieveQuery,
-    ) -> Result<RetrievedPage, ProviderError> {
+        consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<RetrievedPage>, ProviderError> {
         self.route_scope(&query.scope_json)?
-            .retrieve_entities(query)
+            .retrieve_entities(query, consistency)
             .await
     }
 
@@ -235,18 +236,33 @@ impl Provider for RoutingProvider {
 
     async fn read_idempotency(
         &self,
+        scope_json: &str,
+        consistency: ReadConsistency,
         identity_json: &str,
         request_json: &str,
         now_unix_ms: u64,
     ) -> Result<IdempotencyReadOutcome, ProviderError> {
-        self.route_identity(identity_json)?
-            .read_idempotency(identity_json, request_json, now_unix_ms)
+        let provider = self.route_scope(scope_json)?;
+        if !Arc::ptr_eq(provider, self.route_identity(identity_json)?) {
+            return Err(ProviderError::new(
+                "scope and idempotency identity route to different providers",
+            ));
+        }
+        provider
+            .read_idempotency(
+                scope_json,
+                consistency,
+                identity_json,
+                request_json,
+                now_unix_ms,
+            )
             .await
     }
 
     async fn read_idempotency_in_work_unit(
         &self,
         work_unit: &WorkUnit,
+        consistency: ReadConsistency,
         identity_json: &str,
         request_json: &str,
         now_unix_ms: u64,
@@ -262,6 +278,7 @@ impl Provider for RoutingProvider {
         provider
             .read_idempotency_in_work_unit(
                 work_unit,
+                consistency,
                 identity_json,
                 request_json,
                 now_unix_ms,
@@ -292,10 +309,26 @@ impl Provider for RoutingProvider {
         &self,
         work_unit: &WorkUnit,
         key: &EntityKey,
+        consistency: ReadConsistency,
     ) -> Result<WorkUnitReadOutcome, ProviderError> {
         let provider = self.route_scope(&work_unit.scope_json)?;
         self.ensure_same_route(provider, &key.scope_json)?;
-        provider.read_entity_in_work_unit(work_unit, key).await
+        provider
+            .read_entity_in_work_unit(work_unit, key, consistency)
+            .await
+    }
+
+    async fn retrieve_entities_in_work_unit(
+        &self,
+        work_unit: &WorkUnit,
+        query: RetrieveQuery,
+        consistency: ReadConsistency,
+    ) -> Result<WorkUnitRetrieveOutcome, ProviderError> {
+        let provider = self.route_scope(&work_unit.scope_json)?;
+        self.ensure_same_route(provider, &query.scope_json)?;
+        provider
+            .retrieve_entities_in_work_unit(work_unit, query, consistency)
+            .await
     }
 
     async fn commit_entity_in_work_unit(

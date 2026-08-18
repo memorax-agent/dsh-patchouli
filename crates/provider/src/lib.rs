@@ -63,7 +63,10 @@ pub struct ProviderCapabilities {
     pub retrieval: bool,
     pub idempotency: bool,
     pub work_units: bool,
-    pub causal_sessions: bool,
+    pub causal_reads: bool,
+    pub monotonic_reads: bool,
+    pub read_your_writes: bool,
+    pub linearizable_reads: bool,
 }
 
 impl ProviderCapabilities {
@@ -75,9 +78,19 @@ impl ProviderCapabilities {
             retrieval: false,
             idempotency: false,
             work_units: false,
-            causal_sessions: false,
+            causal_reads: false,
+            monotonic_reads: false,
+            read_your_writes: false,
+            linearizable_reads: false,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsistencySource {
+    Authority,
+    Replica,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,15 +162,46 @@ pub struct ChangePage {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConsistencyQuery {
-    pub scope_json: String,
-    pub minimum_tokens: Vec<String>,
-    pub session_keys: Vec<String>,
+pub struct SessionConsistency {
+    pub key_json: String,
+    pub monotonic_reads: bool,
+    pub read_your_writes: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConsistencyAcquireOutcome {
-    Acquired { causal_token: Option<String> },
+pub struct ReadConsistency {
+    pub allowed_sources: Vec<ConsistencySource>,
+    pub minimum_tokens: Vec<String>,
+    pub sessions: Vec<SessionConsistency>,
+    pub linearization_keys: Vec<String>,
+    pub deadline_unix_ms: Option<u64>,
+}
+
+impl ReadConsistency {
+    pub fn authority() -> Self {
+        Self {
+            allowed_sources: vec![ConsistencySource::Authority],
+            minimum_tokens: Vec::new(),
+            sessions: Vec::new(),
+            linearization_keys: Vec::new(),
+            deadline_unix_ms: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadObservation {
+    pub source: ConsistencySource,
+    pub frontier: u64,
+    pub causal_token: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConsistentRead<T> {
+    Read {
+        value: T,
+        observation: ReadObservation,
+    },
     Unavailable,
 }
 
@@ -245,7 +289,8 @@ pub struct EntityCommit {
     pub change_kind: StoredChangeKind,
     pub causal_token: String,
     pub event_meta_json: String,
-    pub session_keys: Vec<String>,
+    pub write_session_keys: Vec<String>,
+    pub ordering_key_json: Option<String>,
     pub recorded_at_unix_ms: u64,
     pub deadline_unix_ms: Option<u64>,
 }
@@ -269,6 +314,7 @@ pub enum IdempotencyReadOutcome {
     Missing,
     Replayed { result_json: String },
     Conflict,
+    Unavailable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,7 +343,16 @@ pub enum WorkUnitExpiryAction {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkUnitReadOutcome {
-    Open(Option<EntitySnapshot>),
+    Open(ConsistentRead<Option<EntitySnapshot>>),
+    Closing,
+    PolicyMismatch,
+    Committed,
+    Expired,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum WorkUnitRetrieveOutcome {
+    Open(ConsistentRead<RetrievedPage>),
     Closing,
     PolicyMismatch,
     Committed,
@@ -361,16 +416,11 @@ pub trait Provider: Send + Sync {
 
     async fn health_check(&self) -> Result<(), ProviderError>;
 
-    async fn read_entity(&self, key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError>;
-
-    async fn acquire_consistency(
+    async fn read_entity(
         &self,
-        _query: ConsistencyQuery,
-    ) -> Result<ConsistencyAcquireOutcome, ProviderError> {
-        Err(ProviderError::new(
-            "provider does not support causal/session consistency",
-        ))
-    }
+        key: &EntityKey,
+        consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError>;
 
     async fn read_changes(&self, _query: ChangeQuery) -> Result<ChangePage, ProviderError> {
         Err(ProviderError::new(
@@ -391,7 +441,8 @@ pub trait Provider: Send + Sync {
     async fn retrieve_entities(
         &self,
         _query: RetrieveQuery,
-    ) -> Result<RetrievedPage, ProviderError> {
+        _consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<RetrievedPage>, ProviderError> {
         Err(ProviderError::new(
             "provider does not support entity retrieval",
         ))
@@ -404,6 +455,8 @@ pub trait Provider: Send + Sync {
 
     async fn read_idempotency(
         &self,
+        _scope_json: &str,
+        _consistency: ReadConsistency,
         _identity_json: &str,
         _request_json: &str,
         _now_unix_ms: u64,
@@ -414,6 +467,7 @@ pub trait Provider: Send + Sync {
     async fn read_idempotency_in_work_unit(
         &self,
         _work_unit: &WorkUnit,
+        _consistency: ReadConsistency,
         _identity_json: &str,
         _request_json: &str,
         _now_unix_ms: u64,
@@ -435,7 +489,19 @@ pub trait Provider: Send + Sync {
         &self,
         work_unit: &WorkUnit,
         key: &EntityKey,
+        consistency: ReadConsistency,
     ) -> Result<WorkUnitReadOutcome, ProviderError>;
+
+    async fn retrieve_entities_in_work_unit(
+        &self,
+        _work_unit: &WorkUnit,
+        _query: RetrieveQuery,
+        _consistency: ReadConsistency,
+    ) -> Result<WorkUnitRetrieveOutcome, ProviderError> {
+        Err(ProviderError::new(
+            "provider does not support work-unit retrieval",
+        ))
+    }
 
     async fn commit_entity_in_work_unit(
         &self,

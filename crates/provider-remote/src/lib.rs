@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -9,11 +12,11 @@ use axum::{
     routing::{get, post},
 };
 use patchouli_provider::{
-    ChangePage, ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit,
-    EntityCommitOutcome, EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord,
-    IdempotentCommitOutcome, Provider, ProviderCapabilities, ProviderError, ProviderErrorReason,
-    ProviderRecovery, RetrieveQuery, RetrievedPage, WorkUnit, WorkUnitCommit,
-    WorkUnitCommitOutcome, WorkUnitPublish, WorkUnitReadOutcome,
+    ChangePage, ChangeQuery, ConsistentRead, EntityCommit, EntityCommitOutcome, EntityKey,
+    EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord, IdempotentCommitOutcome, Provider,
+    ProviderCapabilities, ProviderError, ProviderErrorReason, ProviderRecovery, ReadConsistency,
+    RetrieveQuery, RetrievedPage, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitPublish,
+    WorkUnitReadOutcome, WorkUnitRetrieveOutcome,
 };
 use reqwest::{Client, Url, redirect::Policy};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -21,7 +24,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::watch;
 
 // Bump this whenever a serialized provider call, reply, info, or error shape changes.
-const REMOTE_PROVIDER_PROTOCOL: u16 = 3;
+const REMOTE_PROVIDER_PROTOCOL: u16 = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteProviderInfo {
@@ -29,6 +32,7 @@ pub struct RemoteProviderInfo {
     pub provider: String,
     pub capabilities: ProviderCapabilities,
     pub recovery: ProviderRecovery,
+    pub change_retention_seconds: u64,
 }
 
 pub struct RemoteProvider {
@@ -224,24 +228,31 @@ impl Provider for RemoteProvider {
         }
     }
 
-    async fn read_entity(&self, key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
-        match self.call(ProviderCall::ReadEntity(key.clone())).await? {
+    async fn read_entity(
+        &self,
+        key: &EntityKey,
+        consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError> {
+        match self
+            .call(ProviderCall::ReadEntity {
+                key: key.clone(),
+                consistency,
+            })
+            .await?
+        {
             ProviderReply::Entity(value) => Ok(value),
             reply => Err(unexpected_reply(reply)),
         }
     }
 
-    async fn acquire_consistency(
-        &self,
-        query: ConsistencyQuery,
-    ) -> Result<ConsistencyAcquireOutcome, ProviderError> {
-        match self.call(ProviderCall::AcquireConsistency(query)).await? {
-            ProviderReply::Consistency(value) => Ok(value),
-            reply => Err(unexpected_reply(reply)),
-        }
-    }
-
     async fn read_changes(&self, query: ChangeQuery) -> Result<ChangePage, ProviderError> {
+        let query = RemoteChangeQuery {
+            scope_json: query.scope_json,
+            entity_types: query.entity_types,
+            entity_ids: query.entity_ids,
+            after_cursor: query.after_cursor,
+            limit: query.limit,
+        };
         match self.call(ProviderCall::ReadChanges(query)).await? {
             ProviderReply::Changes(value) => Ok(value),
             reply => Err(unexpected_reply(reply)),
@@ -271,8 +282,12 @@ impl Provider for RemoteProvider {
     async fn retrieve_entities(
         &self,
         query: RetrieveQuery,
-    ) -> Result<RetrievedPage, ProviderError> {
-        match self.call(ProviderCall::RetrieveEntities(query)).await? {
+        consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<RetrievedPage>, ProviderError> {
+        match self
+            .call(ProviderCall::RetrieveEntities { query, consistency })
+            .await?
+        {
             ProviderReply::Retrieved(value) => Ok(value),
             reply => Err(unexpected_reply(reply)),
         }
@@ -290,12 +305,16 @@ impl Provider for RemoteProvider {
 
     async fn read_idempotency(
         &self,
+        scope_json: &str,
+        consistency: ReadConsistency,
         identity_json: &str,
         request_json: &str,
         now_unix_ms: u64,
     ) -> Result<IdempotencyReadOutcome, ProviderError> {
         match self
             .call(ProviderCall::ReadIdempotency {
+                scope_json: scope_json.to_owned(),
+                consistency,
                 identity_json: identity_json.to_owned(),
                 request_json: request_json.to_owned(),
                 now_unix_ms,
@@ -310,6 +329,7 @@ impl Provider for RemoteProvider {
     async fn read_idempotency_in_work_unit(
         &self,
         work_unit: &WorkUnit,
+        consistency: ReadConsistency,
         identity_json: &str,
         request_json: &str,
         now_unix_ms: u64,
@@ -318,6 +338,7 @@ impl Provider for RemoteProvider {
         match self
             .call(ProviderCall::ReadIdempotencyInWorkUnit {
                 work_unit: work_unit.clone(),
+                consistency,
                 identity_json: identity_json.to_owned(),
                 request_json: request_json.to_owned(),
                 now_unix_ms,
@@ -353,15 +374,36 @@ impl Provider for RemoteProvider {
         &self,
         work_unit: &WorkUnit,
         key: &EntityKey,
+        consistency: ReadConsistency,
     ) -> Result<WorkUnitReadOutcome, ProviderError> {
         match self
             .call(ProviderCall::ReadEntityInWorkUnit {
                 work_unit: work_unit.clone(),
                 key: key.clone(),
+                consistency,
             })
             .await?
         {
             ProviderReply::WorkUnitRead(value) => Ok(value),
+            reply => Err(unexpected_reply(reply)),
+        }
+    }
+
+    async fn retrieve_entities_in_work_unit(
+        &self,
+        work_unit: &WorkUnit,
+        query: RetrieveQuery,
+        consistency: ReadConsistency,
+    ) -> Result<WorkUnitRetrieveOutcome, ProviderError> {
+        match self
+            .call(ProviderCall::RetrieveEntitiesInWorkUnit {
+                work_unit: work_unit.clone(),
+                query,
+                consistency,
+            })
+            .await?
+        {
+            ProviderReply::WorkUnitRetrieve(value) => Ok(value),
             reply => Err(unexpected_reply(reply)),
         }
     }
@@ -406,6 +448,7 @@ struct ProviderServerState {
     provider: Arc<dyn Provider>,
     token: Arc<str>,
     info: RemoteProviderInfo,
+    change_retention_ms: u64,
     shutdown: watch::Receiver<bool>,
 }
 
@@ -413,6 +456,7 @@ pub fn remote_provider_router(
     provider: Arc<dyn Provider>,
     token: String,
     recovery: ProviderRecovery,
+    change_retention_seconds: u64,
     shutdown: watch::Receiver<bool>,
 ) -> Result<Router, ProviderError> {
     if token.is_empty() {
@@ -420,16 +464,26 @@ pub fn remote_provider_router(
             "remote provider token must not be empty",
         ));
     }
+    if change_retention_seconds == 0 {
+        return Err(ProviderError::new(
+            "remote provider change retention must be greater than zero",
+        ));
+    }
+    let change_retention_ms = change_retention_seconds
+        .checked_mul(1_000)
+        .ok_or_else(|| ProviderError::new("remote provider change retention is too large"))?;
     let info = RemoteProviderInfo {
         protocol: REMOTE_PROVIDER_PROTOCOL,
         provider: provider.kind().to_owned(),
         capabilities: provider.capabilities(),
         recovery,
+        change_retention_seconds,
     };
     let state = ProviderServerState {
         provider,
         token: token.into(),
         info,
+        change_retention_ms,
         shutdown,
     };
     Ok(Router::new()
@@ -461,7 +515,14 @@ async fn provider_call(
             "unauthenticated remote provider request",
         );
     }
-    match execute_call(state.provider.as_ref(), call, state.shutdown.clone()).await {
+    match execute_call(
+        state.provider.as_ref(),
+        call,
+        state.change_retention_ms,
+        state.shutdown.clone(),
+    )
+    .await
+    {
         Ok(reply) => Json(reply).into_response(),
         Err(error) => (
             status_for_reason(error.reason()),
@@ -508,6 +569,7 @@ fn status_for_reason(reason: ProviderErrorReason) -> StatusCode {
 async fn execute_call(
     provider: &dyn Provider,
     call: ProviderCall,
+    change_retention_ms: u64,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<ProviderReply, ProviderError> {
     Ok(match call {
@@ -515,11 +577,18 @@ async fn execute_call(
             provider.health_check().await?;
             ProviderReply::Unit
         }
-        ProviderCall::ReadEntity(key) => ProviderReply::Entity(provider.read_entity(&key).await?),
-        ProviderCall::AcquireConsistency(query) => {
-            ProviderReply::Consistency(provider.acquire_consistency(query).await?)
+        ProviderCall::ReadEntity { key, consistency } => {
+            ProviderReply::Entity(provider.read_entity(&key, consistency).await?)
         }
         ProviderCall::ReadChanges(query) => {
+            let query = ChangeQuery {
+                scope_json: query.scope_json,
+                entity_types: query.entity_types,
+                entity_ids: query.entity_ids,
+                after_cursor: query.after_cursor,
+                limit: query.limit,
+                retained_after_unix_ms: unix_time_ms().saturating_sub(change_retention_ms),
+            };
             ProviderReply::Changes(provider.read_changes(query).await?)
         }
         ProviderCall::WaitForChanges {
@@ -539,23 +608,32 @@ async fn execute_call(
             }
             ProviderReply::Unit
         }
-        ProviderCall::RetrieveEntities(query) => {
-            ProviderReply::Retrieved(provider.retrieve_entities(query).await?)
+        ProviderCall::RetrieveEntities { query, consistency } => {
+            ProviderReply::Retrieved(provider.retrieve_entities(query, consistency).await?)
         }
         ProviderCall::CommitEntity(commit) => {
             ProviderReply::EntityCommit(provider.commit_entity(commit).await?)
         }
         ProviderCall::ReadIdempotency {
+            scope_json,
+            consistency,
             identity_json,
             request_json,
             now_unix_ms,
         } => ProviderReply::IdempotencyRead(
             provider
-                .read_idempotency(&identity_json, &request_json, now_unix_ms)
+                .read_idempotency(
+                    &scope_json,
+                    consistency,
+                    &identity_json,
+                    &request_json,
+                    now_unix_ms,
+                )
                 .await?,
         ),
         ProviderCall::ReadIdempotencyInWorkUnit {
             work_unit,
+            consistency,
             identity_json,
             request_json,
             now_unix_ms,
@@ -564,6 +642,7 @@ async fn execute_call(
             provider
                 .read_idempotency_in_work_unit(
                     &work_unit,
+                    consistency,
                     &identity_json,
                     &request_json,
                     now_unix_ms,
@@ -580,9 +659,24 @@ async fn execute_call(
                 .commit_entity_idempotent(commit, idempotency, now_unix_ms)
                 .await?,
         ),
-        ProviderCall::ReadEntityInWorkUnit { work_unit, key } => {
-            ProviderReply::WorkUnitRead(provider.read_entity_in_work_unit(&work_unit, &key).await?)
-        }
+        ProviderCall::ReadEntityInWorkUnit {
+            work_unit,
+            key,
+            consistency,
+        } => ProviderReply::WorkUnitRead(
+            provider
+                .read_entity_in_work_unit(&work_unit, &key, consistency)
+                .await?,
+        ),
+        ProviderCall::RetrieveEntitiesInWorkUnit {
+            work_unit,
+            query,
+            consistency,
+        } => ProviderReply::WorkUnitRetrieve(
+            provider
+                .retrieve_entities_in_work_unit(&work_unit, query, consistency)
+                .await?,
+        ),
         ProviderCall::CommitEntityInWorkUnit(commit) => {
             ProviderReply::WorkUnitCommit(provider.commit_entity_in_work_unit(commit).await?)
         }
@@ -603,26 +697,50 @@ fn provider_shutting_down() -> ProviderError {
     )
 }
 
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RemoteChangeQuery {
+    scope_json: String,
+    entity_types: Option<Vec<String>>,
+    entity_ids: Option<Vec<String>>,
+    after_cursor: u64,
+    limit: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 enum ProviderCall {
     Health,
-    ReadEntity(EntityKey),
-    AcquireConsistency(ConsistencyQuery),
-    ReadChanges(ChangeQuery),
+    ReadEntity {
+        key: EntityKey,
+        consistency: ReadConsistency,
+    },
+    ReadChanges(RemoteChangeQuery),
     WaitForChanges {
         scope_json: String,
         after_cursor: u64,
     },
-    RetrieveEntities(RetrieveQuery),
+    RetrieveEntities {
+        query: RetrieveQuery,
+        consistency: ReadConsistency,
+    },
     CommitEntity(EntityCommit),
     ReadIdempotency {
+        scope_json: String,
+        consistency: ReadConsistency,
         identity_json: String,
         request_json: String,
         now_unix_ms: u64,
     },
     ReadIdempotencyInWorkUnit {
         work_unit: WorkUnit,
+        consistency: ReadConsistency,
         identity_json: String,
         request_json: String,
         now_unix_ms: u64,
@@ -636,6 +754,12 @@ enum ProviderCall {
     ReadEntityInWorkUnit {
         work_unit: WorkUnit,
         key: EntityKey,
+        consistency: ReadConsistency,
+    },
+    RetrieveEntitiesInWorkUnit {
+        work_unit: WorkUnit,
+        query: RetrieveQuery,
+        consistency: ReadConsistency,
     },
     CommitEntityInWorkUnit(WorkUnitCommit),
     PublishWorkUnit(WorkUnitPublish),
@@ -646,16 +770,16 @@ impl ProviderCall {
     fn operation(&self) -> &'static str {
         match self {
             Self::Health => "health check",
-            Self::ReadEntity(_) => "read entity",
-            Self::AcquireConsistency(_) => "acquire consistency",
+            Self::ReadEntity { .. } => "read entity",
             Self::ReadChanges(_) => "read changes",
             Self::WaitForChanges { .. } => "wait for changes",
-            Self::RetrieveEntities(_) => "retrieve entities",
+            Self::RetrieveEntities { .. } => "retrieve entities",
             Self::CommitEntity(_) => "commit entity",
             Self::ReadIdempotency { .. } => "read idempotency",
             Self::ReadIdempotencyInWorkUnit { .. } => "read work-unit idempotency",
             Self::CommitEntityIdempotent { .. } => "commit idempotent entity",
             Self::ReadEntityInWorkUnit { .. } => "read entity in work unit",
+            Self::RetrieveEntitiesInWorkUnit { .. } => "retrieve entities in work unit",
             Self::CommitEntityInWorkUnit(_) => "commit entity in work unit",
             Self::PublishWorkUnit(_) => "publish work unit",
             Self::Checkpoint => "checkpoint provider",
@@ -667,14 +791,14 @@ impl ProviderCall {
 #[serde(tag = "result", content = "data", rename_all = "snake_case")]
 enum ProviderReply {
     Unit,
-    Entity(Option<EntitySnapshot>),
-    Consistency(ConsistencyAcquireOutcome),
+    Entity(ConsistentRead<Option<EntitySnapshot>>),
     Changes(ChangePage),
-    Retrieved(RetrievedPage),
+    Retrieved(ConsistentRead<RetrievedPage>),
     EntityCommit(EntityCommitOutcome),
     IdempotencyRead(IdempotencyReadOutcome),
     IdempotentCommit(IdempotentCommitOutcome),
     WorkUnitRead(WorkUnitReadOutcome),
+    WorkUnitRetrieve(WorkUnitRetrieveOutcome),
     WorkUnitCommit(WorkUnitCommitOutcome),
 }
 
@@ -687,16 +811,17 @@ struct RemoteError {
 #[cfg(test)]
 mod wire_tests {
     use patchouli_provider::{
-        EntityCommit, EntityCommitOutcome, EntityKey, StoredChangeKind, StoredCrdtChange,
-        StoredCrdtField, StoredEntityVersion, StoredVersionState,
+        ConsistencySource, EntityCommit, EntityCommitOutcome, EntityKey, ReadConsistency,
+        SessionConsistency, StoredChangeKind, StoredCrdtChange, StoredCrdtField,
+        StoredEntityVersion, StoredVersionState,
     };
     use serde_json::json;
 
     use super::{ProviderCall, ProviderReply, REMOTE_PROVIDER_PROTOCOL};
 
     #[test]
-    fn protocol_v3_commit_fixture_is_stable() {
-        assert_eq!(REMOTE_PROVIDER_PROTOCOL, 3);
+    fn protocol_v4_commit_fixture_is_stable() {
+        assert_eq!(REMOTE_PROVIDER_PROTOCOL, 4);
         let call = ProviderCall::CommitEntity(EntityCommit {
             key: EntityKey {
                 scope_json: r#"{"workspace_id":"one"}"#.to_owned(),
@@ -722,7 +847,8 @@ mod wire_tests {
             change_kind: StoredChangeKind::Created,
             causal_token: "c1".to_owned(),
             event_meta_json: "{}".to_owned(),
-            session_keys: vec!["s1".to_owned()],
+            write_session_keys: vec!["s1".to_owned()],
+            ordering_key_json: Some("ordering".to_owned()),
             recorded_at_unix_ms: 10,
             deadline_unix_ms: Some(20),
         });
@@ -752,7 +878,8 @@ mod wire_tests {
                     "change_kind": "Created",
                     "causal_token": "c1",
                     "event_meta_json": "{}",
-                    "session_keys": ["s1"],
+                    "write_session_keys": ["s1"],
+                    "ordering_key_json": "ordering",
                     "recorded_at_unix_ms": 10,
                     "deadline_unix_ms": 20
                 }
@@ -766,6 +893,52 @@ mod wire_tests {
             json!({
                 "result": "entity_commit",
                 "data": {"Conflict": {"current_heads": ["v2"]}}
+            })
+        );
+    }
+
+    #[test]
+    fn protocol_v4_consistent_read_fixture_is_stable() {
+        let call = ProviderCall::ReadEntity {
+            key: EntityKey {
+                scope_json: r#"{"workspace_id":"one"}"#.to_owned(),
+                entity_type: "knowledge".to_owned(),
+                entity_id: "k1".to_owned(),
+            },
+            consistency: ReadConsistency {
+                allowed_sources: vec![ConsistencySource::Authority],
+                minimum_tokens: vec!["c1".to_owned()],
+                sessions: vec![SessionConsistency {
+                    key_json: "session-1".to_owned(),
+                    monotonic_reads: true,
+                    read_your_writes: false,
+                }],
+                linearization_keys: vec!["linear-1".to_owned()],
+                deadline_unix_ms: Some(20),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(call).unwrap(),
+            json!({
+                "method": "read_entity",
+                "params": {
+                    "key": {
+                        "scope_json": "{\"workspace_id\":\"one\"}",
+                        "entity_type": "knowledge",
+                        "entity_id": "k1"
+                    },
+                    "consistency": {
+                        "allowed_sources": ["authority"],
+                        "minimum_tokens": ["c1"],
+                        "sessions": [{
+                            "key_json": "session-1",
+                            "monotonic_reads": true,
+                            "read_your_writes": false
+                        }],
+                        "linearization_keys": ["linear-1"],
+                        "deadline_unix_ms": 20
+                    }
+                }
             })
         );
     }

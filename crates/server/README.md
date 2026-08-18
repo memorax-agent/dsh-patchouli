@@ -17,7 +17,7 @@ Local transports:
 cargo install --path crates/server
 patchouli-db init --root "$HOME/.patchouli"
 patchouli-db serve --endpoint <endpoint> --artifacts <artifact-root> --providers <provider-config> --config <policy-path>
-patchouli-db provide --listen 127.0.0.1:8080 --database <path> --token-env PATCHOULI_PROVIDER_TOKEN
+patchouli-db provide --listen 127.0.0.1:8080 --database <path> --token-env PATCHOULI_PROVIDER_TOKEN --change-retention-seconds 604800
 patchouli-db status --endpoint <endpoint>
 patchouli-db checkpoint --endpoint <endpoint>
 patchouli-db stop --endpoint <endpoint>
@@ -49,7 +49,8 @@ and exposes subscribe/unsubscribe operations without depending on Harness.
 unclean shutdown. On `stop`, the daemon stops accepting clients, signals and
 drains connection tasks, then shuts down the engine and provider.
 
-`patchouli-db provide` owns one SQLite authority and exposes provider primitives.
+`patchouli-db provide` owns one SQLite authority, including its change-log
+retention policy, and exposes provider primitives.
 Read its bearer token only from the named environment variable. Bind it to
 loopback behind an HTTPS reverse proxy for remote access; non-loopback remote
 clients reject cleartext HTTP.

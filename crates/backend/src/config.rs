@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+pub use patchouli_provider::ConsistencySource;
+
 use crate::fact::BuiltinFactSchemaRetriever;
 
 const CONFIG_SCHEMA: &str = include_str!("../../../config/patchouli.schema.json");
@@ -103,13 +105,6 @@ pub enum SnapshotPolicy {
 pub struct AcquirePolicy {
     pub allow_sources: Vec<ConsistencySource>,
     pub requirements: Vec<AcquireRequirement>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConsistencySource {
-    Authority,
-    Replica,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

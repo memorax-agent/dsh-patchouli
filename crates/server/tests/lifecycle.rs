@@ -11,9 +11,9 @@ use patchouli_backend::{
     EntityVersion, RpcParams, SubscribeChangesData, UnsubscribeChangesData,
 };
 use patchouli_provider::{
-    EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot, Provider, ProviderCapabilities,
-    ProviderError, ProviderRecovery, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome,
-    WorkUnitPublish, WorkUnitReadOutcome,
+    ConsistentRead, EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot, Provider,
+    ProviderCapabilities, ProviderError, ProviderRecovery, ReadConsistency, WorkUnit,
+    WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitPublish, WorkUnitReadOutcome,
 };
 use patchouli_provider_sqlite::SqliteProvider;
 use patchouli_server::{IpcError, LocalClient, LocalServer, ServerOptions};
@@ -53,7 +53,10 @@ impl Provider for HealthyProvider {
             retrieval: true,
             idempotency: true,
             work_units: true,
-            causal_sessions: true,
+            causal_reads: true,
+            monotonic_reads: true,
+            read_your_writes: true,
+            linearizable_reads: true,
         }
     }
 
@@ -68,7 +71,11 @@ impl Provider for HealthyProvider {
         Ok(())
     }
 
-    async fn read_entity(&self, _key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+    async fn read_entity(
+        &self,
+        _key: &EntityKey,
+        _consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError> {
         Err(ProviderError::new("test provider has no storage"))
     }
 
@@ -83,6 +90,7 @@ impl Provider for HealthyProvider {
         &self,
         _work_unit: &WorkUnit,
         _key: &EntityKey,
+        _consistency: ReadConsistency,
     ) -> Result<WorkUnitReadOutcome, ProviderError> {
         Err(ProviderError::new("test provider has no storage"))
     }

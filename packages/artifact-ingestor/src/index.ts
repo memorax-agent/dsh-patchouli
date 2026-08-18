@@ -184,6 +184,11 @@ function imageAttachments(data: MemoryData): ImageAttachmentRef[] {
   return [...attachments.values()]
 }
 
+function currentTurnEvents(data: MemoryData): MemoryData {
+  if (!isObject(data) || !Array.isArray(data.events)) return []
+  return data.events as MemoryData
+}
+
 function workspaceFileResources(data: MemoryData): WorkspaceFileResource[] {
   if (!isObject(data) || data.resources === undefined) return []
   if (!Array.isArray(data.resources)) throw new TypeError('resources must be an array')
@@ -337,7 +342,7 @@ export function apply(ctx: Context, config: Config): () => void {
       const point = stringAttribute(request.meta, 'point')
       const artifacts: ArtifactReceipt[] = []
       if (ingestSessionImages && point === 'session/turn-end') {
-        for (const attachment of imageAttachments(request.data)) {
+        for (const attachment of imageAttachments(currentTurnEvents(request.data))) {
           artifacts.push(await ingestImage(request.meta, attachment, context.signal))
         }
       }

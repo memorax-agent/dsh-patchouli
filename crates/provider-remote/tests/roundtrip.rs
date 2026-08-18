@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use patchouli_provider::{
-    EntityCommit, EntityCommitOutcome, EntityKey, Provider, ProviderErrorReason, StoredChangeKind,
+    ChangeQuery, ConsistencySource, ConsistentRead, EntityCommit, EntityCommitOutcome, EntityKey,
+    Provider, ProviderErrorReason, ReadConsistency, SessionConsistency, StoredChangeKind,
     StoredEntityVersion, StoredVersionState,
 };
 use patchouli_provider_remote::{RemoteProvider, remote_provider_router};
@@ -21,6 +22,7 @@ async fn remote_provider_round_trips_provider_operations() {
         Arc::clone(&storage),
         "secret".to_owned(),
         recovery,
+        3_600,
         shutdown_rx,
     )
     .unwrap();
@@ -53,23 +55,51 @@ async fn remote_provider_round_trips_provider_operations() {
         change_kind: StoredChangeKind::Created,
         causal_token: "token-1".to_owned(),
         event_meta_json: "{}".to_owned(),
-        session_keys: Vec::new(),
-        recorded_at_unix_ms: 1,
+        write_session_keys: vec![r#"{"session":"remote"}"#.to_owned()],
+        ordering_key_json: None,
+        recorded_at_unix_ms: unix_time_ms(),
         deadline_unix_ms: None,
     };
     assert_eq!(
         remote.commit_entity(commit).await.unwrap(),
         EntityCommitOutcome::Committed
     );
-    assert_eq!(
-        remote
-            .read_entity(&key)
-            .await
-            .unwrap()
-            .unwrap()
-            .head_versions,
-        vec!["v1"]
-    );
+    let ConsistentRead::Read {
+        value: Some(snapshot),
+        ..
+    } = remote
+        .read_entity(
+            &key,
+            ReadConsistency {
+                allowed_sources: vec![ConsistencySource::Authority],
+                minimum_tokens: vec!["token-1".to_owned()],
+                sessions: vec![SessionConsistency {
+                    key_json: r#"{"session":"remote"}"#.to_owned(),
+                    monotonic_reads: true,
+                    read_your_writes: true,
+                }],
+                linearization_keys: vec![r#"{"scope":"remote"}"#.to_owned()],
+                deadline_unix_ms: None,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("remote entity must be readable");
+    };
+    assert_eq!(snapshot.head_versions, vec!["v1"]);
+    let changes = remote
+        .read_changes(ChangeQuery {
+            scope_json: key.scope_json.clone(),
+            entity_types: None,
+            entity_ids: None,
+            after_cursor: 0,
+            limit: 10,
+            retained_after_unix_ms: u64::MAX,
+        })
+        .await
+        .unwrap();
+    assert_eq!(changes.changes.len(), 1);
     let update = EntityCommit {
         key: key.clone(),
         expected_heads: vec!["v1".to_owned()],
@@ -83,7 +113,8 @@ async fn remote_provider_round_trips_provider_operations() {
         change_kind: StoredChangeKind::Updated,
         causal_token: "token-2".to_owned(),
         event_meta_json: "{}".to_owned(),
-        session_keys: Vec::new(),
+        write_session_keys: Vec::new(),
+        ordering_key_json: None,
         recorded_at_unix_ms: 2,
         deadline_unix_ms: None,
     };
@@ -122,6 +153,13 @@ async fn remote_provider_round_trips_provider_operations() {
 
     server.abort();
     storage.shutdown().await.unwrap();
+}
+
+fn unix_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
 }
 
 #[tokio::test]

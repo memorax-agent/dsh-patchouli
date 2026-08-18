@@ -4,6 +4,7 @@ import z from '@deepseek-ai/schemastery'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { snapshotJsonValue, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   defineTool,
   type PostToolDecision,
@@ -55,26 +56,26 @@ export interface Config {
 
 export const Config: z<Config> = z.object({
   retrieve: z.object({
-    sessionStart: z.boolean().default(true),
+    sessionStart: z.boolean().default(false),
     preStep: z.boolean().default(true),
     turnStopping: z.boolean().default(false),
     toolPostExecute: z.boolean().default(false),
   }).default({
-    sessionStart: true,
+    sessionStart: false,
     preStep: true,
     turnStopping: false,
     toolPostExecute: false,
   }),
   store: z.object({
     agentCreated: z.boolean().default(false),
-    agentDisposed: z.boolean().default(true),
+    agentDisposed: z.boolean().default(false),
     requestError: z.boolean().default(false),
     agentError: z.boolean().default(false),
     turnEnd: z.boolean().default(true),
     toolResult: z.boolean().default(false),
   }).default({
     agentCreated: false,
-    agentDisposed: true,
+    agentDisposed: false,
     requestError: false,
     agentError: false,
     turnEnd: true,
@@ -290,14 +291,14 @@ function mergeAdditionalContexts(
 
 export function apply(ctx: Context, config: Config): void {
   const retrieve = {
-    sessionStart: config.retrieve?.sessionStart ?? true,
+    sessionStart: config.retrieve?.sessionStart ?? false,
     preStep: config.retrieve?.preStep ?? true,
     turnStopping: config.retrieve?.turnStopping ?? false,
     toolPostExecute: config.retrieve?.toolPostExecute ?? false,
   }
   const store = {
     agentCreated: config.store?.agentCreated ?? false,
-    agentDisposed: config.store?.agentDisposed ?? true,
+    agentDisposed: config.store?.agentDisposed ?? false,
     requestError: config.store?.requestError ?? false,
     agentError: config.store?.agentError ?? false,
     turnEnd: config.store?.turnEnd ?? true,
@@ -308,8 +309,8 @@ export function apply(ctx: Context, config: Config): void {
     update: config.modelTools?.update ?? true,
   }
   const lifetime = new AbortController()
+  const internalSessionFlush = new AsyncLocalStorage<Session>()
   const updateChains = new Map<Session, Promise<void>>()
-  const turnCaptureChains = new Map<Session, Promise<void>>()
   const backgroundTasks = new Set<Promise<void>>()
 
   ctx.effect(() => async () => {
@@ -325,33 +326,47 @@ export function apply(ctx: Context, config: Config): void {
     void task.then(settled, settled)
   }
 
-  function enqueueUpdate(
-    session: Session,
-    point: AgentLoopDataPoint,
-    data: MemoryData,
-    attributes: Record<string, string | number> = {},
-  ): void {
+  function enqueueSessionTask(session: Session, run: () => Promise<void>): Promise<void> {
     const previous = updateChains.get(session) ?? Promise.resolve()
-    const run = async (): Promise<void> => {
-      if (lifetime.signal.aborted) return
-      try {
-        const outcomes = await ctx.patchouli.update({
-          meta: callMeta(session, point, attributes),
-          data,
-        }, lifetime.signal)
-        warnFailures(ctx, 'update', outcomes)
-      } catch (error: unknown) {
-        if (lifetime.signal.aborted) return
-        const message = error instanceof Error ? error.message : String(error)
-        ctx.logger.warn(`patchouli update at ${point} failed: ${message}`)
-      }
-    }
     const current = previous.then(run, run)
     updateChains.set(session, current)
     const settled = (): void => {
       if (updateChains.get(session) === current) updateChains.delete(session)
     }
     void current.then(settled, settled)
+    return current
+  }
+
+  async function dispatchUpdate(
+    session: Session,
+    point: AgentLoopDataPoint,
+    data: MemoryData,
+    attributes: Record<string, string | number> = {},
+  ): Promise<void> {
+    if (lifetime.signal.aborted) return
+    try {
+      const outcomes = await ctx.patchouli.update({
+        meta: callMeta(session, point, attributes),
+        data,
+      }, lifetime.signal)
+      warnFailures(ctx, 'update', outcomes)
+    } catch (error: unknown) {
+      if (lifetime.signal.aborted) return
+      const message = error instanceof Error ? error.message : String(error)
+      ctx.logger.warn(`patchouli update at ${point} failed: ${message}`)
+    }
+  }
+
+  function enqueueUpdate(
+    session: Session,
+    point: AgentLoopDataPoint,
+    data: MemoryData,
+    attributes: Record<string, string | number> = {},
+  ): void {
+    void enqueueSessionTask(
+      session,
+      () => dispatchUpdate(session, point, data, attributes),
+    )
   }
 
   async function retrieveAt(
@@ -634,44 +649,43 @@ export function apply(ctx: Context, config: Config): void {
       const agentSnapshot = agent === undefined
         ? { id: String(session.header.id), options: {} }
         : agentData(agent)
-      const previous = turnCaptureChains.get(session) ?? Promise.resolve()
-      const capture = async (): Promise<void> => {
-        await ctx.sessions.flush(session)
-        lifetime.signal.throwIfAborted()
-        const inspection = await ctx.sessionPersistence.readFrom(
-          session.header.id,
-          0,
-          lifetime.signal,
-        )
-        lifetime.signal.throwIfAborted()
-        const persisted = persistedTurn(inspection, event.data.turn, event.seq)
-        enqueueUpdate(
-          session,
-          'session/turn-end',
-          snapshot({
-            agent: agentSnapshot,
-            session: {
-              header: inspection.meta,
-              events: persisted.sessionEvents,
+      void enqueueSessionTask(session, async () => {
+        try {
+          await internalSessionFlush.run(
+            session,
+            () => ctx.sessions.flush(session),
+          )
+          lifetime.signal.throwIfAborted()
+          const inspection = await ctx.sessionPersistence.readFrom(
+            session.header.id,
+            0,
+            lifetime.signal,
+          )
+          lifetime.signal.throwIfAborted()
+          const persisted = persistedTurn(inspection, event.data.turn, event.seq)
+          await dispatchUpdate(
+            session,
+            'session/turn-end',
+            snapshot({
+              agent: agentSnapshot,
+              session: {
+                header: inspection.meta,
+                events: persisted.sessionEvents,
+              },
+              event: persisted.event,
+              events: persisted.events,
+            }),
+            {
+              turn: event.data.turn,
+              outcome: event.data.reason.kind,
             },
-            event: persisted.event,
-            events: persisted.events,
-          }),
-          {
-            turn: event.data.turn,
-            outcome: event.data.reason.kind,
-          },
-        )
-      }
-      const task = previous.then(capture, capture).catch((error: unknown) => {
-        if (lifetime.signal.aborted) return
-        const message = error instanceof Error ? error.message : String(error)
-        ctx.logger.warn(`patchouli durable turn capture failed: ${message}`)
-      }).finally(() => {
-        if (turnCaptureChains.get(session) === task) turnCaptureChains.delete(session)
+          )
+        } catch (error: unknown) {
+          if (lifetime.signal.aborted) return
+          const message = error instanceof Error ? error.message : String(error)
+          ctx.logger.warn(`patchouli durable turn capture failed: ${message}`)
+        }
       })
-      turnCaptureChains.set(session, task)
-      track(task)
     })
   }
 
@@ -709,6 +723,7 @@ export function apply(ctx: Context, config: Config): void {
 
   if (Object.values(store).some(Boolean)) {
     ctx.on('session/flush', async (session) => {
+      if (internalSessionFlush.getStore() === session) return
       await updateChains.get(session)
     })
   }

@@ -6,12 +6,13 @@ use std::{
 
 use async_trait::async_trait;
 use patchouli_provider::{
-    ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit, EntityCommitOutcome,
-    EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord, IdempotentCommitOutcome,
-    Provider, ProviderCapabilities, ProviderError, ProviderErrorReason, ProviderRecovery,
-    StoredChangeKind, StoredCrdtChange, StoredCrdtField, StoredEntityVersion, StoredVersionState,
-    WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitConflict, WorkUnitExpiryAction,
-    WorkUnitPublish, WorkUnitReadOutcome, WorkUnitResolution,
+    ChangeQuery, ConsistentRead, EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot,
+    IdempotencyReadOutcome, IdempotencyRecord, IdempotentCommitOutcome, Provider,
+    ProviderCapabilities, ProviderError, ProviderErrorReason, ProviderRecovery, ReadConsistency,
+    ReadObservation, SessionConsistency, StoredChangeKind, StoredCrdtChange, StoredCrdtField,
+    StoredEntityVersion, StoredVersionState, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome,
+    WorkUnitConflict, WorkUnitExpiryAction, WorkUnitPublish, WorkUnitReadOutcome,
+    WorkUnitResolution, WorkUnitRetrieveOutcome,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -176,6 +177,11 @@ fn validate_provider_capabilities(
             "entity retrieval is required".to_owned(),
         ));
     }
+    if !capabilities.authority {
+        return Err(EngineError::Capability(
+            "CRUD mutations require an authority provider".to_owned(),
+        ));
+    }
     for (entity_type, policy) in &config.entity_types {
         for behavior in policy
             .rules
@@ -183,7 +189,35 @@ fn validate_provider_capabilities(
             .map(|rule| &rule.behavior)
             .chain(std::iter::once(&policy.fallback))
         {
-            let sources = &behavior.consistency.acquire.allow_sources;
+            let linearizable =
+                behavior
+                    .consistency
+                    .acquire
+                    .requirements
+                    .iter()
+                    .any(|requirement| {
+                        matches!(requirement, crate::AcquireRequirement::Linearizable { .. })
+                    });
+            if !behavior
+                .consistency
+                .acquire
+                .allow_sources
+                .contains(&ConsistencySource::Authority)
+            {
+                return Err(EngineError::Capability(format!(
+                    "entity type {entity_type:?} must allow authority reads for mutations"
+                )));
+            }
+            let mut sources = behavior
+                .consistency
+                .acquire
+                .allow_sources
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            if linearizable {
+                sources.retain(|source| *source == ConsistencySource::Authority);
+            }
             if !(capabilities.authority && sources.contains(&ConsistencySource::Authority)
                 || capabilities.replica && sources.contains(&ConsistencySource::Replica))
             {
@@ -191,20 +225,44 @@ fn validate_provider_capabilities(
                     "entity type {entity_type:?} has no acquisition source supported by the provider"
                 )));
             }
-            if (!behavior.consistency.sessions.is_empty()
-                || behavior
-                    .consistency
-                    .acquire
-                    .requirements
-                    .iter()
-                    .any(|requirement| {
-                        matches!(requirement, crate::AcquireRequirement::CausalAfter { .. })
-                    }))
-                && !capabilities.causal_sessions
+            if behavior
+                .consistency
+                .acquire
+                .requirements
+                .iter()
+                .any(|requirement| {
+                    matches!(requirement, crate::AcquireRequirement::CausalAfter { .. })
+                })
+                && !capabilities.causal_reads
             {
                 return Err(EngineError::Capability(format!(
-                    "entity type {entity_type:?} requires causal/session state"
+                    "entity type {entity_type:?} requires causal reads"
                 )));
+            }
+            if linearizable && !capabilities.linearizable_reads {
+                return Err(EngineError::Capability(format!(
+                    "entity type {entity_type:?} requires linearizable reads"
+                )));
+            }
+            for session in &behavior.consistency.sessions {
+                if session
+                    .guarantees
+                    .contains(&crate::SessionGuarantee::MonotonicReads)
+                    && !capabilities.monotonic_reads
+                {
+                    return Err(EngineError::Capability(format!(
+                        "entity type {entity_type:?} requires monotonic reads"
+                    )));
+                }
+                if session
+                    .guarantees
+                    .contains(&crate::SessionGuarantee::ReadYourWrites)
+                    && !capabilities.read_your_writes
+                {
+                    return Err(EngineError::Capability(format!(
+                        "entity type {entity_type:?} requires read-your-writes"
+                    )));
+                }
             }
             if matches!(behavior.idempotency, crate::IdempotencyPolicy::Keyed { .. })
                 && !capabilities.idempotency
@@ -233,11 +291,17 @@ impl BackendService for BackendEngine {
         let selection = self.select(&params.data.entity_type, &params.meta)?;
         let _execution_guards = self.execution_locks.acquire(&selection, true).await?;
         deadline.check_now()?;
-        self.acquire_consistency(&selection).await?;
-        deadline.check_now()?;
         let work_unit = selected_work_unit(&selection, deadline)?;
+        let consistency =
+            read_consistency(std::slice::from_ref(&selection), deadline.unix_ms(), true)?;
         let idempotency = self
-            .prepare_idempotency(&selection, work_unit.as_ref(), "create", &params.data)
+            .prepare_idempotency(
+                &selection,
+                work_unit.as_ref(),
+                consistency.clone(),
+                "create",
+                &params.data,
+            )
             .await?;
         if let Some(result) = replayed(&idempotency)? {
             return Ok(result);
@@ -251,8 +315,14 @@ impl BackendService for BackendEngine {
             id: params.data.id.unwrap_or_else(|| Uuid::new_v4().to_string()),
         };
         let key = entity_key(&selection, &entity_ref)?;
-        if let Some(snapshot) =
-            read_selected(self.provider.as_ref(), work_unit.as_ref(), &key).await?
+        if let Some(snapshot) = read_selected(
+            self.provider.as_ref(),
+            work_unit.as_ref(),
+            &key,
+            consistency,
+        )
+        .await?
+        .0
         {
             return Err(BackendError::version_conflict(snapshot.head_versions));
         }
@@ -271,7 +341,8 @@ impl BackendService for BackendEngine {
             change_kind: StoredChangeKind::Created,
             causal_token: version.clone(),
             event_meta_json: event_meta_json(&selection)?,
-            session_keys: session_keys(&selection)?,
+            write_session_keys: write_session_keys(&selection)?,
+            ordering_key_json: ordering_key_json(&selection)?,
             recorded_at_unix_ms: unix_time_ms()?,
             deadline_unix_ms: deadline.unix_ms(),
         };
@@ -300,18 +371,23 @@ impl BackendService for BackendEngine {
         let selection = self.select(&params.data.entity_ref.entity_type, &params.meta)?;
         let _execution_guards = self.execution_locks.acquire(&selection, false).await?;
         deadline.check_now()?;
-        let causal_token = self.acquire_consistency(&selection).await?;
-        deadline.check_now()?;
         let work_unit = selected_work_unit(&selection, deadline)?;
         let key = entity_key(&selection, &params.data.entity_ref)?;
-        let snapshot = read_selected(self.provider.as_ref(), work_unit.as_ref(), &key)
-            .await?
-            .ok_or_else(not_found)?;
+        let consistency =
+            read_consistency(std::slice::from_ref(&selection), deadline.unix_ms(), false)?;
+        let (snapshot, observation) = read_selected(
+            self.provider.as_ref(),
+            work_unit.as_ref(),
+            &key,
+            consistency,
+        )
+        .await?;
+        let snapshot = snapshot.ok_or_else(not_found)?;
         deadline.check_now()?;
         let variants = head_entities(&params.data.entity_ref, &snapshot)?;
         let state = read_state(&variants);
         Ok(RpcResult {
-            meta: consistency_meta(&selection, causal_token),
+            meta: consistency_meta(&selection, observation.causal_token),
             data: ReadEntityResultData { state, variants },
         })
     }
@@ -351,12 +427,9 @@ impl BackendService for BackendEngine {
             .acquire_many(&selections, false)
             .await?;
         deadline.check_now()?;
+        let consistency = read_consistency(&selections, deadline.unix_ms(), false)?;
         let mut result_meta = Meta::new();
-        for selection in &selections {
-            let causal_token = self.acquire_consistency(selection).await?;
-            result_meta.extend(consistency_meta(selection, causal_token));
-            deadline.check_now()?;
-        }
+        let work_unit = selected_retrieval_work_unit(&selections, deadline)?;
         let meta = serde_json::to_value(&params.meta).map_err(invalid_request)?;
         let scope = self.selector.select_scope(&meta).map_err(invalid_request)?;
         let query = parse_query(
@@ -365,11 +438,32 @@ impl BackendService for BackendEngine {
             &params.data.query,
             params.data.limit,
         )?;
-        let page = self
-            .provider
-            .retrieve_entities(query)
-            .await
-            .map_err(provider_backend_error)?;
+        let page = match work_unit {
+            Some(work_unit) => match self
+                .provider
+                .retrieve_entities_in_work_unit(&work_unit.work_unit, query, consistency)
+                .await
+                .map_err(provider_backend_error)?
+            {
+                WorkUnitRetrieveOutcome::Open(read) => consistent_value(read)?,
+                WorkUnitRetrieveOutcome::Closing => return Err(closed_work_unit()),
+                WorkUnitRetrieveOutcome::PolicyMismatch => {
+                    return Err(work_unit_policy_mismatch());
+                }
+                WorkUnitRetrieveOutcome::Committed => return Err(closed_work_unit()),
+                WorkUnitRetrieveOutcome::Expired => return Err(expired_work_unit()),
+            },
+            None => self
+                .provider
+                .retrieve_entities(query, consistency)
+                .await
+                .map_err(provider_backend_error)
+                .and_then(consistent_value)?,
+        };
+        for selection in &selections {
+            result_meta.extend(consistency_meta(selection, page.1.causal_token.clone()));
+        }
+        let page = page.0;
         deadline.check_now()?;
         if let Some(cursor) = &page.next_cursor {
             result_meta.insert(
@@ -403,11 +497,17 @@ impl BackendService for BackendEngine {
         let selection = self.select(&params.data.entity_ref.entity_type, &params.meta)?;
         let _execution_guards = self.execution_locks.acquire(&selection, true).await?;
         deadline.check_now()?;
-        self.acquire_consistency(&selection).await?;
-        deadline.check_now()?;
         let work_unit = selected_work_unit(&selection, deadline)?;
+        let consistency =
+            read_consistency(std::slice::from_ref(&selection), deadline.unix_ms(), true)?;
         let idempotency = self
-            .prepare_idempotency(&selection, work_unit.as_ref(), "update", &params.data)
+            .prepare_idempotency(
+                &selection,
+                work_unit.as_ref(),
+                consistency.clone(),
+                "update",
+                &params.data,
+            )
             .await?;
         if let Some(result) = replayed(&idempotency)? {
             return Ok(result);
@@ -416,10 +516,17 @@ impl BackendService for BackendEngine {
             .validate_entity_value(&params.data.entity_ref.entity_type, &params.data.value)
             .map_err(invalid_request)?;
         let key = entity_key(&selection, &params.data.entity_ref)?;
-        let snapshot = read_selected(self.provider.as_ref(), work_unit.as_ref(), &key)
-            .await?
-            .ok_or_else(not_found)?;
+        let snapshot = read_selected(
+            self.provider.as_ref(),
+            work_unit.as_ref(),
+            &key,
+            consistency,
+        )
+        .await?
+        .0
+        .ok_or_else(not_found)?;
         let bases = selected_bases(&selection.conflict, &snapshot)?;
+        reject_unless_exact_heads(&selection.conflict, &snapshot, &bases)?;
         let expected_heads = snapshot.head_versions.clone();
         let concurrent = concurrent_heads(&snapshot, &bases)?;
 
@@ -489,7 +596,8 @@ impl BackendService for BackendEngine {
             change_kind: kind,
             causal_token: accepted_version,
             event_meta_json: event_meta_json(&selection)?,
-            session_keys: session_keys(&selection)?,
+            write_session_keys: write_session_keys(&selection)?,
+            ordering_key_json: ordering_key_json(&selection)?,
             recorded_at_unix_ms: unix_time_ms()?,
             deadline_unix_ms: deadline.unix_ms(),
         };
@@ -517,20 +625,33 @@ impl BackendService for BackendEngine {
         let selection = self.select(&params.data.entity_ref.entity_type, &params.meta)?;
         let _execution_guards = self.execution_locks.acquire(&selection, true).await?;
         deadline.check_now()?;
-        self.acquire_consistency(&selection).await?;
-        deadline.check_now()?;
         let work_unit = selected_work_unit(&selection, deadline)?;
+        let consistency =
+            read_consistency(std::slice::from_ref(&selection), deadline.unix_ms(), true)?;
         let idempotency = self
-            .prepare_idempotency(&selection, work_unit.as_ref(), "delete", &params.data)
+            .prepare_idempotency(
+                &selection,
+                work_unit.as_ref(),
+                consistency.clone(),
+                "delete",
+                &params.data,
+            )
             .await?;
         if let Some(result) = replayed(&idempotency)? {
             return Ok(result);
         }
         let key = entity_key(&selection, &params.data.entity_ref)?;
-        let snapshot = read_selected(self.provider.as_ref(), work_unit.as_ref(), &key)
-            .await?
-            .ok_or_else(not_found)?;
+        let snapshot = read_selected(
+            self.provider.as_ref(),
+            work_unit.as_ref(),
+            &key,
+            consistency,
+        )
+        .await?
+        .0
+        .ok_or_else(not_found)?;
         let bases = selected_bases(&selection.conflict, &snapshot)?;
+        reject_unless_exact_heads(&selection.conflict, &snapshot, &bases)?;
         let concurrent = concurrent_heads(&snapshot, &bases)?;
         if !concurrent.is_empty()
             && (selection.conflict.strategy == ConflictStrategy::Reject
@@ -569,7 +690,8 @@ impl BackendService for BackendEngine {
             change_kind: kind,
             causal_token: version,
             event_meta_json: event_meta_json(&selection)?,
-            session_keys: session_keys(&selection)?,
+            write_session_keys: write_session_keys(&selection)?,
+            ordering_key_json: ordering_key_json(&selection)?,
             recorded_at_unix_ms: unix_time_ms()?,
             deadline_unix_ms: deadline.unix_ms(),
         };
@@ -712,47 +834,11 @@ impl BackendEngine {
             .map_err(invalid_request)
     }
 
-    async fn acquire_consistency(
-        &self,
-        selection: &PolicySelection,
-    ) -> Result<Option<String>, BackendError> {
-        if selection.consistency.causal.is_empty() && selection.consistency.sessions.is_empty() {
-            return Ok(None);
-        }
-        let minimum_tokens = selection
-            .consistency
-            .causal
-            .iter()
-            .filter_map(|causal| causal.minimum.as_ref())
-            .map(|token| {
-                token
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| invalid_request("causal tokens must be strings"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let outcome = self
-            .provider
-            .acquire_consistency(ConsistencyQuery {
-                scope_json: serde_json::to_string(&selection.scope).map_err(invalid_request)?,
-                minimum_tokens,
-                session_keys: session_keys(selection)?,
-            })
-            .await
-            .map_err(provider_backend_error)?;
-        match outcome {
-            ConsistencyAcquireOutcome::Acquired { causal_token } => Ok(causal_token),
-            ConsistencyAcquireOutcome::Unavailable => Err(BackendError::new(
-                BackendErrorReason::UnsupportedCapability,
-                "the requested causal/session frontier is not available from this provider",
-            )),
-        }
-    }
-
     async fn prepare_idempotency<T: Serialize>(
         &self,
         selection: &PolicySelection,
         work_unit: Option<&SelectedWorkUnit>,
+        consistency: ReadConsistency,
         operation: &str,
         data: &T,
     ) -> Result<Option<PreparedIdempotency>, BackendError> {
@@ -774,6 +860,7 @@ impl BackendEngine {
                 self.provider
                     .read_idempotency_in_work_unit(
                         &work_unit.work_unit,
+                        consistency,
                         &identity_json,
                         &request_json,
                         now,
@@ -783,7 +870,13 @@ impl BackendEngine {
             }
             None => {
                 self.provider
-                    .read_idempotency(&identity_json, &request_json, now)
+                    .read_idempotency(
+                        &serde_json::to_string(&selection.scope).map_err(invalid_request)?,
+                        consistency,
+                        &identity_json,
+                        &request_json,
+                        now,
+                    )
                     .await
             }
         }
@@ -792,6 +885,12 @@ impl BackendEngine {
             IdempotencyReadOutcome::Missing => None,
             IdempotencyReadOutcome::Replayed { result_json } => Some(result_json),
             IdempotencyReadOutcome::Conflict => return Err(idempotency_conflict()),
+            IdempotencyReadOutcome::Unavailable => {
+                return Err(BackendError::new(
+                    BackendErrorReason::Overloaded,
+                    "the requested consistency frontier is not currently available",
+                ));
+            }
         };
         Ok(Some(PreparedIdempotency {
             identity_json,
@@ -890,13 +989,108 @@ fn idempotency_conflict() -> BackendError {
     )
 }
 
-fn session_keys(selection: &PolicySelection) -> Result<Vec<String>, BackendError> {
+fn write_session_keys(selection: &PolicySelection) -> Result<Vec<String>, BackendError> {
     selection
         .consistency
         .sessions
         .iter()
+        .filter(|session| {
+            session
+                .guarantees
+                .contains(&crate::SessionGuarantee::ReadYourWrites)
+        })
         .map(|session| serde_json::to_string(&session.key).map_err(invalid_request))
         .collect()
+}
+
+fn ordering_key_json(selection: &PolicySelection) -> Result<Option<String>, BackendError> {
+    selection
+        .consistency
+        .commit_ordering_key
+        .as_ref()
+        .map(|key| serde_json::to_string(key).map_err(invalid_request))
+        .transpose()
+}
+
+fn read_consistency(
+    selections: &[PolicySelection],
+    deadline_unix_ms: Option<u64>,
+    authority_only: bool,
+) -> Result<ReadConsistency, BackendError> {
+    let mut allowed_sources = selections
+        .first()
+        .map(|selection| selection.consistency.allowed_sources.clone())
+        .unwrap_or_default();
+    let mut minimum_tokens = BTreeSet::new();
+    let mut sessions = BTreeMap::<String, (bool, bool)>::new();
+    let mut linearization_keys = BTreeSet::new();
+
+    for selection in selections {
+        allowed_sources = allowed_sources
+            .intersection(&selection.consistency.allowed_sources)
+            .copied()
+            .collect();
+        for causal in &selection.consistency.causal {
+            if let Some(token) = &causal.minimum {
+                minimum_tokens.insert(
+                    token
+                        .as_str()
+                        .ok_or_else(|| invalid_request("causal tokens must be strings"))?
+                        .to_owned(),
+                );
+            }
+        }
+        for session in &selection.consistency.sessions {
+            let key = serde_json::to_string(&session.key).map_err(invalid_request)?;
+            let guarantees = sessions.entry(key).or_default();
+            guarantees.0 |= session
+                .guarantees
+                .contains(&crate::SessionGuarantee::MonotonicReads);
+            guarantees.1 |= session
+                .guarantees
+                .contains(&crate::SessionGuarantee::ReadYourWrites);
+        }
+        if let Some(key) = &selection.consistency.linearization_key {
+            linearization_keys.insert(serde_json::to_string(key).map_err(invalid_request)?);
+        }
+    }
+
+    if authority_only {
+        allowed_sources.retain(|source| *source == ConsistencySource::Authority);
+    }
+
+    if allowed_sources.is_empty() {
+        return Err(BackendError::new(
+            BackendErrorReason::UnsupportedCapability,
+            "the selected entity types have no common consistency source",
+        ));
+    }
+    Ok(ReadConsistency {
+        allowed_sources: allowed_sources.into_iter().collect(),
+        minimum_tokens: minimum_tokens.into_iter().collect(),
+        sessions: sessions
+            .into_iter()
+            .map(
+                |(key_json, (monotonic_reads, read_your_writes))| SessionConsistency {
+                    key_json,
+                    monotonic_reads,
+                    read_your_writes,
+                },
+            )
+            .collect(),
+        linearization_keys: linearization_keys.into_iter().collect(),
+        deadline_unix_ms,
+    })
+}
+
+fn consistent_value<T>(outcome: ConsistentRead<T>) -> Result<(T, ReadObservation), BackendError> {
+    match outcome {
+        ConsistentRead::Read { value, observation } => Ok((value, observation)),
+        ConsistentRead::Unavailable => Err(BackendError::new(
+            BackendErrorReason::Overloaded,
+            "the requested consistency frontier is not currently available",
+        )),
+    }
 }
 
 fn event_meta_json(selection: &PolicySelection) -> Result<String, BackendError> {
@@ -968,6 +1162,32 @@ fn selected_work_unit(
         },
         close,
     }))
+}
+
+fn selected_retrieval_work_unit(
+    selections: &[PolicySelection],
+    deadline: RequestDeadline,
+) -> Result<Option<SelectedWorkUnit>, BackendError> {
+    let mut selected = selections
+        .iter()
+        .map(|selection| selected_work_unit(selection, deadline));
+    let first = selected.next().transpose()?.flatten();
+    for next in selected {
+        let next = next?;
+        match (&first, &next) {
+            (None, None) => {}
+            (Some(first), Some(next))
+                if first.work_unit.identity_json == next.work_unit.identity_json
+                    && first.work_unit.scope_json == next.work_unit.scope_json
+                    && first.work_unit.policy_json == next.work_unit.policy_json => {}
+            _ => {
+                return Err(invalid_request(
+                    "retrieved entity types must select the same transaction behavior",
+                ));
+            }
+        }
+    }
+    Ok(first)
 }
 
 fn entity_key(
@@ -1049,6 +1269,31 @@ fn concurrent_heads<'a>(
                 .ok_or_else(|| provider_corruption("current head version is missing"))
         })
         .collect()
+}
+
+fn reject_unless_exact_heads(
+    plan: &ConflictPlan,
+    snapshot: &EntitySnapshot,
+    bases: &[&StoredEntityVersion],
+) -> Result<(), BackendError> {
+    if plan.strategy != ConflictStrategy::Reject {
+        return Ok(());
+    }
+    let bases = bases
+        .iter()
+        .map(|version| version.version.as_str())
+        .collect::<BTreeSet<_>>();
+    let heads = snapshot
+        .head_versions
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if bases != heads {
+        return Err(BackendError::version_conflict(
+            snapshot.head_versions.clone(),
+        ));
+    }
+    Ok(())
 }
 
 fn initial_crdt_fields(
@@ -1320,19 +1565,21 @@ async fn read_selected(
     provider: &dyn Provider,
     work_unit: Option<&SelectedWorkUnit>,
     key: &EntityKey,
-) -> Result<Option<EntitySnapshot>, BackendError> {
+    consistency: ReadConsistency,
+) -> Result<(Option<EntitySnapshot>, ReadObservation), BackendError> {
     let Some(work_unit) = work_unit else {
         return provider
-            .read_entity(key)
+            .read_entity(key, consistency)
             .await
-            .map_err(provider_backend_error);
+            .map_err(provider_backend_error)
+            .and_then(consistent_value);
     };
     match provider
-        .read_entity_in_work_unit(&work_unit.work_unit, key)
+        .read_entity_in_work_unit(&work_unit.work_unit, key, consistency)
         .await
         .map_err(provider_backend_error)?
     {
-        WorkUnitReadOutcome::Open(snapshot) => Ok(snapshot),
+        WorkUnitReadOutcome::Open(read) => consistent_value(read),
         WorkUnitReadOutcome::Closing => Err(closed_work_unit()),
         WorkUnitReadOutcome::PolicyMismatch => Err(work_unit_policy_mismatch()),
         WorkUnitReadOutcome::Committed => Err(closed_work_unit()),
@@ -1348,6 +1595,11 @@ impl BackendEngine {
         commit: EntityCommit,
         idempotency: Option<IdempotencyRecord>,
     ) -> Result<Option<EntitySnapshot>, BackendError> {
+        let post_commit_consistency = read_consistency(
+            std::slice::from_ref(selection),
+            commit.deadline_unix_ms,
+            true,
+        )?;
         let Some(work_unit) = work_unit else {
             return match self
                 .provider
@@ -1392,9 +1644,11 @@ impl BackendEngine {
         match outcome {
             WorkUnitCommitOutcome::Published => self
                 .provider
-                .read_entity(&committed_key)
+                .read_entity(&committed_key, post_commit_consistency)
                 .await
-                .map_err(provider_backend_error),
+                .map_err(provider_backend_error)
+                .and_then(consistent_value)
+                .map(|(snapshot, _)| snapshot),
             WorkUnitCommitOutcome::PublicationConflict { conflicts } => {
                 Err(publication_conflict_error(&conflicts))
             }
@@ -1511,7 +1765,8 @@ impl BackendEngine {
                 change_kind: StoredChangeKind::Updated,
                 causal_token: Uuid::new_v4().to_string(),
                 event_meta_json: "{}".to_owned(),
-                session_keys: Vec::new(),
+                write_session_keys: Vec::new(),
+                ordering_key_json: None,
                 recorded_at_unix_ms: unix_time_ms()?,
                 deadline_unix_ms: None,
             },
@@ -1655,4 +1910,75 @@ fn unix_time_ms() -> Result<u64, BackendError> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .map_err(invalid_request)
+}
+
+#[cfg(test)]
+mod consistency_tests {
+    use serde_json::{Value, json};
+
+    use patchouli_provider::ProviderCapabilities;
+
+    use super::{read_consistency, validate_provider_capabilities};
+    use crate::{BackendConfig, BackendErrorReason, PolicySelector};
+
+    const DEFAULT: &str = include_str!("../../../config/patchouli.default.json");
+
+    #[test]
+    fn multi_type_reads_require_one_common_source_and_merge_session_guarantees() {
+        let mut value: Value = serde_json::from_str(DEFAULT).unwrap();
+        for (entity_type, source, guarantee) in [
+            ("knowledge", "authority", "monotonic_reads"),
+            ("knowledge_relation", "replica", "read_your_writes"),
+        ] {
+            let fallback = &mut value["entity_types"][entity_type]["fallback"]["consistency"];
+            fallback["acquire"] = json!({
+                "allow_sources": [source],
+                "requirements": []
+            });
+            fallback["sessions"] = json!([{
+                "key_by": ["channel_id"],
+                "guarantees": [guarantee]
+            }]);
+        }
+        let config = BackendConfig::from_json(&value.to_string()).unwrap();
+        let error = validate_provider_capabilities(
+            &config,
+            ProviderCapabilities {
+                authority: true,
+                replica: true,
+                change_stream: true,
+                retrieval: true,
+                idempotency: true,
+                work_units: true,
+                causal_reads: true,
+                monotonic_reads: true,
+                read_your_writes: true,
+                linearizable_reads: true,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("must allow authority reads"));
+        let selector = PolicySelector::new(config);
+        let meta = json!({
+            "workspace_id": "workspace-1",
+            "user_id": "user-1",
+            "channel_id": "channel-1"
+        });
+        let selections = [
+            selector.select("knowledge", &meta).unwrap(),
+            selector.select("knowledge_relation", &meta).unwrap(),
+        ];
+        let error = read_consistency(&selections, None, false).unwrap_err();
+        assert_eq!(error.reason, BackendErrorReason::UnsupportedCapability);
+        let error = read_consistency(&selections[1..], None, true).unwrap_err();
+        assert_eq!(error.reason, BackendErrorReason::UnsupportedCapability);
+
+        let mut compatible = selections;
+        compatible[1].consistency.allowed_sources =
+            compatible[0].consistency.allowed_sources.clone();
+        let consistency = read_consistency(&compatible, None, false).unwrap();
+        assert_eq!(consistency.sessions.len(), 1);
+        assert!(consistency.sessions[0].monotonic_reads);
+        assert!(consistency.sessions[0].read_your_writes);
+    }
 }

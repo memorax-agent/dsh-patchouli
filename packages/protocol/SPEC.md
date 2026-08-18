@@ -181,6 +181,8 @@ select a client-controlled consistency level.
   lifetime of the durable transaction group;
 - allowed source sets are intersected by acquisition requirements;
 - causal and session frontiers are joined into the minimum acceptable frontier;
+- source selection, frontier validation, snapshot reading, and monotonic-read
+  frontier advancement are one atomic provider operation;
 - linearizable acquisition requires an authority ordering point between request
   invocation and response;
 - commit serialization applies one configured total-order domain;
@@ -193,6 +195,13 @@ is older than a later causal/session lower bound is unsatisfiable; the backend
 MUST reject it rather than advance the baseline or weaken the lower bound.
 Statically impossible combinations MUST prevent startup. Provider capability
 mismatches MUST also prevent startup once a provider is selected.
+
+Monotonic reads and read-your-writes keep separate durable session frontiers.
+A successful read advances only the read frontier; a successful publication
+advances only the write frontier. Shared transactions establish their
+linearizable authority point when the baseline is first created. Later RPCs
+read that fixed baseline plus its staged overlay and do not claim a new current
+linearization point.
 
 When configured, the controller reads and writes opaque causal tokens in
 `meta`. A provider joins multiple tokens using its frontier representation.

@@ -655,6 +655,58 @@ test('submits the complete committed turn without filtering its event data', asy
   assert.deepEqual(secondSessionEvents.slice(-secondEvents.length), secondEvents)
 })
 
+test('keeps durable turn capture ahead of later Session updates', async (t) => {
+  const { ctx } = await mountConsumer(t, {
+    retrieve: { preStep: false },
+    store: { agentDisposed: true, turnEnd: true },
+  })
+  const flushStarted = Promise.withResolvers<void>()
+  const releaseFlush = Promise.withResolvers<void>()
+  let blockNextFlush = true
+  const disposeBlocker = ctx.on('session/flush', async () => {
+    if (!blockNextFlush) return
+    blockNextFlush = false
+    flushStarted.resolve()
+    await releaseFlush.promise
+  })
+  t.after(async () => {
+    releaseFlush.resolve()
+    await disposeBlocker()
+  })
+
+  const points: JsonValue[] = []
+  const received = Promise.withResolvers<void>()
+  const disposePlugin = ctx.patchouli.register({
+    id: 'ordered-updates',
+    async update(request) {
+      points.push(attributesOf(request).point ?? null)
+      if (points.length === 2) received.resolve()
+      return null
+    },
+    async retrieve() {
+      return null
+    },
+  })
+  t.after(disposePlugin)
+
+  const session = ctx.sessions.create(SessionId('session-ordering'), {
+    meta: { cwd: '/workspace/patchouli' },
+  })
+  const agent = fakeAgent('/workspace/patchouli', session)
+  const disposeAgent = ctx.agents.register(agent)
+  t.after(disposeAgent)
+
+  session.append('turn/start', { turn: 1 })
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  await flushStarted.promise
+  agentEvents(ctx, agent).emit('agent/disposed', {})
+  assert.deepEqual(points, [])
+
+  releaseFlush.resolve()
+  await received.promise
+  assert.deepEqual(points, ['session/turn-end', 'agent/disposed'])
+})
+
 test('aborts and drains an admitted turn update during consumer disposal', async (t) => {
   const { ctx, consumer } = await mountConsumer(t, {
     retrieve: { preStep: false },

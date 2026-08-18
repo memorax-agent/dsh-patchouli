@@ -13,14 +13,14 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use async_trait::async_trait;
 use fs4::FileExt;
 use patchouli_provider::{
-    ChangePage, ChangeQuery, ConsistencyAcquireOutcome, ConsistencyQuery, EntityCommit,
-    EntityCommitOutcome, EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord,
-    IdempotentCommitOutcome, Provider, ProviderCapabilities, ProviderError, ProviderRecovery,
-    RetrieveCursor, RetrieveFilter, RetrieveFilterOperator, RetrieveOrder, RetrieveQuery,
-    RetrievedEntity, RetrievedPage, StoredChange, StoredChangeKind, StoredCrdtChange,
-    StoredCrdtField, StoredEntityVersion, StoredVersionState, WorkUnit, WorkUnitCommit,
-    WorkUnitCommitOutcome, WorkUnitConflict, WorkUnitExpiryAction, WorkUnitPublish,
-    WorkUnitReadOutcome,
+    ChangePage, ChangeQuery, ConsistencySource, ConsistentRead, EntityCommit, EntityCommitOutcome,
+    EntityKey, EntitySnapshot, IdempotencyReadOutcome, IdempotencyRecord, IdempotentCommitOutcome,
+    Provider, ProviderCapabilities, ProviderError, ProviderRecovery, ReadConsistency,
+    ReadObservation, RetrieveCursor, RetrieveFilter, RetrieveFilterOperator, RetrieveOrder,
+    RetrieveQuery, RetrievedEntity, RetrievedPage, StoredChange, StoredChangeKind,
+    StoredCrdtChange, StoredCrdtField, StoredEntityVersion, StoredVersionState, WorkUnit,
+    WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitConflict, WorkUnitExpiryAction, WorkUnitPublish,
+    WorkUnitReadOutcome, WorkUnitRetrieveOutcome,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -327,7 +327,10 @@ impl Provider for SqliteProvider {
             retrieval: true,
             idempotency: true,
             work_units: true,
-            causal_sessions: true,
+            causal_reads: true,
+            monotonic_reads: true,
+            read_your_writes: true,
+            linearizable_reads: true,
         }
     }
 
@@ -440,7 +443,9 @@ impl Provider for SqliteProvider {
                             conflict_policy_json TEXT CHECK (json_valid(conflict_policy_json)),
                             causal_token TEXT,
                             event_meta_json TEXT CHECK (json_valid(event_meta_json)),
-                            session_keys_json TEXT CHECK (json_valid(session_keys_json)),
+                            write_session_keys_json TEXT CHECK (
+                                json_valid(write_session_keys_json)
+                            ),
                             close_marker INTEGER NOT NULL DEFAULT 0 CHECK (close_marker IN (0, 1)),
                             PRIMARY KEY (
                                 work_unit_json,
@@ -623,7 +628,8 @@ impl Provider for SqliteProvider {
                                 json_valid(scope_json) AND json_type(scope_json) = 'object'
                             ),
                             session_key_json TEXT NOT NULL CHECK (json_valid(session_key_json)),
-                            cursor INTEGER NOT NULL CHECK (cursor >= 0),
+                            read_cursor INTEGER NOT NULL DEFAULT 0 CHECK (read_cursor >= 0),
+                            write_cursor INTEGER NOT NULL DEFAULT 0 CHECK (write_cursor >= 0),
                             PRIMARY KEY (scope_json, session_key_json)
                         ) STRICT, WITHOUT ROWID;
 
@@ -785,29 +791,20 @@ impl Provider for SqliteProvider {
             .map_err(|error| ProviderError::new(format!("SQLite health check failed: {error}")))
     }
 
-    async fn read_entity(&self, key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+    async fn read_entity(
+        &self,
+        key: &EntityKey,
+        consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError> {
         let connection = self.connection().await?;
         let key = key.clone();
         connection
             .call(move |connection| {
                 sweep_expired_work_units(connection)?;
-                read_entity_snapshot(connection, &key)
+                read_entity_consistent(connection, &key, &consistency)
             })
             .await
-            .map_err(|error| ProviderError::new(format!("SQLite entity read failed: {error}")))
-    }
-
-    async fn acquire_consistency(
-        &self,
-        query: ConsistencyQuery,
-    ) -> Result<ConsistencyAcquireOutcome, ProviderError> {
-        let connection = self.connection().await?;
-        connection
-            .call(move |connection| acquire_consistency(connection, &query))
-            .await
-            .map_err(|error| {
-                ProviderError::new(format!("SQLite consistency acquisition failed: {error}"))
-            })
+            .map_err(|error| sqlite_call_error("entity read", error))
     }
 
     async fn read_changes(&self, query: ChangeQuery) -> Result<ChangePage, ProviderError> {
@@ -857,12 +854,13 @@ impl Provider for SqliteProvider {
     async fn retrieve_entities(
         &self,
         query: RetrieveQuery,
-    ) -> Result<RetrievedPage, ProviderError> {
+        consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<RetrievedPage>, ProviderError> {
         let connection = self.connection().await?;
         connection
-            .call(move |connection| retrieve_entities(connection, &query))
+            .call(move |connection| retrieve_entities_consistent(connection, &query, &consistency))
             .await
-            .map_err(|error| ProviderError::new(format!("SQLite retrieval failed: {error}")))
+            .map_err(|error| sqlite_call_error("retrieval", error))
     }
 
     async fn commit_entity(
@@ -885,24 +883,35 @@ impl Provider for SqliteProvider {
 
     async fn read_idempotency(
         &self,
+        scope_json: &str,
+        consistency: ReadConsistency,
         identity_json: &str,
         request_json: &str,
         now_unix_ms: u64,
     ) -> Result<IdempotencyReadOutcome, ProviderError> {
         let connection = self.connection().await?;
+        let scope_json = scope_json.to_owned();
         let identity_json = identity_json.to_owned();
         let request_json = request_json.to_owned();
         connection
             .call(move |connection| {
-                read_idempotency(connection, &identity_json, &request_json, now_unix_ms)
+                read_idempotency_consistent(
+                    connection,
+                    &scope_json,
+                    &consistency,
+                    &identity_json,
+                    &request_json,
+                    now_unix_ms,
+                )
             })
             .await
-            .map_err(|error| ProviderError::new(format!("SQLite idempotency read failed: {error}")))
+            .map_err(|error| sqlite_call_error("idempotency read", error))
     }
 
     async fn read_idempotency_in_work_unit(
         &self,
         work_unit: &WorkUnit,
+        consistency: ReadConsistency,
         identity_json: &str,
         request_json: &str,
         now_unix_ms: u64,
@@ -918,6 +927,7 @@ impl Provider for SqliteProvider {
                     let transaction = connection
                         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                         .map_err(database_error)?;
+                    let existed = work_unit_exists(&transaction, &work_unit.identity_json)?;
                     let outcome = read_work_unit_idempotency(
                         &transaction,
                         &work_unit,
@@ -925,6 +935,23 @@ impl Provider for SqliteProvider {
                         &request_json,
                         now_unix_ms,
                         allow_replay,
+                    )?;
+                    let baseline = work_unit_baseline(&transaction, &work_unit.identity_json)?;
+                    let Some(observation) = consistency_observation(
+                        &transaction,
+                        &work_unit.scope_json,
+                        &consistency,
+                        baseline,
+                        !existed,
+                    )?
+                    else {
+                        return Ok(IdempotencyReadOutcome::Unavailable);
+                    };
+                    advance_read_sessions(
+                        &transaction,
+                        &work_unit.scope_json,
+                        &consistency,
+                        observation.frontier,
                     )?;
                     commit_before_deadline(transaction, work_unit.deadline_unix_ms)?;
                     Ok(outcome)
@@ -957,6 +984,7 @@ impl Provider for SqliteProvider {
         &self,
         work_unit: &WorkUnit,
         key: &EntityKey,
+        consistency: ReadConsistency,
     ) -> Result<WorkUnitReadOutcome, ProviderError> {
         let connection = self.connection().await?;
         let work_unit = work_unit.clone();
@@ -964,10 +992,27 @@ impl Provider for SqliteProvider {
         connection
             .call(move |connection| {
                 sweep_expired_work_units(connection)?;
-                read_entity_in_work_unit(connection, &work_unit, &key)
+                read_entity_in_work_unit(connection, &work_unit, &key, &consistency)
             })
             .await
             .map_err(|error| sqlite_call_error("work-unit read", error))
+    }
+
+    async fn retrieve_entities_in_work_unit(
+        &self,
+        work_unit: &WorkUnit,
+        query: RetrieveQuery,
+        consistency: ReadConsistency,
+    ) -> Result<WorkUnitRetrieveOutcome, ProviderError> {
+        let connection = self.connection().await?;
+        let work_unit = work_unit.clone();
+        connection
+            .call(move |connection| {
+                sweep_expired_work_units(connection)?;
+                retrieve_entities_in_work_unit(connection, &work_unit, &query, &consistency)
+            })
+            .await
+            .map_err(|error| sqlite_call_error("work-unit retrieval", error))
     }
 
     async fn commit_entity_in_work_unit(
@@ -1111,7 +1156,7 @@ fn sqlite_call_error(
 }
 
 fn read_idempotency(
-    connection: &mut rusqlite::Connection,
+    connection: &rusqlite::Connection,
     identity_json: &str,
     request_json: &str,
     now_unix_ms: u64,
@@ -1161,6 +1206,29 @@ fn read_idempotency(
     } else {
         IdempotencyReadOutcome::Missing
     })
+}
+
+fn read_idempotency_consistent(
+    connection: &mut rusqlite::Connection,
+    scope_json: &str,
+    consistency: &ReadConsistency,
+    identity_json: &str,
+    request_json: &str,
+    now_unix_ms: u64,
+) -> Result<IdempotencyReadOutcome, ProviderError> {
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database_error)?;
+    let frontier = current_scope_cursor(&transaction, scope_json)?;
+    let Some(observation) =
+        consistency_observation(&transaction, scope_json, consistency, frontier, true)?
+    else {
+        return Ok(IdempotencyReadOutcome::Unavailable);
+    };
+    let outcome = read_idempotency(&transaction, identity_json, request_json, now_unix_ms)?;
+    advance_read_sessions(&transaction, scope_json, consistency, observation.frontier)?;
+    commit_before_deadline(transaction, consistency.deadline_unix_ms)?;
+    Ok(outcome)
 }
 
 fn read_work_unit_idempotency(
@@ -1236,71 +1304,176 @@ fn read_work_unit_idempotency(
     })
 }
 
-fn acquire_consistency(
+fn read_entity_consistent(
     connection: &mut rusqlite::Connection,
-    query: &ConsistencyQuery,
-) -> Result<ConsistencyAcquireOutcome, ProviderError> {
+    key: &EntityKey,
+    consistency: &ReadConsistency,
+) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError> {
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(database_error)?;
-    let current = transaction
+    let Some(observation) = consistency_observation(
+        &transaction,
+        &key.scope_json,
+        consistency,
+        current_scope_cursor(&transaction, &key.scope_json)?,
+        true,
+    )?
+    else {
+        return Ok(ConsistentRead::Unavailable);
+    };
+    let value = read_entity_snapshot(&transaction, key)?;
+    advance_read_sessions(
+        &transaction,
+        &key.scope_json,
+        consistency,
+        observation.frontier,
+    )?;
+    commit_before_deadline(transaction, consistency.deadline_unix_ms)?;
+    Ok(ConsistentRead::Read { value, observation })
+}
+
+fn retrieve_entities_consistent(
+    connection: &mut rusqlite::Connection,
+    query: &RetrieveQuery,
+    consistency: &ReadConsistency,
+) -> Result<ConsistentRead<RetrievedPage>, ProviderError> {
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database_error)?;
+    let Some(observation) = consistency_observation(
+        &transaction,
+        &query.scope_json,
+        consistency,
+        current_scope_cursor(&transaction, &query.scope_json)?,
+        true,
+    )?
+    else {
+        return Ok(ConsistentRead::Unavailable);
+    };
+    let value = retrieve_entities(&transaction, query)?;
+    advance_read_sessions(
+        &transaction,
+        &query.scope_json,
+        consistency,
+        observation.frontier,
+    )?;
+    commit_before_deadline(transaction, consistency.deadline_unix_ms)?;
+    Ok(ConsistentRead::Read { value, observation })
+}
+
+fn current_scope_cursor(
+    connection: &rusqlite::Connection,
+    scope_json: &str,
+) -> Result<u64, ProviderError> {
+    connection
         .query_row(
-            "SELECT cursor, causal_token
-             FROM patchouli_scope_frontier
-             WHERE scope_json = ?1",
-            [&query.scope_json],
-            |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)),
+            "SELECT cursor FROM patchouli_scope_frontier WHERE scope_json = ?1",
+            [scope_json],
+            |row| row.get::<_, u64>(0),
         )
         .optional()
-        .map_err(database_error)?;
-    let current_cursor = current.as_ref().map_or(0, |(cursor, _)| *cursor);
+        .map(|cursor| cursor.unwrap_or(0))
+        .map_err(database_error)
+}
 
-    for token in &query.minimum_tokens {
-        let available = transaction
-            .query_row(
-                "SELECT 1 FROM patchouli_causal_frontier
-                 WHERE scope_json = ?1 AND causal_token = ?2",
-                (&query.scope_json, token),
-                |_| Ok(()),
-            )
-            .optional()
-            .map_err(database_error)?
-            .is_some();
-        if !available {
-            return Ok(ConsistencyAcquireOutcome::Unavailable);
-        }
+fn consistency_observation(
+    connection: &rusqlite::Connection,
+    scope_json: &str,
+    consistency: &ReadConsistency,
+    frontier: u64,
+    apply_linearization: bool,
+) -> Result<Option<ReadObservation>, ProviderError> {
+    if let Some(deadline) = consistency.deadline_unix_ms
+        && unix_time_ms()? >= deadline
+    {
+        return Err(ProviderError::deadline_exceeded());
     }
-    for session_key in &query.session_keys {
-        let required = transaction
+    if !consistency
+        .allowed_sources
+        .contains(&ConsistencySource::Authority)
+    {
+        return Ok(None);
+    }
+    if apply_linearization && !consistency.linearization_keys.is_empty() {
+        // The surrounding IMMEDIATE transaction is SQLite's authority ordering point.
+    }
+    for token in &consistency.minimum_tokens {
+        let token_cursor = connection
             .query_row(
-                "SELECT cursor FROM patchouli_session_frontier
-                 WHERE scope_json = ?1 AND session_key_json = ?2",
-                (&query.scope_json, session_key),
+                "SELECT cursor FROM patchouli_causal_frontier
+                 WHERE scope_json = ?1 AND causal_token = ?2",
+                (scope_json, token),
                 |row| row.get::<_, u64>(0),
             )
             .optional()
-            .map_err(database_error)?
-            .unwrap_or(0);
-        if required > current_cursor {
-            return Ok(ConsistencyAcquireOutcome::Unavailable);
+            .map_err(database_error)?;
+        if token_cursor.is_none_or(|cursor| cursor > frontier) {
+            return Ok(None);
         }
     }
-    for session_key in &query.session_keys {
+    for session in &consistency.sessions {
+        let stored = connection
+            .query_row(
+                "SELECT read_cursor, write_cursor FROM patchouli_session_frontier
+                 WHERE scope_json = ?1 AND session_key_json = ?2",
+                (scope_json, &session.key_json),
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .optional()
+            .map_err(database_error)?;
+        let required = stored.map_or(0, |(read, write)| {
+            let read = if session.monotonic_reads { read } else { 0 };
+            let write = if session.read_your_writes { write } else { 0 };
+            read.max(write)
+        });
+        if required > frontier {
+            return Ok(None);
+        }
+    }
+    let causal_token = if frontier == 0 {
+        None
+    } else {
+        connection
+            .query_row(
+                "SELECT causal_token FROM patchouli_causal_frontier
+                 WHERE scope_json = ?1 AND cursor = ?2",
+                (scope_json, frontier),
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)?
+    };
+    Ok(Some(ReadObservation {
+        source: ConsistencySource::Authority,
+        frontier,
+        causal_token,
+    }))
+}
+
+fn advance_read_sessions(
+    transaction: &rusqlite::Transaction<'_>,
+    scope_json: &str,
+    consistency: &ReadConsistency,
+    frontier: u64,
+) -> Result<(), ProviderError> {
+    for session in consistency
+        .sessions
+        .iter()
+        .filter(|session| session.monotonic_reads)
+    {
         transaction
             .execute(
                 "INSERT INTO patchouli_session_frontier (
-                    scope_json, session_key_json, cursor
-                 ) VALUES (?1, ?2, ?3)
+                    scope_json, session_key_json, read_cursor, write_cursor
+                 ) VALUES (?1, ?2, ?3, 0)
                  ON CONFLICT (scope_json, session_key_json)
-                 DO UPDATE SET cursor = max(cursor, excluded.cursor)",
-                (&query.scope_json, session_key, current_cursor),
+                 DO UPDATE SET read_cursor = max(read_cursor, excluded.read_cursor)",
+                (scope_json, &session.key_json, frontier),
             )
             .map_err(database_error)?;
     }
-    transaction.commit().map_err(database_error)?;
-    Ok(ConsistencyAcquireOutcome::Acquired {
-        causal_token: current.map(|(_, token)| token),
-    })
+    Ok(())
 }
 
 fn read_changes(
@@ -1414,6 +1587,34 @@ fn retrieve_entities(
     connection: &rusqlite::Connection,
     query: &RetrieveQuery,
 ) -> Result<RetrievedPage, ProviderError> {
+    let (candidates, next_cursor) = retrieve_candidates(connection, query, None)?;
+    let mut entities = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let key = EntityKey {
+            scope_json: query.scope_json.clone(),
+            entity_type: candidate.entity_type,
+            entity_id: candidate.entity_id,
+        };
+        if let Some(snapshot) = read_entity_snapshot(connection, &key)? {
+            entities.push(RetrievedEntity {
+                key,
+                snapshot,
+                score: candidate.score,
+                recorded_at_unix_ms: candidate.recorded_at_unix_ms,
+            });
+        }
+    }
+    Ok(RetrievedPage {
+        entities,
+        next_cursor,
+    })
+}
+
+fn retrieve_candidates(
+    connection: &rusqlite::Connection,
+    query: &RetrieveQuery,
+    work_unit: Option<&str>,
+) -> Result<(Vec<RetrievalCandidate>, Option<RetrieveCursor>), ProviderError> {
     let filters = query
         .filters
         .iter()
@@ -1427,7 +1628,7 @@ fn retrieve_entities(
         })
         .collect::<Result<Vec<_>, ProviderError>>()?;
     let mut candidates = BTreeMap::new();
-    for version in matching_versions(connection, query)? {
+    for version in matching_versions(connection, query, work_unit)? {
         let value: Value = serde_json::from_str(&version.value_json).map_err(|error| {
             ProviderError::new(format!(
                 "invalid stored entity value during retrieval: {error}"
@@ -1475,26 +1676,7 @@ fn retrieve_entities(
         )
     });
 
-    let mut entities = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
-        let key = EntityKey {
-            scope_json: query.scope_json.clone(),
-            entity_type: candidate.entity_type,
-            entity_id: candidate.entity_id,
-        };
-        if let Some(snapshot) = read_entity_snapshot(connection, &key)? {
-            entities.push(RetrievedEntity {
-                key,
-                snapshot,
-                score: candidate.score,
-                recorded_at_unix_ms: candidate.recorded_at_unix_ms,
-            });
-        }
-    }
-    Ok(RetrievedPage {
-        entities,
-        next_cursor,
-    })
+    Ok((candidates, next_cursor))
 }
 
 #[derive(Debug)]
@@ -1517,29 +1699,75 @@ struct RetrievalCandidate {
 fn matching_versions(
     connection: &rusqlite::Connection,
     query: &RetrieveQuery,
+    work_unit: Option<&str>,
 ) -> Result<Vec<MatchedVersion>, ProviderError> {
-    let mut parameters = vec![rusqlite::types::Value::Text(query.scope_json.clone())];
+    let mut parameters = Vec::new();
+    let (prefix, head_source) = match work_unit {
+        Some(work_unit) => {
+            parameters.extend([
+                rusqlite::types::Value::Text(work_unit.to_owned()),
+                rusqlite::types::Value::Text(work_unit.to_owned()),
+                rusqlite::types::Value::Text(query.scope_json.clone()),
+                rusqlite::types::Value::Text(work_unit.to_owned()),
+            ]);
+            (
+                "WITH unit(baseline_cursor) AS (
+                    SELECT baseline_cursor FROM patchouli_work_unit WHERE identity_json = ?
+                 ),
+                 visible_head(scope_json, entity_type, entity_id, version) AS (
+                    SELECT head.scope_json, head.entity_type, head.entity_id, head.version
+                    FROM patchouli_work_unit_head AS head
+                    WHERE head.work_unit_json = ?
+                    UNION ALL
+                    SELECT history.scope_json, history.entity_type, history.entity_id,
+                           CAST(member.value AS TEXT)
+                    FROM patchouli_entity_head_history AS history
+                    CROSS JOIN unit
+                    CROSS JOIN json_each(history.head_versions_json) AS member
+                    WHERE history.scope_json = ?
+                      AND history.cursor = (
+                        SELECT max(prior.cursor)
+                        FROM patchouli_entity_head_history AS prior
+                        WHERE prior.scope_json = history.scope_json
+                          AND prior.entity_type = history.entity_type
+                          AND prior.entity_id = history.entity_id
+                          AND prior.cursor <= unit.baseline_cursor
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM patchouli_work_unit_head AS staged
+                        WHERE staged.work_unit_json = ?
+                          AND staged.scope_json = history.scope_json
+                          AND staged.entity_type = history.entity_type
+                          AND staged.entity_id = history.entity_id
+                      )
+                 ) ",
+                "visible_head",
+            )
+        }
+        None => ("", "patchouli_entity_head"),
+    };
+    parameters.push(rusqlite::types::Value::Text(query.scope_json.clone()));
     let mut sql = match &query.text {
         None => "SELECT version.entity_type, version.entity_id, version.value_json,
                         version.recorded_at_unix_ms, 0.0
                  FROM patchouli_entity_version AS version
-                 INNER JOIN patchouli_entity_head AS head USING (
+                 INNER JOIN {head_source} AS head USING (
                     scope_json, entity_type, entity_id, version
                  )
                  WHERE version.scope_json = ? AND version.state = 'active'"
-            .to_owned(),
+            .replace("{head_source}", head_source),
         Some(text) if text.chars().count() < 3 => {
             parameters.push(rusqlite::types::Value::Text(text.clone()));
             "SELECT version.entity_type, version.entity_id, version.value_json,
                     version.recorded_at_unix_ms, 1.0
              FROM patchouli_entity_version AS version
-             INNER JOIN patchouli_entity_head AS head USING (
+             INNER JOIN {head_source} AS head USING (
                 scope_json, entity_type, entity_id, version
              )
              WHERE version.scope_json = ?
                AND version.state = 'active'
                AND instr(lower(version.value_json), lower(?)) > 0"
-                .to_owned()
+                .replace("{head_source}", head_source)
         }
         Some(text) => {
             parameters.push(rusqlite::types::Value::Text(format!(
@@ -1551,15 +1779,16 @@ fn matching_versions(
              FROM patchouli_entity_fts
              INNER JOIN patchouli_entity_version AS version
                 ON version.rowid = patchouli_entity_fts.rowid
-             INNER JOIN patchouli_entity_head AS head USING (
+             INNER JOIN {head_source} AS head USING (
                 scope_json, entity_type, entity_id, version
              )
              WHERE version.scope_json = ?
                AND version.state = 'active'
                AND patchouli_entity_fts MATCH ?"
-                .to_owned()
+                .replace("{head_source}", head_source)
         }
     };
+    sql.insert_str(0, prefix);
     append_entity_selection(&mut sql, &mut parameters, query);
     connection
         .prepare(&sql)
@@ -1948,14 +2177,44 @@ enum StoredWorkUnitState {
     Expired,
 }
 
+fn work_unit_exists(
+    connection: &rusqlite::Connection,
+    identity_json: &str,
+) -> Result<bool, ProviderError> {
+    connection
+        .query_row(
+            "SELECT 1 FROM patchouli_work_unit WHERE identity_json = ?1",
+            [identity_json],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|row| row.is_some())
+        .map_err(database_error)
+}
+
+fn work_unit_baseline(
+    connection: &rusqlite::Connection,
+    identity_json: &str,
+) -> Result<u64, ProviderError> {
+    connection
+        .query_row(
+            "SELECT baseline_cursor FROM patchouli_work_unit WHERE identity_json = ?1",
+            [identity_json],
+            |row| row.get(0),
+        )
+        .map_err(database_error)
+}
+
 fn read_entity_in_work_unit(
     connection: &mut rusqlite::Connection,
     work_unit: &WorkUnit,
     key: &EntityKey,
+    consistency: &ReadConsistency,
 ) -> Result<WorkUnitReadOutcome, ProviderError> {
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(database_error)?;
+    let existed = work_unit_exists(&transaction, &work_unit.identity_json)?;
     let state = ensure_work_unit(&transaction, work_unit)?;
     let result = match state {
         StoredWorkUnitState::PolicyMismatch => WorkUnitReadOutcome::PolicyMismatch,
@@ -1963,12 +2222,83 @@ fn read_entity_in_work_unit(
         StoredWorkUnitState::Expired => WorkUnitReadOutcome::Expired,
         StoredWorkUnitState::Closing => WorkUnitReadOutcome::Closing,
         StoredWorkUnitState::Open => {
-            capture_work_unit_entity(&transaction, &work_unit.identity_json, key)?;
-            WorkUnitReadOutcome::Open(read_work_unit_snapshot(
+            let baseline = work_unit_baseline(&transaction, &work_unit.identity_json)?;
+            let Some(observation) = consistency_observation(
                 &transaction,
-                &work_unit.identity_json,
-                key,
-            )?)
+                &work_unit.scope_json,
+                consistency,
+                baseline,
+                !existed,
+            )?
+            else {
+                return Ok(WorkUnitReadOutcome::Open(ConsistentRead::Unavailable));
+            };
+            capture_work_unit_entity(&transaction, &work_unit.identity_json, key)?;
+            let value = read_work_unit_snapshot(&transaction, &work_unit.identity_json, key)?;
+            advance_read_sessions(&transaction, &work_unit.scope_json, consistency, baseline)?;
+            WorkUnitReadOutcome::Open(ConsistentRead::Read { value, observation })
+        }
+    };
+    commit_before_deadline(transaction, work_unit.deadline_unix_ms)?;
+    Ok(result)
+}
+
+fn retrieve_entities_in_work_unit(
+    connection: &mut rusqlite::Connection,
+    work_unit: &WorkUnit,
+    query: &RetrieveQuery,
+    consistency: &ReadConsistency,
+) -> Result<WorkUnitRetrieveOutcome, ProviderError> {
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(database_error)?;
+    let existed = work_unit_exists(&transaction, &work_unit.identity_json)?;
+    let result = match ensure_work_unit(&transaction, work_unit)? {
+        StoredWorkUnitState::PolicyMismatch => WorkUnitRetrieveOutcome::PolicyMismatch,
+        StoredWorkUnitState::Committed => WorkUnitRetrieveOutcome::Committed,
+        StoredWorkUnitState::Expired => WorkUnitRetrieveOutcome::Expired,
+        StoredWorkUnitState::Closing => WorkUnitRetrieveOutcome::Closing,
+        StoredWorkUnitState::Open => {
+            let baseline = work_unit_baseline(&transaction, &work_unit.identity_json)?;
+            let Some(observation) = consistency_observation(
+                &transaction,
+                &work_unit.scope_json,
+                consistency,
+                baseline,
+                !existed,
+            )?
+            else {
+                return Ok(WorkUnitRetrieveOutcome::Open(ConsistentRead::Unavailable));
+            };
+            let (candidates, next_cursor) =
+                retrieve_candidates(&transaction, query, Some(&work_unit.identity_json))?;
+            let mut entities = Vec::with_capacity(candidates.len());
+            for candidate in candidates {
+                let key = EntityKey {
+                    scope_json: query.scope_json.clone(),
+                    entity_type: candidate.entity_type,
+                    entity_id: candidate.entity_id,
+                };
+                capture_work_unit_entity(&transaction, &work_unit.identity_json, &key)?;
+                if let Some(snapshot) =
+                    read_work_unit_snapshot(&transaction, &work_unit.identity_json, &key)?
+                {
+                    entities.push(RetrievedEntity {
+                        key,
+                        snapshot,
+                        score: candidate.score,
+                        recorded_at_unix_ms: candidate.recorded_at_unix_ms,
+                    });
+                }
+            }
+            advance_read_sessions(&transaction, &work_unit.scope_json, consistency, baseline)?;
+            WorkUnitRetrieveOutcome::Open(ConsistentRead::Read {
+                value: RetrievedPage {
+                    entities,
+                    next_cursor,
+                },
+                observation,
+            })
         }
     };
     commit_before_deadline(transaction, work_unit.deadline_unix_ms)?;
@@ -2031,7 +2361,7 @@ fn commit_entity_in_work_unit(
              SET conflict_policy_json = ?5,
                  causal_token = ?6,
                  event_meta_json = ?7,
-                 session_keys_json = ?8,
+                 write_session_keys_json = ?8,
                  close_marker = max(close_marker, ?9)
              WHERE work_unit_json = ?1
                AND scope_json = ?2
@@ -2045,7 +2375,7 @@ fn commit_entity_in_work_unit(
                 &commit.conflict_policy_json,
                 &commit.entity.causal_token,
                 &commit.entity.event_meta_json,
-                serde_json::to_string(&commit.entity.session_keys).map_err(|error| {
+                serde_json::to_string(&commit.entity.write_session_keys).map_err(|error| {
                     ProviderError::new(format!("failed to encode session keys: {error}"))
                 })?,
                 commit.close,
@@ -2086,6 +2416,11 @@ fn commit_entity_in_work_unit(
             }
             IdempotencyReadOutcome::Conflict => {
                 return Ok(WorkUnitCommitOutcome::IdempotencyConflict);
+            }
+            IdempotencyReadOutcome::Unavailable => {
+                return Err(ProviderError::new(
+                    "stored work-unit idempotency cannot be unavailable",
+                ));
             }
         }
     }
@@ -2217,9 +2552,9 @@ fn finish_work_unit_publication(
         let heads = direct_work_unit_heads(transaction, unit, &entity)?;
         replace_published_heads(transaction, &entity, &heads)?;
         let kind = derive_change_kind(transaction, &entity, &previous_heads, &heads)?;
-        let (causal_token, event_meta_json, session_keys_json) = transaction
+        let (causal_token, event_meta_json, write_session_keys_json) = transaction
             .query_row(
-                "SELECT causal_token, event_meta_json, session_keys_json
+                "SELECT causal_token, event_meta_json, write_session_keys_json
                  FROM patchouli_work_unit_entity
                  WHERE work_unit_json = ?1
                    AND scope_json = ?2
@@ -2249,9 +2584,9 @@ fn finish_work_unit_publication(
             &event_meta_json,
             recorded_at,
         )?;
-        let session_keys: Vec<String> = serde_json::from_str(&session_keys_json)
+        let write_session_keys: Vec<String> = serde_json::from_str(&write_session_keys_json)
             .map_err(|error| ProviderError::new(format!("invalid stored session keys: {error}")))?;
-        advance_sessions(transaction, &entity.scope_json, &session_keys, cursor)?;
+        advance_write_sessions(transaction, &entity.scope_json, &write_session_keys, cursor)?;
         publish_work_unit_versions(transaction, unit, &entity, cursor)?;
     }
     transaction
@@ -3317,17 +3652,17 @@ fn commit_entity_in_transaction(
         &commit.event_meta_json,
         recorded_at,
     )?;
-    advance_sessions(
+    advance_write_sessions(
         transaction,
         &commit.key.scope_json,
-        &commit.session_keys,
+        &commit.write_session_keys,
         cursor,
     )?;
     publish_entity_versions(transaction, &commit.key, &commit.new_versions, cursor)?;
     Ok(EntityCommitOutcome::Committed)
 }
 
-fn advance_sessions(
+fn advance_write_sessions(
     transaction: &rusqlite::Transaction<'_>,
     scope_json: &str,
     session_keys: &[String],
@@ -3337,10 +3672,10 @@ fn advance_sessions(
         transaction
             .execute(
                 "INSERT INTO patchouli_session_frontier (
-                    scope_json, session_key_json, cursor
-                 ) VALUES (?1, ?2, ?3)
+                    scope_json, session_key_json, read_cursor, write_cursor
+                 ) VALUES (?1, ?2, 0, ?3)
                  ON CONFLICT (scope_json, session_key_json)
-                 DO UPDATE SET cursor = max(cursor, excluded.cursor)",
+                 DO UPDATE SET write_cursor = max(write_cursor, excluded.write_cursor)",
                 (scope_json, session_key, cursor),
             )
             .map_err(database_error)?;

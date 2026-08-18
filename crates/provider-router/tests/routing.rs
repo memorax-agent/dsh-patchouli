@@ -2,9 +2,10 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use patchouli_provider::{
-    EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot, Provider, ProviderError,
-    ProviderRecovery, StoredChangeKind, StoredEntityVersion, StoredVersionState, WorkUnit,
-    WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitPublish, WorkUnitReadOutcome,
+    ConsistentRead, EntityCommit, EntityCommitOutcome, EntityKey, EntitySnapshot, Provider,
+    ProviderError, ProviderRecovery, ReadConsistency, StoredChangeKind, StoredEntityVersion,
+    StoredVersionState, WorkUnit, WorkUnitCommit, WorkUnitCommitOutcome, WorkUnitPublish,
+    WorkUnitReadOutcome,
 };
 use patchouli_provider_router::{RoutingProvider, ScopeRoute};
 use patchouli_provider_sqlite::SqliteProvider;
@@ -54,10 +55,34 @@ async fn routes_each_scope_to_one_provider() {
         EntityCommitOutcome::Committed
     );
 
-    assert!(local.read_entity(&local_key).await.unwrap().is_some());
-    assert!(local.read_entity(&remote_key).await.unwrap().is_none());
-    assert!(remote.read_entity(&remote_key).await.unwrap().is_some());
-    assert!(remote.read_entity(&local_key).await.unwrap().is_none());
+    assert!(matches!(
+        local
+            .read_entity(&local_key, ReadConsistency::authority())
+            .await
+            .unwrap(),
+        ConsistentRead::Read { value: Some(_), .. }
+    ));
+    assert!(matches!(
+        local
+            .read_entity(&remote_key, ReadConsistency::authority())
+            .await
+            .unwrap(),
+        ConsistentRead::Read { value: None, .. }
+    ));
+    assert!(matches!(
+        remote
+            .read_entity(&remote_key, ReadConsistency::authority())
+            .await
+            .unwrap(),
+        ConsistentRead::Read { value: Some(_), .. }
+    ));
+    assert!(matches!(
+        remote
+            .read_entity(&local_key, ReadConsistency::authority())
+            .await
+            .unwrap(),
+        ConsistentRead::Read { value: None, .. }
+    ));
     router.shutdown().await.unwrap();
 }
 
@@ -138,7 +163,11 @@ impl Provider for FailingShutdownProvider {
         Ok(())
     }
 
-    async fn read_entity(&self, _key: &EntityKey) -> Result<Option<EntitySnapshot>, ProviderError> {
+    async fn read_entity(
+        &self,
+        _key: &EntityKey,
+        _consistency: ReadConsistency,
+    ) -> Result<ConsistentRead<Option<EntitySnapshot>>, ProviderError> {
         unreachable!()
     }
 
@@ -153,6 +182,7 @@ impl Provider for FailingShutdownProvider {
         &self,
         _work_unit: &WorkUnit,
         _key: &EntityKey,
+        _consistency: ReadConsistency,
     ) -> Result<WorkUnitReadOutcome, ProviderError> {
         unreachable!()
     }
@@ -202,7 +232,8 @@ fn commit(key: EntityKey) -> EntityCommit {
         change_kind: StoredChangeKind::Created,
         causal_token: "token-1".to_owned(),
         event_meta_json: "{}".to_owned(),
-        session_keys: Vec::new(),
+        write_session_keys: Vec::new(),
+        ordering_key_json: None,
         recorded_at_unix_ms: 1,
         deadline_unix_ms: None,
     }
