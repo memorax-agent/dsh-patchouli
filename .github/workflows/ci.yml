@@ -337,33 +337,3 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh release create "$GITHUB_REF_NAME" artifacts/**/* --generate-notes
-
-  deploy-daemon:
-    name: Deploy daemon to local server
-    needs: verify
-    if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      github.event_name == 'workflow_dispatch'
-    runs-on: self-hosted
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Build daemon
-        run: cargo build --locked --release --bin patchouli-db
-
-      - name: Deploy and verify daemon
-        env:
-          PATCHOULI_DEPLOY_ROOT: ${{ vars.PATCHOULI_DEPLOY_ROOT }}
-          PATCHOULI_ENDPOINT: ${{ vars.PATCHOULI_ENDPOINT }}
-          PATCHOULI_CONFIG: ${{ vars.PATCHOULI_CONFIG }}
-          PATCHOULI_PROVIDERS: ${{ vars.PATCHOULI_PROVIDERS }}
-        run: node scripts/deploy-daemon.ts "${{ runner.os == 'Windows' && 'target/release/patchouli-db.exe' || 'target/release/patchouli-db' }}"
