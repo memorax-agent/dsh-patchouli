@@ -1,7 +1,7 @@
 const target = {
   package: '@vectorize-io/hindsight-coding-agents',
   version: '0.3.4',
-  files: ['dist/dsh.js'],
+  file: 'dist/dsh.js',
 }
 
 const bridgeSource = String.raw`

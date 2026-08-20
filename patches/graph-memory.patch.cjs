@@ -4,7 +4,7 @@ module.exports = {
   target: {
     package: 'graph-memory',
     version: '1.5.8',
-    files: ['index.ts'],
+    file: 'index.ts',
   },
   loader: 'typescript',
 }

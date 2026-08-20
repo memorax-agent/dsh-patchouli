@@ -1,13 +1,13 @@
 const indexTarget = {
   package: '@modusensus/dsh-mneme',
   version: '0.3.7',
-  files: ['lib/index.js'],
+  file: 'lib/index.js',
 }
 
 const summarizeTarget = {
   package: '@modusensus/dsh-mneme',
   version: '0.3.7',
-  files: ['lib/summarize.js'],
+  file: 'lib/summarize.js',
 }
 
 function removeStatement(node, edit, ts) {

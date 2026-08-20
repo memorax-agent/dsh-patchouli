@@ -16,7 +16,7 @@ module.exports = {
   target: {
     package: 'dsh-mnemon',
     version: '0.1.6',
-    files: ['lib/index.js'],
+    file: 'lib/index.js',
   },
   select: 'VariableStatement:has(VariableDeclaration[name.name="lifecycle"] NewExpression[expression.name="MnemonLifecycle"])',
   expect: 1,

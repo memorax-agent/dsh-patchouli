@@ -12,8 +12,8 @@ importers:
         specifier: ^3.18.1
         version: 3.18.1
       dsh-harmony:
-        specifier: ^0.3.2
-        version: 0.3.2
+        specifier: ^0.6.0
+        version: 0.6.0
       dsh-patchouli-agent-loop:
         specifier: workspace:*
         version: link:packages/agent-loop
@@ -406,11 +406,11 @@ packages:
   ajv@8.20.0:
     resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
 
-  dsh-harmony@0.3.2:
-    resolution: {integrity: sha512-I5dhSPdNE+xGj1BPvGX2hxve6B8MZSXG9wFX8dXJwT+qwxLdFIwY5oMyj9c51JNHA9+fLEOGPpI0qjZPadvF4Q==}
+  dsh-harmony@0.6.0:
+    resolution: {integrity: sha512-+NEBTql05OIetfs3ASnESzTlHubk1vwtD8CGVUXsZchgu34aLtHate61MYyZXiQMTuqlFRc/Wlt96iE2+bza5g==}
     engines: {node: ^22.22.3 || >=24.11.1}
     peerDependencies:
-      '@deepseek-ai/dsh': 0.1.0-rc.6
+      '@deepseek-ai/dsh': 0.1.0-rc.8
     peerDependenciesMeta:
       '@deepseek-ai/dsh':
         optional: true
@@ -678,7 +678,7 @@ snapshots:
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
-  dsh-harmony@0.3.2:
+  dsh-harmony@0.6.0:
     dependencies:
       '@deepseek-ai/cordis': 4.0.1
       '@phenomnomnominal/tsquery': 6.2.0(typescript@6.0.3)

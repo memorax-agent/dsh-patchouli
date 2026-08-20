@@ -1,7 +1,7 @@
 const target = {
   package: '@memtensor/memos-local-plugin',
   version: '2.0.16-beta.1',
-  files: ['dist/adapters/deepseek-harness/index.js'],
+  file: 'dist/adapters/deepseek-harness/index.js',
 }
 
 function removeStatement({ node, edit, ts }) {

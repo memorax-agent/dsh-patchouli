@@ -1,7 +1,7 @@
 const target = {
   package: 'dsh-engramory',
   version: '0.2.0',
-  files: ['index.js'],
+  file: 'index.js',
 }
 
 /** @type {import('dsh-harmony').HarmonyPatch[]} */

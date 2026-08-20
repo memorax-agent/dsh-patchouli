@@ -1,7 +1,7 @@
 const target = {
   package: 'dsh-memory-evolve',
   version: '0.1.0',
-  files: ['lib/index.js'],
+  file: 'lib/index.js',
 }
 
 // Source snapshot: ce7f0faa0e0240f117c29795e9224c0d9ed18183.

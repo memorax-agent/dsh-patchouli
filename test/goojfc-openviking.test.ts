@@ -11,7 +11,7 @@ import {
 const require = createRequire(import.meta.url)
 const patches = require('../patches/openviking.patch.cjs') as Array<{
   id: string
-  target: { package: string; version: string; files: string[] }
+  target: { package: string; version: string; file: string }
   select: string
   expect: number
 }>

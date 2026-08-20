@@ -1,7 +1,7 @@
 const target = {
   package: '@furongjun1999/dsh-memory',
   version: '0.2.8',
-  files: ['lib/index.js'],
+  file: 'lib/index.js',
 }
 
 /** @type {import('dsh-harmony').HarmonyPatch[]} */

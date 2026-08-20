@@ -1,7 +1,7 @@
 const indexTarget = {
   package: 'dsh-memory-gate',
   version: '0.9.0',
-  files: ['lib/index.js'],
+  file: 'lib/index.js',
 }
 
 /** @type {import('dsh-harmony').HarmonyPatch[]} */

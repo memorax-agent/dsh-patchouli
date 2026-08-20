@@ -1,7 +1,7 @@
 const target = {
   package: '@openviking/dsh-memory-plugin',
   version: '0.1.0',
-  files: ['index.mjs'],
+  file: 'index.mjs',
 }
 
 const automaticEvents = new Set([

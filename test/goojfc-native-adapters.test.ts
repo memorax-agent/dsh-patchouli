@@ -64,7 +64,7 @@ test('publishes every exact-version Harmony patch with GOOJFC', () => {
     ...Array(2).fill({
       package: '@modusensus/dsh-mneme',
       version: '0.3.7',
-      files: ['lib/index.js'],
+      file: 'lib/index.js',
     }),
   ])
 })

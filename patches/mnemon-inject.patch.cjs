@@ -4,7 +4,7 @@ module.exports = {
   target: {
     package: 'dsh-mnemon',
     version: '0.1.6',
-    files: ['lib/index.js'],
+    file: 'lib/index.js',
   },
   select: 'VariableDeclaration[name.name="inject"] ArrayLiteralExpression',
   expect: 1,

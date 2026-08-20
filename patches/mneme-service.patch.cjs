@@ -14,7 +14,7 @@ module.exports = {
   target: {
     package: '@modusensus/dsh-mneme',
     version: '0.3.7',
-    files: ['lib/index.js'],
+    file: 'lib/index.js',
   },
   select: 'VariableDeclaration[name.name="summarizer"][initializer.expression.name="createSummarizer"]',
   expect: 1,

@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from 'dsh-harmony'
+import type { HarmonyService } from 'dsh-harmony'
 
 import type { MemoryData } from '../memory.js'
 import type { GraphMemoryNative } from './adapters/graph-memory.js'
@@ -56,10 +56,10 @@ interface GraphEmbedModule {
 }
 
 export async function apply(
-  ctx: Context,
+  ctx: Context & { harmony: HarmonyService },
   rawConfig: Record<string, unknown> = {},
 ): Promise<() => void> {
-  const profileRequire = createRequire(join(ctx.harmony.profileDir, 'package.json'))
+  const profileRequire = createRequire(join(ctx.harmony.profile().dir, 'package.json'))
   const root = realpathSync(dirname(profileRequire.resolve('graph-memory/package.json')))
   const [dbModule, store, types, recallerModule, embed] = await Promise.all([
     importGraphModule<GraphDbModule>(root, 'src/store/db.ts'),

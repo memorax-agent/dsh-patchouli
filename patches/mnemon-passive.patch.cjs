@@ -4,7 +4,7 @@ module.exports = {
   target: {
     package: 'dsh-mnemon',
     version: '0.1.6',
-    files: ['lib/index.js'],
+    file: 'lib/index.js',
   },
   select: [
     'CallExpression[expression.expression.name="ctx"][expression.name.name="effect"][arguments.0.body.expression.expression.name="lifecycle"][arguments.0.body.expression.name.name="start"]',

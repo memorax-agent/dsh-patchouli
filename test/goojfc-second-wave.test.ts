@@ -79,7 +79,7 @@ test('pins all second-wave Harmony seams to exact published versions', () => {
   const graphLoader = require('../patches/graph-memory.patch.cjs')
   assert.equal(graphLoader.target.package, 'graph-memory')
   assert.equal(graphLoader.target.version, '1.5.8')
-  assert.deepEqual(graphLoader.target.files, ['index.ts'])
+  assert.equal(graphLoader.target.file, 'index.ts')
   assert.equal(graphLoader.loader, 'typescript')
   assert.doesNotMatch(graphSource, /registerHooks|transpileModule/)
   assert.match(graphSource, /createGraphMemoryAdapter/)

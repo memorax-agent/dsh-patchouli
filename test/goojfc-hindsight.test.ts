@@ -13,7 +13,7 @@ interface SourcePatch {
   readonly target: {
     readonly package: string
     readonly version: string
-    readonly files: readonly string[]
+    readonly file: string
   }
   readonly select: string
   readonly expect: number
@@ -124,7 +124,7 @@ test('pins the Hindsight patch and waits for the GOOJFC registrar marker', () =>
       target: {
         package: '@vectorize-io/hindsight-coding-agents',
         version: '0.3.4',
-        files: ['dist/dsh.js'],
+        file: 'dist/dsh.js',
       },
       expect: 1,
     },
@@ -133,7 +133,7 @@ test('pins the Hindsight patch and waits for the GOOJFC registrar marker', () =>
       target: {
         package: '@vectorize-io/hindsight-coding-agents',
         version: '0.3.4',
-        files: ['dist/dsh.js'],
+        file: 'dist/dsh.js',
       },
       expect: 4,
     },
@@ -142,7 +142,7 @@ test('pins the Hindsight patch and waits for the GOOJFC registrar marker', () =>
       target: {
         package: '@vectorize-io/hindsight-coding-agents',
         version: '0.3.4',
-        files: ['dist/dsh.js'],
+        file: 'dist/dsh.js',
       },
       expect: 1,
     },
