@@ -10,6 +10,7 @@
 
   **English** · [简体中文](README.zh-CN.md)
 
+  [![Powered by Harmony](https://memorax-ai.github.io/dsh-harmony/harmony-powered.svg)](https://memorax-ai.github.io/dsh-harmony/)
   [![Documentation](https://img.shields.io/badge/docs-read-75439a?logo=readthedocs&logoColor=white)](https://memorax-ai.github.io/dsh-patchouli/)
   [![CI](https://github.com/memorax-ai/dsh-patchouli/actions/workflows/ci.yml/badge.svg)](https://github.com/memorax-ai/dsh-patchouli/actions/workflows/ci.yml)
   [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f4e.svg)](LICENSE)
