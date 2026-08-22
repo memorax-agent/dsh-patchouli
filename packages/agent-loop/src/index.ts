@@ -142,13 +142,13 @@ function callMeta(
 function observation(
   agent: Agent,
   data: Record<string, unknown>,
-  events: readonly SessionEvent[] = agent.session.events,
+  events?: readonly SessionEvent[],
 ): MemoryData {
   return snapshot({
     agent: agentData(agent),
     session: {
       header: agent.session.header,
-      events,
+      ...events === undefined ? {} : { events },
     },
     ...data,
   })
@@ -172,30 +172,40 @@ function turnEvents(session: Session, turn: number, endSeq?: number): readonly S
   return session.events.slice(start).filter(event => endSeq === undefined || event.seq <= endSeq)
 }
 
+function turnStartSeq(session: Session, turn: number, endSeq: number): number {
+  const start = session.events.findLast(event => (
+    event.type === 'turn/start'
+    && event.data.turn === turn
+    && event.seq <= endSeq
+  ))
+  if (start === undefined) throw new Error(`session has no matching turn/start for turn ${turn}`)
+  return start.seq
+}
+
 function persistedTurn(
   inspection: SessionInspection,
   turn: number,
   endSeq: number,
-): { sessionEvents: readonly SessionEvent[], event: SessionEvent, events: readonly SessionEvent[] } {
-  const sessionEvents = inspection.events.filter(event => event.seq <= endSeq)
-  const endIndex = sessionEvents.findIndex(event => event.seq === endSeq)
-  const event = sessionEvents[endIndex]
+): { event: SessionEvent, events: readonly SessionEvent[] } {
+  const inspectedEvents = inspection.events.filter(event => event.seq <= endSeq)
+  const endIndex = inspectedEvents.findIndex(event => event.seq === endSeq)
+  const event = inspectedEvents[endIndex]
   if (event?.type !== 'turn/end' || event.data.turn !== turn) {
     throw new Error(`persisted session has no matching turn/end at seq ${endSeq}`)
   }
-  const startIndex = sessionEvents.findLastIndex((candidate, index) => (
+  const startIndex = inspectedEvents.findLastIndex((candidate, index) => (
     index <= endIndex
     && candidate.type === 'turn/start'
     && candidate.data.turn === turn
   ))
   if (startIndex < 0) throw new Error(`persisted session has no matching turn/start for turn ${turn}`)
-  const events = sessionEvents.slice(startIndex, endIndex + 1)
+  const events = inspectedEvents.slice(startIndex, endIndex + 1)
   for (let index = 1; index < events.length; index += 1) {
     if (events[index]!.seq !== events[index - 1]!.seq + 1) {
       throw new Error(`persisted turn ${turn} is not contiguous`)
     }
   }
-  return { sessionEvents, event, events }
+  return { event, events }
 }
 
 function toolExecutionData(exec: ToolExecution): MemoryData {
@@ -651,6 +661,7 @@ export function apply(ctx: Context, config: Config): void {
         : agentData(agent)
       void enqueueSessionTask(session, async () => {
         try {
+          const startSeq = turnStartSeq(session, event.data.turn, event.seq)
           await internalSessionFlush.run(
             session,
             () => ctx.sessions.flush(session),
@@ -658,7 +669,7 @@ export function apply(ctx: Context, config: Config): void {
           lifetime.signal.throwIfAborted()
           const inspection = await ctx.sessionPersistence.readFrom(
             session.header.id,
-            0,
+            startSeq,
             lifetime.signal,
           )
           lifetime.signal.throwIfAborted()
@@ -670,7 +681,6 @@ export function apply(ctx: Context, config: Config): void {
               agent: agentSnapshot,
               session: {
                 header: inspection.meta,
-                events: persisted.sessionEvents,
               },
               event: persisted.event,
               events: persisted.events,

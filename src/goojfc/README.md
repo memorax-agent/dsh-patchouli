@@ -52,6 +52,12 @@ Unsupported automatic points are filtered before invocation. Memory Evolve also
 rejects Patchouli's generic model-tool update because its native write path has
 an approval workflow; its native explicit tool remains available.
 
+Hindsight's coordinated turn capture receives only the durable turn boundary
+from Patchouli. Its version-locked bridge resolves the live Agent transcript
+through that boundary before calling Hindsight's native full-session retention,
+so the generic Agent Loop envelope remains bounded while Hindsight keeps its
+cursor and append semantics.
+
 The compatibility matrix pins these exact targets:
 
 - `@openviking/dsh-memory-plugin@0.1.0`

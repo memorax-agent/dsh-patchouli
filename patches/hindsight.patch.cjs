@@ -10,8 +10,13 @@ const bridgeSource = String.raw`
       maxReflectTimeoutMs: HOOK_REFLECT_CAP_MS,
       workspaceFor,
       ensureSeeded,
-      retainTranscript(workspace, sessionId, events) {
-        return workspace.core.onTranscript(sessionId, readDshEvents(events));
+      retainTranscript(workspace, sessionId, throughSeq) {
+        const agent = ctx.agents.get(sessionId);
+        if (!agent) throw new Error(\`Hindsight session \${JSON.stringify(sessionId)} is not live\`);
+        return workspace.core.onTranscript(
+          sessionId,
+          readDshEvents(agent.session.events.filter((event) => event.seq <= throughSeq)),
+        );
       },
       readEvents: readDshEvents,
       retainStamp(workspace, sessionId) {

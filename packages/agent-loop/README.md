@@ -45,9 +45,11 @@ per Session, and the adapter extends `session/flush` to wait for admitted update
 work.
 
 `session/turn-end` is deferred until `ctx.sessions.flush(session)` completes,
-then read back through `ctx.sessionPersistence`. Both `data.session.events` and
-`data.events` therefore come from the durable Session Event Log rather than the
-live in-memory Session. The connector requires the official
+then the completed turn is read back through `ctx.sessionPersistence` starting
+at its `turn/start` sequence. `data.events` therefore contains the exact durable
+turn slice without replaying cumulative Session history. Other observations
+include the Session header but omit `session.events` unless a hook explicitly
+supplies a bounded event slice. The connector requires the official
 `sessionPersistence` service for this boundary.
 
 The `memory_update` Tool accepts optional `messages` and `resources`; at least

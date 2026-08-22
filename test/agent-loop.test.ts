@@ -12,7 +12,7 @@ import {
   type ContentBlock,
   type UserMessage,
 } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId, type Session } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonObject, JsonValue } from 'dsh-patchouli-protocol'
@@ -50,6 +50,7 @@ async function mountConsumer(t: TestContext, config: agentLoop.Config = {}) {
   const ctx = new Context()
   const fibers: Fiber[] = []
   const persisted = new Map<string, { meta: Session['header'], events: Session['events'] }>()
+  const reads: Array<[string, number]> = []
   fibers.push(await ctx.plugin(SessionStore))
   const disposeFlush = ctx.on('session/flush', (session) => {
     persisted.set(String(session.header.id), structuredClone({
@@ -59,6 +60,7 @@ async function mountConsumer(t: TestContext, config: agentLoop.Config = {}) {
   })
   const disposePersistence = ctx.provide('sessionPersistence', {
     async readFrom(id: string, fromSeq: number) {
+      reads.push([String(id), fromSeq])
       const inspection = persisted.get(String(id))
       if (inspection === undefined) throw new Error(`session ${id} is not persisted`)
       return structuredClone({
@@ -78,7 +80,7 @@ async function mountConsumer(t: TestContext, config: agentLoop.Config = {}) {
     await disposePersistence()
     await disposeFlush()
   })
-  return { ctx, consumer }
+  return { ctx, consumer, reads }
 }
 
 function fakeAgent(
@@ -219,7 +221,7 @@ test('registers update/retrieve tools and derives their scope from the agent', a
   ])
 })
 
-test('retrieves from the complete pre-step observation and injects data without a prompt', async (t) => {
+test('retrieves from a bounded pre-step observation and injects data without a prompt', async (t) => {
   const { ctx } = await mountConsumer(t)
   const requests: unknown[] = []
   const dispose = ctx.patchouli.register({
@@ -235,6 +237,11 @@ test('retrieves from the complete pre-step observation and injects data without 
   t.after(dispose)
 
   const agent = fakeAgent()
+  ;(agent.session.events as unknown as SessionEvent[]).push({
+    type: 'turn/start',
+    seq: 0,
+    data: { turn: 0 },
+  } as SessionEvent)
   const user = createUserMessage({
     content: [{ type: 'text', text: ' How should this be implemented? ' }],
     source: { kind: 'user' },
@@ -287,7 +294,6 @@ test('retrieves from the complete pre-step observation and injects data without 
           id: 'session-1',
           cwd: '/workspace/patchouli',
         },
-        events: [],
       },
       turn: 1,
       step: 1,
@@ -474,8 +480,8 @@ test('keeps zero and false provider results in the aggregated context', async (t
   })
 })
 
-test('submits the complete committed turn without filtering its event data', async (t) => {
-  const { ctx } = await mountConsumer(t, {
+test('submits the complete durable turn without cumulative session history', async (t) => {
+  const { ctx, reads } = await mountConsumer(t, {
     retrieve: { preStep: false },
     store: { turnEnd: true },
   })
@@ -597,9 +603,8 @@ test('submits the complete committed turn without filtering its event data', asy
   const firstSessionData = firstData.session
   assert.ok(firstSessionData)
   const firstSession = objectData(firstSessionData)
-  const firstSessionEvents = firstSession.events as Array<Record<string, any>>
   assert.deepEqual(firstData.event, firstEvents.at(-1))
-  assert.deepEqual(firstSessionEvents, firstEvents)
+  assert.equal('events' in firstSession, false)
   assert.deepEqual(firstEvents.map(event => event.type), [
     'turn/start',
     'step/start',
@@ -645,14 +650,16 @@ test('submits the complete committed turn without filtering its event data', asy
   const secondSessionData = secondData.session
   assert.ok(secondSessionData)
   const secondSession = objectData(secondSessionData)
-  const secondSessionEvents = secondSession.events as Array<Record<string, any>>
+  assert.equal('events' in secondSession, false)
   assert.deepEqual(secondEvents.map(event => event.type), [
     'turn/start',
     'user/message',
     'turn/end',
   ])
-  assert.equal(secondSessionEvents.length, firstEvents.length + secondEvents.length)
-  assert.deepEqual(secondSessionEvents.slice(-secondEvents.length), secondEvents)
+  assert.deepEqual(reads, [
+    ['session-turn', firstEvents[0]!.seq],
+    ['session-turn', secondEvents[0]!.seq],
+  ])
 })
 
 test('keeps durable turn capture ahead of later Session updates', async (t) => {

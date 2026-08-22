@@ -57,7 +57,7 @@ export interface HindsightAdapterNative {
   retainTranscript(
     workspace: HindsightWorkspace,
     sessionId: string,
-    events: readonly unknown[],
+    throughSeq: number,
   ): Promise<void>
   readEvents(events: readonly unknown[]): Array<{ role: string, content: string }>
   retainStamp(workspace: HindsightWorkspace, sessionId?: string): RetainStamp
@@ -79,11 +79,12 @@ export function createHindsightAdapter(native: HindsightAdapterNative): MemoryPl
         if (sessionId === undefined) {
           throw new TypeError('Hindsight session capture requires meta.attributes.sessionId')
         }
-        const session = recordOf(recordOf(request.data)?.session)
-        if (!Array.isArray(session?.events)) {
-          throw new TypeError('Hindsight session capture requires data.session.events')
+        const event = recordOf(recordOf(request.data)?.event)
+        const endSeq = event?.seq
+        if (typeof endSeq !== 'number' || !Number.isSafeInteger(endSeq) || endSeq < 0) {
+          throw new TypeError('Hindsight session capture requires data.event.seq')
         }
-        await native.retainTranscript(workspace, sessionId, session.events)
+        await native.retainTranscript(workspace, sessionId, endSeq)
         context.signal?.throwIfAborted()
         return {
           accepted: true,

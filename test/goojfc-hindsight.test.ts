@@ -152,7 +152,9 @@ test('pins the Hindsight patch and waits for the GOOJFC registrar marker', () =>
   assert.match(transformed, /var inject = \["agents", "patchouliGoojfc"\]/)
   assert.doesNotMatch(transformed, /ctx\.on\("agent\//)
   assert.doesNotMatch(transformed, /ctx\.on\("session\//)
-  assert.match(transformed, /workspace\.core\.onTranscript\(sessionId, readDshEvents\(events\)\)/)
+  assert.match(transformed, /ctx\.agents\.get\(sessionId\)/)
+  assert.match(transformed, /event\.seq <= throughSeq/)
+  assert.match(transformed, /workspace\.core\.onTranscript/)
   assert.match(transformed, /ctx\.provide\("goojfcHindsight"/)
   assert.match(transformed, /ctx\.patchouliGoojfc\.createHindsightAdapter/)
   assert.doesNotMatch(transformed, /dsh-patchouli\/goojfc/)
@@ -281,8 +283,8 @@ test('routes coordinated recall and native full-session retention through Hindsi
     maxReflectTimeoutMs: 25_000,
     workspaceFor: () => workspace,
     ensureSeeded() {},
-    async retainTranscript(retainedWorkspace, sessionId, events) {
-      calls.push(['retain-transcript', retainedWorkspace, sessionId, events])
+    async retainTranscript(retainedWorkspace, sessionId, throughSeq) {
+      calls.push(['retain-transcript', retainedWorkspace, sessionId, throughSeq])
     },
     readEvents: () => [{ role: 'user', content: 'Remember SQLite' }],
     retainStamp: () => ({ tags: [], metadata: {} }),
@@ -304,14 +306,8 @@ test('routes coordinated recall and native full-session retention through Hindsi
   await adapter.update({
     meta: { ...baseMeta, attributes: { ...baseMeta.attributes, point: 'session/turn-end' } },
     data: {
+      event: { type: 'turn/end', seq: 3 },
       events: [{ type: 'turn/end' }],
-      session: {
-        events: [
-          { type: 'user/message', seq: 1 },
-          { type: 'assistant/message', seq: 2 },
-          { type: 'turn/end', seq: 3 },
-        ],
-      },
     },
   }, {})
   assert.deepEqual(calls.slice(0, 2), [
@@ -322,16 +318,12 @@ test('routes coordinated recall and native full-session retention through Hindsi
     'retain-transcript',
     workspace,
     'session-1',
-    [
-      { type: 'user/message', seq: 1 },
-      { type: 'assistant/message', seq: 2 },
-      { type: 'turn/end', seq: 3 },
-    ],
+    3,
   ])
   assert.equal(calls.some(call => (call as unknown[])[0] === 'retain'), false)
 })
 
-test('fails closed when coordinated capture lacks the complete session transcript', async () => {
+test('fails closed when coordinated capture lacks the durable turn boundary', async () => {
   const workspace = {
     root: '/workspace/project',
     core: {
@@ -365,6 +357,6 @@ test('fails closed when coordinated capture lacks the complete session transcrip
         sessionId: 'session-1',
       },
     },
-    data: { events: [{ type: 'turn/end' }] },
-  }, {}), /requires data\.session\.events/)
+    data: { event: { type: 'turn/end' }, events: [{ type: 'turn/end' }] },
+  }, {}), /requires data\.event\.seq/)
 })
