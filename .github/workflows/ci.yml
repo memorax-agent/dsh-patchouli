@@ -232,7 +232,7 @@ jobs:
               echo "${package}@${version} is already published"
               continue
             fi
-            npm publish "artifacts/${package}-${version}.tgz" --access public
+            npm publish "./artifacts/${package}-${version}.tgz" --access public
           done
 
   package-daemon:
